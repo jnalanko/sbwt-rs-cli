@@ -1,0 +1,18 @@
+[package]
+name = "sbwt-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77" # 1.77 needed for File::create_new in sbwt
+
+[[bin]]
+name = "sbwt"
+path = "src/main.rs"
+
+[dependencies]
+clap = "4.4"
+jseqio = {git = "https://github.com/jnalanko/jseqio", rev = "826c6b591854801eea72d20ad21e1bbc958f5cdb"}
+sbwt = {git = "https://github.com/jnalanko/sbwt-rs", rev = "e22afade43bc9766a6c2097a7b908876914bb430"}
+env_logger = "0.10"
+log = "0.4"
+byteorder = "1.5"
+chrono = "0.4"
