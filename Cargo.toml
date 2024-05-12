@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 clap = "4.4"
 jseqio = "0.1.2" 
-sbwt = {git = "https://github.com/jnalanko/sbwt-rs", rev = "6d9e1444f60f0d8effd3eba411482f2b8d89b993"}
+sbwt = "0.2.0"
 env_logger = "0.10"
 log = "0.4"
 byteorder = "1.5"

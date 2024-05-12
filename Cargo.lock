@@ -506,8 +506,9 @@ dependencies = [
 
 [[package]]
 name = "jseqio"
-version = "0.1.0"
-source = "git+https://github.com/jnalanko/jseqio?rev=826c6b591854801eea72d20ad21e1bbc958f5cdb#826c6b591854801eea72d20ad21e1bbc958f5cdb"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb85776e78aa455d2fc9a0b19f21e72088e1967925d3724d19095ef3ef21e480"
 dependencies = [
  "ex",
  "flate2",
@@ -907,8 +908,9 @@ dependencies = [
 
 [[package]]
 name = "sbwt"
-version = "0.1.0"
-source = "git+https://github.com/jnalanko/sbwt-rs?rev=6d9e1444f60f0d8effd3eba411482f2b8d89b993#6d9e1444f60f0d8effd3eba411482f2b8d89b993"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dbc510c1be4cc9328e6f33efd79872b0ee28a87e347537895ac2385e7158f1d"
 dependencies = [
  "bitvec",
  "byteorder",
@@ -923,7 +925,7 @@ dependencies = [
  "rand 0.7.3",
  "rayon",
  "read_exact",
- "simple-sds",
+ "simple-sds-sbwt",
  "test-log",
  "unitig_flipper",
 ]
@@ -969,9 +971,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
-name = "simple-sds"
+name = "simple-sds-sbwt"
 version = "0.3.1"
-source = "git+https://github.com/jnalanko/sbwt-rs?rev=6d9e1444f60f0d8effd3eba411482f2b8d89b993#6d9e1444f60f0d8effd3eba411482f2b8d89b993"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "055b42bf14cb7f81318e8b8179dc4936d00050850dbcaa7eb3dc4f6697da6312"
 dependencies = [
  "libc",
 ]
@@ -1064,7 +1067,8 @@ checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
 [[package]]
 name = "unitig_flipper"
 version = "0.1.0"
-source = "git+https://github.com/jnalanko/unitig_flipper?rev=dce81385233f0c1ce8cb550a66392261ffd0aae9#dce81385233f0c1ce8cb550a66392261ffd0aae9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f649a76ee7f2c9c97acf23e0cd00af898143e7d6f8a2a0c161ad902fa0d98ab"
 dependencies = [
  "clap",
  "clap_complete",

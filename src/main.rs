@@ -78,8 +78,8 @@ struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
 }
 
-impl<'a> sbwt::SeqStream<'a> for MySeqReader {
-    fn stream_next<'b>(&'b mut self) -> Option<&'b [u8]> where 'a : 'b {
+impl sbwt::SeqStream for MySeqReader {
+    fn stream_next(&mut self) -> Option<&[u8]> {
         self.inner.read_next().unwrap().map(|rec| rec.seq)
     }
 }
