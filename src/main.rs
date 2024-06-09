@@ -172,14 +172,15 @@ fn build_command(matches: &clap::ArgMatches){
 fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], membership_only: bool){
     // Reporting
     if membership_only {
+        let mut out_buf = Vec::<u8>::with_capacity(colex_ranks.len() + 1); // +1 for newline at the end
         for r in colex_ranks {
             if r.is_some() {
-                out.write_all(b"1").unwrap();
+                out_buf.push(b'1');
             } else {
-                out.write_all(b"0").unwrap();
+                out_buf.push(b'0');
             }
         }
-        out.write_all(b"\n").unwrap();
+        out.write_all(&out_buf).unwrap();
     } else {
         let mut number_ascii_buffer = [0u8; 32]; // Enough space for the ascii representation of a 64-bit integer
         for (i, r) in colex_ranks.iter().enumerate() {

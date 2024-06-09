@@ -506,9 +506,9 @@ dependencies = [
 
 [[package]]
 name = "jseqio"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb85776e78aa455d2fc9a0b19f21e72088e1967925d3724d19095ef3ef21e480"
+checksum = "e5940ded64d1e944800f871261f79c4e618970a508823d53255aea5b09f50883"
 dependencies = [
  "ex",
  "flate2",
@@ -908,9 +908,9 @@ dependencies = [
 
 [[package]]
 name = "sbwt"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dbc510c1be4cc9328e6f33efd79872b0ee28a87e347537895ac2385e7158f1d"
+checksum = "9d564e6dc9688d2571d9776891e1fa7e26652b6699cf534c69a648572d30d6cb"
 dependencies = [
  "bitvec",
  "byteorder",
