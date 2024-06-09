@@ -180,6 +180,7 @@ fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], m
                 out_buf.push(b'0');
             }
         }
+        out_buf.push(b'\n');
         out.write_all(&out_buf).unwrap();
     } else {
         let mut number_ascii_buffer = [0u8; 32]; // Enough space for the ascii representation of a 64-bit integer
