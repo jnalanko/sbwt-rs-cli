@@ -3,7 +3,7 @@
 //! This crate contains an implementation of the 
 //! [Bit Matrix SBWT data structure](`SbwtIndex<SubsetMatrix>`), as described in 
 //! [Small Searchable k-Spectra via Subset Rank Queries on the Spectral Burrows-Wheeler Transform](https://epubs.siam.org/doi/abs/10.1137/1.9781611977714.20),
-//! for the DNA alphabet ACGT. 
+//! for the DNA alphabet ACGT. A CLI for the main features of the library can be found at https://github.com/jnalanko/sbwt-rs-cli.
 //! The data structure uses a variant of the Burrows-Wheeler transform to compress a set of k-mers in way that allows fast lookup queries. 
 //! If the input k-mers are consecutive k-mers from longer underlying sequences,
 //! the index takes typically around 5 bits per distinct k-mer, supporting k-mer lookup queries at a speed of around

@@ -1,5 +1,12 @@
 # Changelog
 
+
+## v0.3.0
+
+- Added serialization magic string to the start of the serialization format. This breaks compatibility with files generated using the previous versions.
+- Made some functions generic over the particular implementation of SubsetSeq in preparation for the future when we will have multiple implementations.
+- Added to the documentation a link to the Github repository of the CLI.
+
 ## v0.2.1
 
 - Added CHANGELOG.md
