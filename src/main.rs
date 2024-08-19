@@ -407,9 +407,7 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
 fn benchmark<SBWT: SbwtIndexInterface>(sbwt: SBWT, lcs: Option<LcsArray>) {
     log::info!("benchmarking index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
-
     benchmark::benchmark_all(sbwt, lcs);
-
 }
 
 fn benchmark_command(matches: &clap::ArgMatches) {
@@ -442,19 +440,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
 
 }
 
-fn dump_unitigs_command(matches: &clap::ArgMatches) {
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let mut index_reader = BufReader::new(File::open(indexfile).unwrap());
-
-    log::info!("Loading index");
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap(); 
-    let mut sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    let lcs = if header.has_lcs {
-        Some(LcsArray::load(&mut index_reader).unwrap())
-    } else {
-        None
-    }; 
-
+fn dump_unitigs<SBWT: SbwtIndexInterface>(sbwt: &mut SBWT, lcs: &Option<LcsArray>) {
     let out = std::io::stdout();
     let mut out = std::io::BufWriter::new(out);
 
@@ -465,6 +451,37 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     log::info!("Dumping unitigs");
     dbg.parallel_export_unitigs(&mut out);
+}
+
+fn dump_unitigs_command(matches: &clap::ArgMatches) {
+
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+
+    // Read sbwt
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let mut index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array, if available
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+    let lcs = match std::fs::File::open(&lcsfile) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcsfile.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            Some(LcsArray::load(&mut lcs_reader).unwrap())
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> Some extra computation needed to initialize the DBG", lcsfile.display());
+            None
+        }
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            dump_unitigs(&mut sbwt, &lcs);
+        }
+    };
+
 }
 
 fn main() {
