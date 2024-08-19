@@ -15,17 +15,6 @@ pub trait SubsetSeq{
     // Issues with that: it can't seem to figure out how to use such
     // generic integers as array indexes. Lol.
 
-    /// Creates a new subset sequence from a vector of subsets of {0, 1, ..., sigma-1}. Order
-    /// of characters inside a subset does not matter. The rank and select supports are not automatically
-    /// initialized, so if the you need those functions, you need to call [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
-    //fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self;
-
-    /// Create a new subset sequence from indicator [bit vectors](simple_sds_sbwt::bit_vector::BitVector), where the i-th bit of the j-th bit vector
-    /// is 1 if and only if the i-th subset contains the j-th character. The resulting subset sequence has
-    /// rank and select support if the provided bit vectors have rank and select support enabled. Otherwise, those
-    /// supports need to be initialized by calling [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
-    //fn new_from_bit_vectors(vecs: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self;
-
     /// Number of sets in the sequence (**not** the total length of the sets).
     fn len(&self) -> usize;
 
@@ -65,6 +54,16 @@ pub trait SubsetSeq{
 
 }
 
+pub trait FromBitVectors {
+
+    /// Create a new subset sequence from indicator [bit vectors](simple_sds_sbwt::bit_vector::BitVector), where the i-th bit of the j-th bit vector
+    /// is 1 if and only if the i-th subset contains the j-th character. The resulting subset sequence has
+    /// rank and select support if the provided bit vectors have rank and select support enabled. Otherwise, those
+    /// supports need to be initialized by calling [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
+    fn new_from_bit_vectors(vecs: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self;
+
+}
+
 /// An implementation of [SubsetSeq] with a matrix of sigma indicator bit vectors: the i-th bit of the j-th bit vector
 /// is 1 if and only if the i-th subset contains the j-th character. Rank and select queries are reduced to
 /// bit vector rank and select queries on the indicator bit vectors.
@@ -73,12 +72,13 @@ pub struct SubsetMatrix{
     rows: Vec<BitVector>
 }
 
-impl SubsetSeq for SubsetMatrix{
-    
-    fn new_from_bit_vectors(rows: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self{
+impl FromBitVectors for SubsetMatrix{
+    fn new_from_bit_vectors(rows: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self {
         Self{rows}
     }
+}
 
+impl SubsetMatrix {
     fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self{
         let n = subset_seq.len();
         let mut rawrows = Vec::<RawVector>::new();
@@ -94,6 +94,9 @@ impl SubsetSeq for SubsetMatrix{
         let rows: Vec<BitVector> = rawrows.into_iter().map(BitVector::from).collect();
         Self::new_from_bit_vectors(rows)
     }
+}
+
+impl SubsetSeq for SubsetMatrix{
 
     fn build_rank(&mut self) {
         for row in self.rows.iter_mut(){
