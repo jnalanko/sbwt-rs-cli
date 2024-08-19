@@ -84,17 +84,8 @@ impl sbwt::SeqStream for MySeqReader {
     }
 }
 
-fn dump_kmers_command(matches: &clap::ArgMatches){
-
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let include_dummies = matches.get_flag("include-dummy-kmers");
-    let all_at_once = matches.get_flag("all-at-once");
-
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let _ = SbwtFileHeader::read(&mut index_reader).unwrap();
-    let mut sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    // Don't care if there is LCS support or not
-
+// sbwt is taken as mutable because we need to build select support if all_at_once is true
+fn dump_kmers<SBWT: SbwtIndexInterface>(sbwt: &mut SBWT, all_at_once: bool, include_dummies: bool) {
     let mut stdout = BufWriter::new(io::stdout());
     if all_at_once {
         log::info!("Reconstructing the k-mers");
@@ -125,6 +116,23 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
             }
         }
     }
+
+}
+
+fn dump_kmers_command(matches: &clap::ArgMatches){
+
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let include_dummies = matches.get_flag("include-dummy-kmers");
+    let all_at_once = matches.get_flag("all-at-once");
+
+    // Don't care if there is LCS support or not
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    match index {
+        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            dump_kmers(&mut sbwt, all_at_once, include_dummies);
+        }
+    };
 
 }
 
@@ -422,7 +430,7 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("output")
-                .help("Prefix for the output filenames")
+                .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
                 .short('o')
                 .long("output")
                 .required(true)
