@@ -1,6 +1,5 @@
 use std::io;
 use std::io::BufWriter;
-use std::io::Read;
 use std::io::Write;
 use sbwt::dbg::Dbg;
 use sbwt::*;
