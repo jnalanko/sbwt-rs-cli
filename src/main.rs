@@ -292,8 +292,8 @@ fn lookup_query_command(matches: &clap::ArgMatches){
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
-    lcsfile.set_extension(".lcs"); // Replace .sbwt with .lcs
-    let lcs = match std::fs::File::open(indexfile) {
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+    let lcs = match std::fs::File::open(&lcsfile) {
         Ok(f) => {
             log::info!("Loading LCS array from file {}", lcsfile.display());
             let mut lcs_reader = std::io::BufReader::new(f);
