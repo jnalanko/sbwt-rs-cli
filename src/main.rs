@@ -1,6 +1,4 @@
-use std::fs::File;
 use std::io;
-use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
@@ -10,69 +8,6 @@ use sbwt::benchmark;
 
 use jseqio::reader::*;
 use sbwt::SbwtIndex;
-
-const FILE_FORMAT_STRING: &[u8] = b"sbwtfile-v1";
-
-struct SbwtFileHeader {
-    has_lcs: bool,
-}
-
-impl SbwtFileHeader {
-    fn write<W: Write>(&self, out: &mut W) -> io::Result<usize> {
-        let string_len = write_string(out, FILE_FORMAT_STRING).unwrap();
-        out.write_all(&[self.has_lcs as u8])?;
-        Ok(string_len + 1) // Number of bytes written
-    }
-
-    fn read<R: Read>(input: &mut R) -> io::Result<SbwtFileHeader> {
-        read_and_check_string(input, FILE_FORMAT_STRING, "Invalid or incompatible file format").unwrap();
-        let has_lcs: bool = byteorder::ReadBytesExt::read_u8(input).unwrap() != 0;
-        Ok(Self{has_lcs})
-    }
-
-}
-
-// Read a byte string in this format: first a little-endian usize giving the length,
-// then the bytes. Check that the bytes match the given slice. Returns an IO error with
-// the given error message if the strings do not match.
-fn read_and_check_string<R: std::io::Read>(input: &mut R, should_be_this: &[u8], error_message: &str) -> std::io::Result<()> {
-        let mut len_buf = [0_u8; 8]; 
-        input.read_exact(&mut len_buf)?;
-
-        let len = usize::from_le_bytes(len_buf);
-        if len != should_be_this.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error_message
-            ));
-        }
-
-        let mut string_buf = vec![0u8; len];
-        input.read_exact(&mut string_buf)?;
-
-        if string_buf != should_be_this {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error_message
-            ));
-        }
-
-        Ok(())
-
-}
-
-// See read_and_check_string. Returns the number of bytes written.
-fn write_string<W: std::io::Write>(out: &mut W, s: &[u8]) -> std::io::Result<usize>{
-    write_bytes(out, &s.len().to_le_bytes())?;
-    write_bytes(out, s)?;
-    
-    Ok(s.len().to_le_bytes().len() + s.len())
-}
-
-pub(crate) fn write_bytes<W: std::io::Write>(out: &mut W, bytes: &[u8]) -> std::io::Result<usize>{
-    out.write_all(bytes)?;
-    Ok(bytes.len() + 8)
-}
 
 struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
@@ -140,7 +75,7 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
 fn build_command(matches: &clap::ArgMatches){
 
     let infile = matches.get_one::<std::path::PathBuf>("input").unwrap();
-    let out_prefix = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
     let build_lcs = matches.get_flag("build-lcs");
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
@@ -459,7 +394,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let mut index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
