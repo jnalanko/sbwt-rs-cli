@@ -152,8 +152,11 @@ fn build_command(matches: &clap::ArgMatches){
 
     let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(infile).unwrap()};
 
-    let mut sbwt_outfile = out_prefix.clone();
-    sbwt_outfile.push(".sbwt");
+    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
+    let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); 
+
+    sbwt_outfile.extend(".sbwt".chars());
+    log::info!("Sbwt output file: {}", sbwt_outfile);
     let mut sbwt_out = std::io::BufWriter::new(std::fs::File::create(sbwt_outfile).unwrap()); // Open already here to fail early if problems
  
     log::info!("Building SBWT");
@@ -170,9 +173,10 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
 
     if let Some(lcs) = lcs{
-        let mut lcs_outfile = out_prefix.clone();
-        lcs_outfile.push(".lcs");
-        let mut lcs_out = std::io::BufWriter::new(std::fs::File::create(lcs_outfile).unwrap());
+        let mut lcs_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); // See comment on sbwt_outfile above
+        lcs_outfile.extend(".lcs".chars());
+        let mut lcs_out = std::io::BufWriter::new(std::fs::File::create(&lcs_outfile).unwrap());
+        log::info!("Lcs output file: {}", lcs_outfile);
 
         let lcs_bytes = lcs.serialize(&mut lcs_out).unwrap();
         log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt_kmers as f64);

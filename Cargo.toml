@@ -11,8 +11,8 @@ path = "src/main.rs"
 [dependencies]
 clap = "4.4"
 jseqio = "0.1.2" 
-#sbwt = "0.2.1"
-sbwt = {path = "../sbwt-rs"}
+sbwt = "0.2.1"
+#sbwt = {path = "../sbwt-rs"}
 env_logger = "0.10"
 log = "0.4"
 byteorder = "1.5"
