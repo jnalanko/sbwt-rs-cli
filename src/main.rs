@@ -330,22 +330,11 @@ fn usize_to_ascii(mut x: usize, bytes: &mut[u8; 32]) -> usize {
     byte_idx
 }
 
-fn matching_statistics_command(matches: &clap::ArgMatches){
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
-    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
-
-    let mut query_reader = DynamicFastXReader::from_file(queryfile).unwrap();
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+fn matching_statistics<SBWT: SbwtIndexInterface>(sbwt: &SBWT, lcs: &LcsArray, queryfile: &std::path::Path, outfile: &std::path::Path) {
+    let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
 
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap(); 
-    if !header.has_lcs {
-        panic!("LCS array required for matching statistics (--build-lcs in index construction)");
-    }
-    let sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    let lcs = LcsArray::load(&mut index_reader).unwrap();
-    let streaming_index = StreamingIndex::new(&sbwt, &lcs);
+    let streaming_index = StreamingIndex::new(sbwt, lcs);
 
     let mut total_query_length = 0_usize;
     let mut out_buffer = Vec::<u8>::new();
@@ -378,6 +367,42 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
     log::info!("Total query length: {} nucleotides", total_query_length);
     log::info!("Elapsed time: {:.2} seconds ({:.2} ns / nucleotide)", total_elapsed.as_secs_f64(), total_elapsed.as_nanos() as f64 / total_query_length as f64);
     log::info!("Elapsed time excluding I/O: {:.2} seconds ({:.2} ns / nucleotide)", elapsed_without_io.as_secs_f64(), elapsed_without_io.as_nanos() as f64 / total_query_length as f64);
+
+}
+
+fn matching_statistics_command(matches: &clap::ArgMatches){
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
+
+    // Read sbwt
+    log::info!("Loading sbwt index from file {}", indexfile.display());
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+
+    log::info!("Loading LCS array from file {}", lcsfile.display());
+    let lcs = match std::fs::File::open(&lcsfile) {
+        Ok(f) => {
+            let mut lcs_reader = std::io::BufReader::new(f);
+            LcsArray::load(&mut lcs_reader).unwrap()
+        }
+        Err(_) => {
+            log::error!("No LCS array found at {}", lcsfile.display());
+            log::error!("LCS array required for matching statistics (--build-lcs in index construction)");
+            return
+        }
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            matching_statistics(&sbwt, &lcs, queryfile, outfile)
+        }
+    };
+
 }
 
 fn benchmark_command(matches: &clap::ArgMatches) {
@@ -450,10 +475,10 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
-            .arg(clap::Arg::new("output")
+            .arg(clap::Arg::new("output-prefix")
                 .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
                 .short('o')
-                .long("output")
+                .long("output-prefix")
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
