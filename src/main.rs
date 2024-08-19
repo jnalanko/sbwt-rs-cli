@@ -217,7 +217,7 @@ fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], m
 
 // Pushes results to output vector
 #[allow(non_snake_case)]
-fn non_streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, query: &[u8], output: &mut Vec<Option<usize>>){
+fn non_streaming_search<SBWT: SbwtIndexInterface>(sbwt: &SBWT, query: &[u8], output: &mut Vec<Option<usize>>){
     for kmer in query.windows(sbwt.k()){
         let r = sbwt.search(kmer).map(|I| {
             assert!(I.len() == 1);
@@ -229,11 +229,11 @@ fn non_streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, query: &[u8], output: &m
 
 // Pushes results to output vector
 #[allow(non_snake_case)]
-fn streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, ss: &StreamingIndex<SbwtIndex<SubsetMatrix>, LcsArray>, query: &[u8], output: &mut Vec<Option<usize>>){
+fn streaming_search<SBWT: SbwtIndexInterface>(ss: &StreamingIndex<SBWT, LcsArray>, k: usize, query: &[u8], output: &mut Vec<Option<usize>>){
     // Query using matching statistics
     let ms = ss.matching_statistics(query);
-    for (len, I) in ms.iter().skip(sbwt.k()-1) {
-        if *len == sbwt.k() {
+    for (len, I) in ms.iter().skip(k-1) {
+        if *len == k {
             assert!(I.len() == 1);
             output.push(Some(I.start));
         } else {
@@ -242,31 +242,13 @@ fn streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, ss: &StreamingIndex<SbwtInde
     }
 }
 
-#[allow(non_snake_case)]
-fn lookup_query_command(matches: &clap::ArgMatches){
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
-    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
-    let membership_only = matches.get_flag("membership-only");
+fn lookup_query<SBWT: SbwtIndexInterface>(sbwt: &SBWT, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: &std::path::Path, membership_only: bool) {
+    log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
 
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let mut query_reader = DynamicFastXReader::from_file(queryfile).unwrap();
+    let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
 
-    // Read header
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap();
-
-    // Read sbwt
-    let sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    log::info!("Loaded index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
-
-    // Load the lcs array, if available
-    let lcs = if header.has_lcs {
-        Some(LcsArray::load(&mut index_reader).unwrap())
-    } else {
-        None
-    }; 
-    let streaming_index = lcs.as_ref().map(|lcs| StreamingIndex::new(&sbwt, lcs)); 
+    let streaming_index = lcs.as_ref().map(|lcs| StreamingIndex::new(sbwt, lcs)); 
 
     let start_time = std::time::Instant::now();
     let mut n_query_kmers = 0_usize;
@@ -277,9 +259,9 @@ fn lookup_query_command(matches: &clap::ArgMatches){
         colex_ranks.clear();
 
         if let Some(streaming_index) = &streaming_index{
-            streaming_search(&sbwt, streaming_index, seq, &mut colex_ranks);
+            streaming_search(streaming_index, sbwt.k(), seq, &mut colex_ranks);
         } else {
-            non_streaming_search(&sbwt, seq, &mut colex_ranks);
+            non_streaming_search(sbwt, seq, &mut colex_ranks);
         };
         n_query_kmers += colex_ranks.len();
         n_found += colex_ranks.iter().fold(0_usize, |count, r| count + r.is_some() as usize);
@@ -294,6 +276,41 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     log::info!("Queried {} k-mers", n_query_kmers);
     log::info!("{:.2}% of queried k-mers found", n_found as f64 / n_query_kmers as f64 * 100.0);
     log::info!("Elapsed time: {:.2} seconds ({:.2} ns / k-mer)", elapsed.as_secs_f64(), elapsed.as_nanos() as f64 / n_query_kmers as f64);
+
+}
+
+#[allow(non_snake_case)]
+fn lookup_query_command(matches: &clap::ArgMatches){
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
+    let membership_only = matches.get_flag("membership-only");
+
+    // Read sbwt
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array, if available
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension(".lcs"); // Replace .sbwt with .lcs
+    let lcs = match std::fs::File::open(indexfile) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcsfile.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            Some(LcsArray::load(&mut lcs_reader).unwrap())
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> running without LCS support", lcsfile.display());
+            None
+        }
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            lookup_query(&sbwt, lcs, queryfile, outfile, membership_only)
+        }
+    };
+
 }
 
 // Return the number of bytes written
