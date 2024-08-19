@@ -909,6 +909,8 @@ dependencies = [
 [[package]]
 name = "sbwt"
 version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d564e6dc9688d2571d9776891e1fa7e26652b6699cf534c69a648572d30d6cb"
 dependencies = [
  "bitvec",
  "byteorder",
