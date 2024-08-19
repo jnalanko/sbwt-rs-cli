@@ -1,8 +1,5 @@
-use std::fs::File;
 use std::io;
-use std::io::BufReader;
 use std::io::BufWriter;
-use std::io::Read;
 use std::io::Write;
 use sbwt::dbg::Dbg;
 use sbwt::*;
@@ -10,69 +7,6 @@ use sbwt::benchmark;
 
 use jseqio::reader::*;
 use sbwt::SbwtIndex;
-
-const FILE_FORMAT_STRING: &[u8] = b"sbwtfile-v1";
-
-struct SbwtFileHeader {
-    has_lcs: bool,
-}
-
-impl SbwtFileHeader {
-    fn write<W: Write>(&self, out: &mut W) -> io::Result<usize> {
-        let string_len = write_string(out, FILE_FORMAT_STRING).unwrap();
-        out.write_all(&[self.has_lcs as u8])?;
-        Ok(string_len + 1) // Number of bytes written
-    }
-
-    fn read<R: Read>(input: &mut R) -> io::Result<SbwtFileHeader> {
-        read_and_check_string(input, FILE_FORMAT_STRING, "Invalid or incompatible file format").unwrap();
-        let has_lcs: bool = byteorder::ReadBytesExt::read_u8(input).unwrap() != 0;
-        Ok(Self{has_lcs})
-    }
-
-}
-
-// Read a byte string in this format: first a little-endian usize giving the length,
-// then the bytes. Check that the bytes match the given slice. Returns an IO error with
-// the given error message if the strings do not match.
-fn read_and_check_string<R: std::io::Read>(input: &mut R, should_be_this: &[u8], error_message: &str) -> std::io::Result<()> {
-        let mut len_buf = [0_u8; 8]; 
-        input.read_exact(&mut len_buf)?;
-
-        let len = usize::from_le_bytes(len_buf);
-        if len != should_be_this.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error_message
-            ));
-        }
-
-        let mut string_buf = vec![0u8; len];
-        input.read_exact(&mut string_buf)?;
-
-        if string_buf != should_be_this {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error_message
-            ));
-        }
-
-        Ok(())
-
-}
-
-// See read_and_check_string. Returns the number of bytes written.
-fn write_string<W: std::io::Write>(out: &mut W, s: &[u8]) -> std::io::Result<usize>{
-    write_bytes(out, &s.len().to_le_bytes())?;
-    write_bytes(out, s)?;
-    
-    Ok(s.len().to_le_bytes().len() + s.len())
-}
-
-pub(crate) fn write_bytes<W: std::io::Write>(out: &mut W, bytes: &[u8]) -> std::io::Result<usize>{
-    out.write_all(bytes)?;
-    Ok(bytes.len() + 8)
-}
 
 struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
@@ -84,17 +18,8 @@ impl sbwt::SeqStream for MySeqReader {
     }
 }
 
-fn dump_kmers_command(matches: &clap::ArgMatches){
-
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let include_dummies = matches.get_flag("include-dummy-kmers");
-    let all_at_once = matches.get_flag("all-at-once");
-
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let _ = SbwtFileHeader::read(&mut index_reader).unwrap();
-    let mut sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    // Don't care if there is LCS support or not
-
+// sbwt is taken as mutable because we need to build select support if all_at_once is true
+fn dump_kmers<SS: SubsetSeq>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool, include_dummies: bool) {
     let mut stdout = BufWriter::new(io::stdout());
     if all_at_once {
         log::info!("Reconstructing the k-mers");
@@ -128,11 +53,28 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
 
 }
 
+fn dump_kmers_command(matches: &clap::ArgMatches){
+
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let include_dummies = matches.get_flag("include-dummy-kmers");
+    let all_at_once = matches.get_flag("all-at-once");
+
+    // Don't care if there is LCS support or not
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    match index {
+        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            dump_kmers(&mut sbwt, all_at_once, include_dummies);
+        }
+    };
+
+}
+
 #[allow(non_snake_case)]
 fn build_command(matches: &clap::ArgMatches){
 
     let infile = matches.get_one::<std::path::PathBuf>("input").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
     let build_lcs = matches.get_flag("build-lcs");
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
@@ -143,7 +85,13 @@ fn build_command(matches: &clap::ArgMatches){
     let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
 
     let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(infile).unwrap()};
-    let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
+
+    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
+    let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); 
+
+    sbwt_outfile.extend(".sbwt".chars());
+    log::info!("Sbwt output file: {}", sbwt_outfile);
+    let mut sbwt_out = std::io::BufWriter::new(std::fs::File::create(sbwt_outfile).unwrap()); // Open already here to fail early if problems
  
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
@@ -154,18 +102,18 @@ fn build_command(matches: &clap::ArgMatches){
 
     log::info!("Serializing");
     
-    // Write file header
-    let header = SbwtFileHeader{has_lcs: build_lcs};
-    let header_bytes = header.write(&mut out).unwrap();
-    log::info!("Wrote header: {} bytes", header_bytes);
+    let sbwt_kmers = sbwt.n_kmers();
+    let sbwt_bytes = write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(sbwt), &mut sbwt_out).unwrap();
+    log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
 
-    // Write the index
-    let sbwt_bytes = sbwt.serialize(&mut out).unwrap();
-    log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt.n_kmers() as f64);
     if let Some(lcs) = lcs{
-        let lcs_bytes = lcs.size_in_bytes();
-        lcs.serialize(&mut out).unwrap();
-        log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt.n_kmers() as f64);
+        let mut lcs_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); // See comment on sbwt_outfile above
+        lcs_outfile.extend(".lcs".chars());
+        let mut lcs_out = std::io::BufWriter::new(std::fs::File::create(&lcs_outfile).unwrap());
+        log::info!("Lcs output file: {}", lcs_outfile);
+
+        let lcs_bytes = lcs.serialize(&mut lcs_out).unwrap();
+        log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt_kmers as f64);
     }
 }
 
@@ -203,7 +151,7 @@ fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], m
 
 // Pushes results to output vector
 #[allow(non_snake_case)]
-fn non_streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, query: &[u8], output: &mut Vec<Option<usize>>){
+fn non_streaming_search<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, query: &[u8], output: &mut Vec<Option<usize>>){
     for kmer in query.windows(sbwt.k()){
         let r = sbwt.search(kmer).map(|I| {
             assert!(I.len() == 1);
@@ -215,11 +163,11 @@ fn non_streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, query: &[u8], output: &m
 
 // Pushes results to output vector
 #[allow(non_snake_case)]
-fn streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, ss: &StreamingIndex<SbwtIndex<SubsetMatrix>, LcsArray>, query: &[u8], output: &mut Vec<Option<usize>>){
+fn streaming_search<SS: SubsetSeq>(ss: &StreamingIndex<SbwtIndex<SS>, LcsArray>, k: usize, query: &[u8], output: &mut Vec<Option<usize>>){
     // Query using matching statistics
     let ms = ss.matching_statistics(query);
-    for (len, I) in ms.iter().skip(sbwt.k()-1) {
-        if *len == sbwt.k() {
+    for (len, I) in ms.iter().skip(k-1) {
+        if *len == k {
             assert!(I.len() == 1);
             output.push(Some(I.start));
         } else {
@@ -228,31 +176,13 @@ fn streaming_search(sbwt: &SbwtIndex<SubsetMatrix>, ss: &StreamingIndex<SbwtInde
     }
 }
 
-#[allow(non_snake_case)]
-fn lookup_query_command(matches: &clap::ArgMatches){
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
-    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
-    let membership_only = matches.get_flag("membership-only");
+fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: &std::path::Path, membership_only: bool) {
+    log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
 
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let mut query_reader = DynamicFastXReader::from_file(queryfile).unwrap();
+    let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
 
-    // Read header
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap();
-
-    // Read sbwt
-    let sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    log::info!("Loaded index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
-
-    // Load the lcs array, if available
-    let lcs = if header.has_lcs {
-        Some(LcsArray::load(&mut index_reader).unwrap())
-    } else {
-        None
-    }; 
-    let streaming_index = lcs.as_ref().map(|lcs| StreamingIndex::new(&sbwt, lcs)); 
+    let streaming_index = lcs.as_ref().map(|lcs| StreamingIndex::new(sbwt, lcs)); 
 
     let start_time = std::time::Instant::now();
     let mut n_query_kmers = 0_usize;
@@ -263,9 +193,9 @@ fn lookup_query_command(matches: &clap::ArgMatches){
         colex_ranks.clear();
 
         if let Some(streaming_index) = &streaming_index{
-            streaming_search(&sbwt, streaming_index, seq, &mut colex_ranks);
+            streaming_search(streaming_index, sbwt.k(), seq, &mut colex_ranks);
         } else {
-            non_streaming_search(&sbwt, seq, &mut colex_ranks);
+            non_streaming_search(sbwt, seq, &mut colex_ranks);
         };
         n_query_kmers += colex_ranks.len();
         n_found += colex_ranks.iter().fold(0_usize, |count, r| count + r.is_some() as usize);
@@ -280,6 +210,41 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     log::info!("Queried {} k-mers", n_query_kmers);
     log::info!("{:.2}% of queried k-mers found", n_found as f64 / n_query_kmers as f64 * 100.0);
     log::info!("Elapsed time: {:.2} seconds ({:.2} ns / k-mer)", elapsed.as_secs_f64(), elapsed.as_nanos() as f64 / n_query_kmers as f64);
+
+}
+
+#[allow(non_snake_case)]
+fn lookup_query_command(matches: &clap::ArgMatches){
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
+    let membership_only = matches.get_flag("membership-only");
+
+    // Read sbwt
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array, if available
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+    let lcs = match std::fs::File::open(&lcsfile) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcsfile.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            Some(LcsArray::load(&mut lcs_reader).unwrap())
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> running without LCS support", lcsfile.display());
+            None
+        }
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            lookup_query(&sbwt, lcs, queryfile, outfile, membership_only)
+        }
+    };
+
 }
 
 // Return the number of bytes written
@@ -299,22 +264,11 @@ fn usize_to_ascii(mut x: usize, bytes: &mut[u8; 32]) -> usize {
     byte_idx
 }
 
-fn matching_statistics_command(matches: &clap::ArgMatches){
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
-    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
-
-    let mut query_reader = DynamicFastXReader::from_file(queryfile).unwrap();
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, queryfile: &std::path::Path, outfile: &std::path::Path) {
+    let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
 
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap(); 
-    if !header.has_lcs {
-        panic!("LCS array required for matching statistics (--build-lcs in index construction)");
-    }
-    let sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    let lcs = LcsArray::load(&mut index_reader).unwrap();
-    let streaming_index = StreamingIndex::new(&sbwt, &lcs);
+    let streaming_index = StreamingIndex::new(sbwt, lcs);
 
     let mut total_query_length = 0_usize;
     let mut out_buffer = Vec::<u8>::new();
@@ -347,37 +301,80 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
     log::info!("Total query length: {} nucleotides", total_query_length);
     log::info!("Elapsed time: {:.2} seconds ({:.2} ns / nucleotide)", total_elapsed.as_secs_f64(), total_elapsed.as_nanos() as f64 / total_query_length as f64);
     log::info!("Elapsed time excluding I/O: {:.2} seconds ({:.2} ns / nucleotide)", elapsed_without_io.as_secs_f64(), elapsed_without_io.as_nanos() as f64 / total_query_length as f64);
+
+}
+
+fn matching_statistics_command(matches: &clap::ArgMatches){
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
+
+    // Read sbwt
+    log::info!("Loading sbwt index from file {}", indexfile.display());
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+
+    log::info!("Loading LCS array from file {}", lcsfile.display());
+    let lcs = match std::fs::File::open(&lcsfile) {
+        Ok(f) => {
+            let mut lcs_reader = std::io::BufReader::new(f);
+            LcsArray::load(&mut lcs_reader).unwrap()
+        }
+        Err(_) => {
+            log::error!("No LCS array found at {}", lcsfile.display());
+            log::error!("LCS array required for matching statistics (--build-lcs in index construction)");
+            return
+        }
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            matching_statistics(&sbwt, &lcs, queryfile, outfile)
+        }
+    };
+
+}
+
+fn benchmark<SS: SubsetSeq>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
+    log::info!("benchmarking index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
+    benchmark::benchmark_all(sbwt, lcs);
 }
 
 fn benchmark_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let mut index_reader = BufReader::new(File::open(indexfile).unwrap());
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap();
-    let sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    let lcs = if header.has_lcs {
-        Some(LcsArray::load(&mut index_reader).unwrap())
-    } else {
-        None
+
+    // Read sbwt
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array, if available
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+    let lcs = match std::fs::File::open(&lcsfile) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcsfile.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            Some(LcsArray::load(&mut lcs_reader).unwrap())
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> running without LCS support", lcsfile.display());
+            None
+        }
     };
 
-    log::info!("benchmarking index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            benchmark(sbwt, lcs);
+        }
+    };
 
-    benchmark::benchmark_all(sbwt, lcs);
 }
 
-fn dump_unitigs_command(matches: &clap::ArgMatches) {
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let mut index_reader = BufReader::new(File::open(indexfile).unwrap());
-
-    log::info!("Loading index");
-    let header = SbwtFileHeader::read(&mut index_reader).unwrap(); 
-    let mut sbwt = SbwtIndex::<SubsetMatrix>::load(&mut index_reader).unwrap();
-    let lcs = if header.has_lcs {
-        Some(LcsArray::load(&mut index_reader).unwrap())
-    } else {
-        None
-    }; 
-
+fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Option<LcsArray>) {
     let out = std::io::stdout();
     let mut out = std::io::BufWriter::new(out);
 
@@ -388,6 +385,37 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     log::info!("Dumping unitigs");
     dbg.parallel_export_unitigs(&mut out);
+}
+
+fn dump_unitigs_command(matches: &clap::ArgMatches) {
+
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+
+    // Read sbwt
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+
+    // Load the lcs array, if available
+    let mut lcsfile = indexfile.clone();
+    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+    let lcs = match std::fs::File::open(&lcsfile) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcsfile.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            Some(LcsArray::load(&mut lcs_reader).unwrap())
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> Some extra computation needed to initialize the DBG", lcsfile.display());
+            None
+        }
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            dump_unitigs(&mut sbwt, &lcs);
+        }
+    };
+
 }
 
 fn main() {
@@ -419,10 +447,10 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
-            .arg(clap::Arg::new("output")
-                .help("Output SBWT file")
+            .arg(clap::Arg::new("output-prefix")
+                .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
                 .short('o')
-                .long("output")
+                .long("output-prefix")
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
