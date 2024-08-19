@@ -161,79 +161,6 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         self.C.as_slice()
     }
 
-    /// Writes the index to the writer and retuns the number of bytes written.
-    /// The array can later be loaded with [SbwtIndex::load].
-    pub fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
-        let mut n_written = 0_usize;
-
-        let magic_string_length = [SERIALIZATION_MAGIC_STRING.len() as u8];
-        n_written += util::write_bytes(out, &magic_string_length)?;
-        n_written += util::write_bytes(out, &SERIALIZATION_MAGIC_STRING)?;
-
-        n_written += self.sbwt.serialize(out)?;
-
-        // We're not using serde because we want full control over the bytes
-        // in order to guarantee compatibility across languages
-
-        n_written += util::write_bytes(out, &self.n_kmers.to_le_bytes())?;
-        n_written += util::write_bytes(out, &self.k.to_le_bytes())?;
-        n_written += util::write_bytes(out, &self.C.len().to_le_bytes())?; // TODO: check at build time that usize = u64, crash otherwise
-        n_written += util::write_bytes(
-            out,
-            &self
-                .C
-                .iter()
-                .flat_map(|x| x.to_le_bytes())
-                .collect::<Vec<u8>>(),
-        )?;
-
-        n_written += self.prefix_lookup_table.serialize(out)?; 
-
-        Ok(n_written)
-    }
-
-    /// Loads an index that was previously serialized with [SbwtIndex::serialize].
-    #[allow(non_snake_case)] // For C-array
-    pub fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
-
-        let magic_string_length = input.read_u8().unwrap();
-        let mut magic_string_buf = vec![0u8; magic_string_length as usize];
-        input.read_exact(&mut magic_string_buf).unwrap();
-        if magic_string_buf != SERIALIZATION_MAGIC_STRING {
-            panic!("Error loading SBWT: incorrect version string: expected \"{}\", found \"{}\"", String::from_utf8(SERIALIZATION_MAGIC_STRING.to_vec()).unwrap(), String::from_utf8_lossy(&magic_string_buf));
-        }
-
-        let subset_rank = SS::load(input)?;
-
-        let n_kmers = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
-        let k = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
-        let C_len = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
-
-        let mut C_bytes = vec![0_u8; C_len * 8];
-        input.read_exact(&mut C_bytes)?;
-
-        let C = C_bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                let mut arr = [0_u8; 8];
-                arr.copy_from_slice(chunk);
-                u64::from_le_bytes(arr) as usize
-            })
-            .collect::<Vec<usize>>();
-
-        let prefix_lookup_table = PrefixLookupTable::load(input)?;
-
-        let index = Self {
-            sbwt: subset_rank,
-            n_kmers,
-            k,
-            C,
-            prefix_lookup_table
-        };
-
-        Ok(index)
-
-    }
 
     /// Returns the edge label on the incoming edge to the i-th node in colexicographic order 
     /// in the SBWT graph (not the same graph as the de Bruijn graph!), or None if the node has 
@@ -398,9 +325,20 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         &self.sbwt
     }
 
+    /// Construct using existing subset sequence 
+    #[allow(non_snake_case)]
+    pub fn from_subset_seq(subset_seq: SS, n_kmers: usize, k: usize, lookup_table_prefix_length: usize) -> Self {
+        let C = compute_C_array(&subset_seq);
+        let lut = PrefixLookupTable::new_empty(subset_seq.len());
+        let mut index = Self{sbwt: subset_seq, n_kmers, k, C, prefix_lookup_table: lut};
+        let new_lut = PrefixLookupTable::new(&index, lookup_table_prefix_length);
+        index.prefix_lookup_table = new_lut;
+        index
+    }
+
     /// Internal function: construct from parts.
     #[allow(non_snake_case)]
-    pub(crate) fn from_components(subset_rank:SS, n_kmers: usize, k: usize, C: Vec<usize>, prefix_lookup_table: PrefixLookupTable) -> Self {
+    pub(crate) fn from_components(subset_rank: SS, n_kmers: usize, k: usize, C: Vec<usize>, prefix_lookup_table: PrefixLookupTable) -> Self {
         Self {sbwt: subset_rank, n_kmers, k, C, prefix_lookup_table}
     }
 
@@ -465,6 +403,82 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         marks
     }
 
+}
+
+impl<SS: SubsetSeq + crate::Serializable> SbwtIndex<SS> {
+    /// Writes the index to the writer and retuns the number of bytes written.
+    /// The array can later be loaded with [SbwtIndex::load].
+    pub fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
+        let mut n_written = 0_usize;
+
+        let magic_string_length = [SERIALIZATION_MAGIC_STRING.len() as u8];
+        n_written += util::write_bytes(out, &magic_string_length)?;
+        n_written += util::write_bytes(out, &SERIALIZATION_MAGIC_STRING)?;
+
+        n_written += self.sbwt.serialize(out)?;
+
+        // We're not using serde because we want full control over the bytes
+        // in order to guarantee compatibility across languages
+
+        n_written += util::write_bytes(out, &self.n_kmers.to_le_bytes())?;
+        n_written += util::write_bytes(out, &self.k.to_le_bytes())?;
+        n_written += util::write_bytes(out, &self.C.len().to_le_bytes())?; // TODO: check at build time that usize = u64, crash otherwise
+        n_written += util::write_bytes(
+            out,
+            &self
+                .C
+                .iter()
+                .flat_map(|x| x.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )?;
+
+        n_written += self.prefix_lookup_table.serialize(out)?; 
+
+        Ok(n_written)
+    }
+
+    /// Loads an index that was previously serialized with [SbwtIndex::serialize].
+    #[allow(non_snake_case)] // For C-array
+    pub fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
+
+        let magic_string_length = input.read_u8().unwrap();
+        let mut magic_string_buf = vec![0u8; magic_string_length as usize];
+        input.read_exact(&mut magic_string_buf).unwrap();
+        if magic_string_buf != SERIALIZATION_MAGIC_STRING {
+            panic!("Error loading SBWT: incorrect version string: expected \"{}\", found \"{}\"", String::from_utf8(SERIALIZATION_MAGIC_STRING.to_vec()).unwrap(), String::from_utf8_lossy(&magic_string_buf));
+        }
+
+        let subset_rank = SS::load(input)?;
+
+        let n_kmers = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
+        let k = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
+        let C_len = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
+
+        let mut C_bytes = vec![0_u8; C_len * 8];
+        input.read_exact(&mut C_bytes)?;
+
+        let C = C_bytes
+            .chunks_exact(8)
+            .map(|chunk| {
+                let mut arr = [0_u8; 8];
+                arr.copy_from_slice(chunk);
+                u64::from_le_bytes(arr) as usize
+            })
+            .collect::<Vec<usize>>();
+
+        let prefix_lookup_table = PrefixLookupTable::load(input)?;
+
+        let index = Self {
+            sbwt: subset_rank,
+            n_kmers,
+            k,
+            C,
+            prefix_lookup_table
+        };
+
+        Ok(index)
+
+    }
 }
 
 /// A table storing the SBWT intervals of all 4^p possible p-mers.

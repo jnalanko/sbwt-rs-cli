@@ -18,13 +18,13 @@ pub trait SubsetSeq{
     /// Creates a new subset sequence from a vector of subsets of {0, 1, ..., sigma-1}. Order
     /// of characters inside a subset does not matter. The rank and select supports are not automatically
     /// initialized, so if the you need those functions, you need to call [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
-    fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self;
+    //fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self;
 
     /// Create a new subset sequence from indicator [bit vectors](simple_sds_sbwt::bit_vector::BitVector), where the i-th bit of the j-th bit vector
     /// is 1 if and only if the i-th subset contains the j-th character. The resulting subset sequence has
     /// rank and select support if the provided bit vectors have rank and select support enabled. Otherwise, those
     /// supports need to be initialized by calling [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
-    fn new_from_bit_vectors(vecs: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self;
+    //fn new_from_bit_vectors(vecs: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self;
 
     /// Number of sets in the sequence (**not** the total length of the sets).
     fn len(&self) -> usize;
@@ -63,13 +63,6 @@ pub trait SubsetSeq{
     /// Returns true if the set at index `set_idx` contains the character.
     fn set_contains(&self, set_idx: usize, character: u8) -> bool;
 
-    /// Writes the subset sequence to the given writer.
-    /// The sequence can be loaded later back with [`SubsetSeq::load`].
-    /// Returns the number of bytes written.
-    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize>;
-
-    /// Loads a subset sequence that was previously written with [`SubsetSeq::serialize`].
-    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized;
 }
 
 /// An implementation of [SubsetSeq] with a matrix of sigma indicator bit vectors: the i-th bit of the j-th bit vector
@@ -82,29 +75,6 @@ pub struct SubsetMatrix{
 
 impl SubsetSeq for SubsetMatrix{
     
-    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize>{
-        let mut n_written = 0_usize;
-
-        let n_rows = self.rows.len() as u64;
-        out.write_all(&n_rows.to_le_bytes())?;
-        for row in self.rows.iter(){
-            row.serialize(out)?;
-            n_written += row.size_in_bytes();
-        }
-        Ok(n_written)
-    }
-
-    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self>{
-
-        let n_rows = u64::load(input)? as usize;
-
-        let mut rows = Vec::<BitVector>::new();
-        for _ in 0..n_rows{
-            rows.push(BitVector::load(input)?);
-        }
-        Ok(Self{rows})
-    }
-
     fn new_from_bit_vectors(rows: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self{
         Self{rows}
     }
@@ -176,6 +146,56 @@ impl SubsetSeq for SubsetMatrix{
     }
 }
 
+impl crate::Serializable for SubsetMatrix {
+    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize>{
+        let mut n_written = 0_usize;
+
+        let n_rows = self.rows.len() as u64;
+        out.write_all(&n_rows.to_le_bytes())?;
+        for row in self.rows.iter(){
+            row.serialize(out)?;
+            n_written += row.size_in_bytes();
+        }
+        Ok(n_written)
+    }
+
+    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self>{
+
+        let n_rows = u64::load(input)? as usize;
+
+        let mut rows = Vec::<BitVector>::new();
+        for _ in 0..n_rows{
+            rows.push(BitVector::load(input)?);
+        }
+        Ok(Self{rows})
+    }
+}
+
+pub fn compute_C_array<SS: SubsetSeq>(subset_seq: &SS) -> Vec<usize>{
+    let sigma = 4; // TODO 
+    let n = subset_seq.len(); 
+
+    let mut C: Vec<usize> = vec![0; sigma];
+    for i in 0..n {
+        for c in 0..(sigma as u8) {
+            if subset_seq.set_contains(i, c) {
+                for d in (c + 1)..(sigma as u8) {
+                    C[d as usize] += 1;
+                }
+
+            }
+        }
+    }
+
+    // Plus one for the ghost dollar
+    #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
+    for c in 0..sigma {
+        C[c] += 1;
+    }
+
+    C
+}
+
 /// Formats the subset matrix as an ASCII bit matrix of 0s and 1s, where row i
 /// is the indicator bit vector for the i-th character.
 impl std::fmt::Display for SubsetMatrix{
@@ -197,6 +217,7 @@ impl std::fmt::Display for SubsetMatrix{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Serializable;
 
     #[test]
     fn serialize_and_load(){

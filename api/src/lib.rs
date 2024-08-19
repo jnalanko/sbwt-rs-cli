@@ -176,6 +176,17 @@ impl crate::SeqStream for JSeqIOSeqStreamWrapper {
     }
 }
 
+/// Serializable struct in the library.
+/// We're not using serde because we want full control over serialization.
+pub trait Serializable {
+    /// Writes the subset sequence to the given writer.
+    /// The sequence can be loaded later back with [`SubsetSeq::load`].
+    /// Returns the number of bytes written.
+    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize>;
+
+    /// Loads a subset sequence that was previously written with [`SubsetSeq::serialize`].
+    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized;
+}
 
 /// Given an iterator of canonical unitigs of the node-centric de Bruijn graph of order k, 
 /// returns a vector of orientations, one for each sequence, aiming to

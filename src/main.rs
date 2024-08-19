@@ -346,6 +346,7 @@ fn benchmark<SS: SubsetSeq>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
 
 fn benchmark_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let dynamic_dispatch = matches.get_flag("dynamic-dispatch");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
@@ -366,11 +367,28 @@ fn benchmark_command(matches: &clap::ArgMatches) {
         }
     };
 
-    match index {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            benchmark(sbwt, lcs);
-        }
-    };
+    if dynamic_dispatch {
+        // Wrap the index into a trait object
+        todo!(); // subsetseq is not object-safe at the moment
+
+        /* 
+        let (ss, n_kmers, k, lut_length) = match &index {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => {
+                let sbwt_ref = sbwt.sbwt();
+                let ss: Box<&dyn SubsetSeq> = sbwt_ref;
+                (ss, sbwt.n_kmers(), sbwt.k(), sbwt.get_lookup_table().prefix_length)
+            }
+        };
+        let dynamic_index = SbwtIndex::from_subset_seq(ss, n_kmers, k, lut_length);
+        benchmark(dynamic_index, lcs);
+        */
+    } else {
+        match index {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => {
+                benchmark(sbwt, lcs);
+            }
+        };
+    }
 
 }
 
@@ -508,6 +526,11 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
+            .arg(clap::Arg::new("dynamic-dispatch")
+                .help("Benchmark using dynamic dispatch")
+                .long("dynamic-dispatch")
+                .short('d')
+                .action(clap::ArgAction::SetTrue))
         )
         .subcommand(clap::Command::new("lookup")
             .about("Look up the colex ranks of all k-mers. Printed as space-separated ascii integers, one line per query sequence. If a k-mer does not exist in the index, the colex rank is -1.")
