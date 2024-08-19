@@ -1,6 +1,6 @@
 # sbwt-rs command-line interface
 
-A command line interface for the [sbwt crate](https://crates.io/crates/sbwt). To compile, run `cargo build -r`. Then, run `./target/release/sbwt` for instructions. At the time of writing this README.md, the CLI supports the provides the following subdommands:
+A command line interface for the [sbwt crate](https://crates.io/crates/sbwt). To compile, run `cargo build -r`. Then, run `./target/release/sbwt` for instructions. At the time of writing this README.md, the CLI provides the following subcommands:
 
 ```
 Command line tools using for the sbwt library.
