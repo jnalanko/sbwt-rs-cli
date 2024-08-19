@@ -132,7 +132,7 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
 fn build_command(matches: &clap::ArgMatches){
 
     let infile = matches.get_one::<std::path::PathBuf>("input").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let out_prefix = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let build_lcs = matches.get_flag("build-lcs");
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
@@ -143,7 +143,10 @@ fn build_command(matches: &clap::ArgMatches){
     let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
 
     let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(infile).unwrap()};
-    let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
+
+    let mut sbwt_outfile = out_prefix.clone();
+    sbwt_outfile.push(".sbwt");
+    let mut sbwt_out = std::io::BufWriter::new(std::fs::File::create(sbwt_outfile).unwrap()); // Open already here to fail early if problems
  
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
@@ -154,18 +157,17 @@ fn build_command(matches: &clap::ArgMatches){
 
     log::info!("Serializing");
     
-    // Write file header
-    let header = SbwtFileHeader{has_lcs: build_lcs};
-    let header_bytes = header.write(&mut out).unwrap();
-    log::info!("Wrote header: {} bytes", header_bytes);
+    let sbwt_kmers = sbwt.n_kmers();
+    let sbwt_bytes = write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(sbwt), &mut sbwt_out).unwrap();
+    log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
 
-    // Write the index
-    let sbwt_bytes = sbwt.serialize(&mut out).unwrap();
-    log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt.n_kmers() as f64);
     if let Some(lcs) = lcs{
-        let lcs_bytes = lcs.size_in_bytes();
-        lcs.serialize(&mut out).unwrap();
-        log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt.n_kmers() as f64);
+        let mut lcs_outfile = out_prefix.clone();
+        lcs_outfile.push(".lcs");
+        let mut lcs_out = std::io::BufWriter::new(std::fs::File::create(lcs_outfile).unwrap());
+
+        let lcs_bytes = lcs.serialize(&mut lcs_out).unwrap();
+        log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt_kmers as f64);
     }
 }
 
@@ -420,7 +422,7 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("output")
-                .help("Output SBWT file")
+                .help("Prefix for the output filenames")
                 .short('o')
                 .long("output")
                 .required(true)
