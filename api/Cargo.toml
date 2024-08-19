@@ -1,0 +1,30 @@
+[package]
+name = "sbwt"
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.77" # 1.77 needed for File::create_new
+license = "MIT"
+description = "Indexing sets of DNA k-mers with the spectral Burrow-Wheeler transform."
+repository = "https://github.com/jnalanko/sbwt-rs"
+authors = ["Jarno Niklas Alanko <alanko.jarno@gmail.com>"]
+
+[dependencies]
+rayon = "1"
+num = "0.4"
+simple-sds-sbwt = "0.3.1"
+clap = "4.4"
+jseqio = "0.1.3"
+unitig_flipper = "0.1.0" 
+env_logger = "0.10"
+log = "0.4"
+crossbeam = "0.5"
+read_exact = "0.0.1"
+bitvec = "1.0.1"
+rand = "0.7"
+test-log = "0.2"
+byteorder = "1.5"
+chrono = "0.4"
+embed-doc-image = "0.1.4"
+
+[dev-dependencies]
+rand_chacha = "0.3.1" # Seeded rng in tests
