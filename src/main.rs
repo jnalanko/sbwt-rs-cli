@@ -85,7 +85,7 @@ impl sbwt::SeqStream for MySeqReader {
 }
 
 // sbwt is taken as mutable because we need to build select support if all_at_once is true
-fn dump_kmers<SBWT: SbwtIndexInterface>(sbwt: &mut SBWT, all_at_once: bool, include_dummies: bool) {
+fn dump_kmers<SS: SubsetSeq>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool, include_dummies: bool) {
     let mut stdout = BufWriter::new(io::stdout());
     if all_at_once {
         log::info!("Reconstructing the k-mers");
@@ -217,7 +217,7 @@ fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], m
 
 // Pushes results to output vector
 #[allow(non_snake_case)]
-fn non_streaming_search<SBWT: SbwtIndexInterface>(sbwt: &SBWT, query: &[u8], output: &mut Vec<Option<usize>>){
+fn non_streaming_search<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, query: &[u8], output: &mut Vec<Option<usize>>){
     for kmer in query.windows(sbwt.k()){
         let r = sbwt.search(kmer).map(|I| {
             assert!(I.len() == 1);
@@ -229,7 +229,7 @@ fn non_streaming_search<SBWT: SbwtIndexInterface>(sbwt: &SBWT, query: &[u8], out
 
 // Pushes results to output vector
 #[allow(non_snake_case)]
-fn streaming_search<SBWT: SbwtIndexInterface>(ss: &StreamingIndex<SBWT, LcsArray>, k: usize, query: &[u8], output: &mut Vec<Option<usize>>){
+fn streaming_search<SS: SubsetSeq>(ss: &StreamingIndex<SbwtIndex<SS>, LcsArray>, k: usize, query: &[u8], output: &mut Vec<Option<usize>>){
     // Query using matching statistics
     let ms = ss.matching_statistics(query);
     for (len, I) in ms.iter().skip(k-1) {
@@ -242,7 +242,7 @@ fn streaming_search<SBWT: SbwtIndexInterface>(ss: &StreamingIndex<SBWT, LcsArray
     }
 }
 
-fn lookup_query<SBWT: SbwtIndexInterface>(sbwt: &SBWT, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: &std::path::Path, membership_only: bool) {
+fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: &std::path::Path, membership_only: bool) {
     log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
 
     let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
@@ -330,7 +330,7 @@ fn usize_to_ascii(mut x: usize, bytes: &mut[u8; 32]) -> usize {
     byte_idx
 }
 
-fn matching_statistics<SBWT: SbwtIndexInterface>(sbwt: &SBWT, lcs: &LcsArray, queryfile: &std::path::Path, outfile: &std::path::Path) {
+fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, queryfile: &std::path::Path, outfile: &std::path::Path) {
     let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
 
@@ -405,7 +405,7 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
 }
 
-fn benchmark<SBWT: SbwtIndexInterface>(sbwt: SBWT, lcs: Option<LcsArray>) {
+fn benchmark<SS: SubsetSeq>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
     log::info!("benchmarking index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
     benchmark::benchmark_all(sbwt, lcs);
 }
@@ -440,7 +440,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
 
 }
 
-fn dump_unitigs<SBWT: SbwtIndexInterface>(sbwt: &mut SBWT, lcs: &Option<LcsArray>) {
+fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Option<LcsArray>) {
     let out = std::io::stdout();
     let mut out = std::io::BufWriter::new(out);
 
