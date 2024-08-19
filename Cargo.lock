@@ -921,6 +921,7 @@ dependencies = [
  "log",
  "num",
  "rand 0.7.3",
+ "rand_chacha 0.3.1",
  "rayon",
  "read_exact",
  "simple-sds-sbwt",
