@@ -82,8 +82,8 @@ pub enum SbwtIndexVariant {
 pub fn write_sbwt_index_variant(sbwt: &SbwtIndexVariant, out: &mut impl std::io::Write) -> std::io::Result<usize> {
     match sbwt {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            out.write(&(b"SubsetMatrix".len() as u64).to_le_bytes())?;
-            out.write(b"SubsetMatrix")?;
+            out.write_all(&(b"SubsetMatrix".len() as u64).to_le_bytes())?;
+            out.write_all(b"SubsetMatrix")?;
             sbwt.serialize(out)
         }
     }
@@ -168,7 +168,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         let magic_string_length = [SERIALIZATION_MAGIC_STRING.len() as u8];
         n_written += util::write_bytes(out, &magic_string_length)?;
-        n_written += util::write_bytes(out, &SERIALIZATION_MAGIC_STRING)?;
+        n_written += util::write_bytes(out, SERIALIZATION_MAGIC_STRING)?;
 
         n_written += self.sbwt.serialize(out)?;
 

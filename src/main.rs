@@ -89,7 +89,7 @@ fn build_command(matches: &clap::ArgMatches){
     // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
     let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); 
 
-    sbwt_outfile.extend(".sbwt".chars());
+    sbwt_outfile.push_str(".sbwt");
     log::info!("Sbwt output file: {}", sbwt_outfile);
     let mut sbwt_out = std::io::BufWriter::new(std::fs::File::create(sbwt_outfile).unwrap()); // Open already here to fail early if problems
  
@@ -108,7 +108,7 @@ fn build_command(matches: &clap::ArgMatches){
 
     if let Some(lcs) = lcs{
         let mut lcs_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); // See comment on sbwt_outfile above
-        lcs_outfile.extend(".lcs".chars());
+        lcs_outfile.push_str(".lcs");
         let mut lcs_out = std::io::BufWriter::new(std::fs::File::create(&lcs_outfile).unwrap());
         log::info!("Lcs output file: {}", lcs_outfile);
 
@@ -381,7 +381,7 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Opt
     log::info!("Preparing the de Bruijn graph");
     sbwt.build_select();
 
-    let dbg = Dbg::new(&sbwt, lcs.as_ref());
+    let dbg = Dbg::new(sbwt, lcs.as_ref());
 
     log::info!("Dumping unitigs");
     dbg.parallel_export_unitigs(&mut out);
