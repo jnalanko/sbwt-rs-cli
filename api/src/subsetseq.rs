@@ -70,6 +70,31 @@ pub trait SubsetSeq{
 
     /// Loads a subset sequence that was previously written with [`SubsetSeq::serialize`].
     fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized;
+
+    /// Build the cumulative sum array C required in [`crate::sbwt::SbwtIndex`].
+    fn get_C_array(&self) -> Vec<usize> {
+        let sigma = 4; // TODO
+        let n = self.len();
+
+        let mut C: Vec<usize> = vec![0; sigma];
+        for i in 0..n {
+            for c in 0..(sigma as u8) {
+                if self.set_contains(i, c) {
+                    for d in (c + 1)..(sigma as u8) {
+                        C[d as usize] += 1;
+                    }
+                }
+            }
+        }
+
+        // Plus one for the ghost dollar
+        #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
+        for c in 0..sigma {
+            C[c] += 1;
+        }
+
+        C
+    }
 }
 
 /// An implementation of [SubsetSeq] with a matrix of sigma indicator bit vectors: the i-th bit of the j-th bit vector

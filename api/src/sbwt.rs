@@ -400,8 +400,19 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
     /// Internal function: construct from parts.
     #[allow(non_snake_case)]
-    pub(crate) fn from_components(subset_rank:SS, n_kmers: usize, k: usize, C: Vec<usize>, prefix_lookup_table: PrefixLookupTable) -> Self {
+    pub(crate) fn from_components(subset_rank: SS, n_kmers: usize, k: usize, C: Vec<usize>, prefix_lookup_table: PrefixLookupTable) -> Self {
         Self {sbwt: subset_rank, n_kmers, k, C, prefix_lookup_table}
+    }
+
+    /// Construct from existing [`crate::subsetseq::SubsetSeq`].
+    #[allow(non_snake_case)]
+    pub fn from_subset_seq(subset_rank: SS, n_kmers: usize, k: usize, precalc_prefix_length: usize) -> Self {
+        let C = subset_rank.get_C_array();
+        let n = subset_rank.len();
+        let mut index = Self{sbwt: subset_rank, n_kmers, k, C, prefix_lookup_table: PrefixLookupTable::new_empty(n)};
+        index.prefix_lookup_table = PrefixLookupTable::new(&index, precalc_prefix_length);
+
+        index
     }
 
     /// Internal function: Returns vector v such that v[i] = labels[inverse_lf_step(i)].
@@ -682,5 +693,18 @@ mod tests {
         let sbwt2 = SbwtIndex::<SubsetMatrix>::load(&mut buf.as_slice()).unwrap();
 
         assert_eq!(sbwt, sbwt2);
+    }
+
+    #[test]
+    fn from_subset_seq() {
+        let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
+        let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let ss = sbwt_index.sbwt().clone();
+        let sbwt_index2 = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss, sbwt_index.n_sets(), sbwt_index.k(), sbwt_index.prefix_lookup_table.prefix_length);
+
+        let kmers1 = sbwt_index.reconstruct_padded_spectrum();
+        let kmers2 = sbwt_index2.reconstruct_padded_spectrum();
+        assert_eq!(kmers1, kmers2);
+
     }
 }
