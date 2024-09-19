@@ -85,7 +85,7 @@
 //! of nodes is the set of distinct k-mers, and there is an edge from x to y iff x[1..k) = y[0..k-1).
 //! The label of the edge is the last character of y. 
 //! The graph is not aware of reverse complements, so if you want to traverse the bi-directed de Bruijn
-//! graph that includes edges where one or both of the endpoints reverse complemented, you need to take care of
+//! graph that includes edges where one or both of the endpoints are reverse complemented, you need to take care of
 //! that logic yourself. See [Dbg][`dbg::Dbg`] for the API.
 //! 
 //! # Construction algorithms 

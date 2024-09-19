@@ -1,9 +1,12 @@
 # Changelog
 
+## v0.3.2
+
+- Fixes to documentation.
+
 ## v0.3.1
 
 - Added function `from_subset_seq` to SbwtIndex.
-
 
 ## v0.3.0
 

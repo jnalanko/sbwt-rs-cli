@@ -12,7 +12,7 @@ use crate::util;
 use crate::util::ACGT_TO_0123;
 use crate::util::DNA_ALPHABET;
 
-/// The SBWT index data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder).
+/// The SBWT index data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder). For the [SubsetSeq] trait implementation,  we recommend using the bit matrix implementation [SubsetMatrix]. 
 ///
 /// # SBWT index 
 /// 
@@ -74,6 +74,16 @@ use crate::util::DNA_ALPHABET;
 #[embed_doc_image::embed_doc_image("sbwt_sequence", "doc_images/sbwt_figure.drawio.svg")] 
 #[embed_doc_image::embed_doc_image("sbwt_search", "doc_images/sbwt_figure_with_search.drawio.png")] // This is as .png because there is a bug in vertical centering in the svg export of drawio.
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+#[allow(non_snake_case)] // C-array is an established convention in BWT indexes
+pub struct SbwtIndex<SS: SubsetSeq> {
+    pub(crate) sbwt: SS, // pub(crate) for testing from submodules
+    n_kmers: usize,
+    k: usize,
+    C: Vec<usize>, // Cumulative character counts (includes one ghost dollar)
+    prefix_lookup_table: PrefixLookupTable,
+}
+
 pub enum SbwtIndexVariant {
     SubsetMatrix(SbwtIndex<SubsetMatrix>),
     //SubsetConcat(SbwtIndex<SubsetConcat>),
@@ -100,16 +110,6 @@ pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtInd
         Err("Unknown SBWT index type".into())
     }
 
-}
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-#[allow(non_snake_case)] // C-array is an established convention in BWT indexes
-pub struct SbwtIndex<SS: SubsetSeq> {
-    pub(crate) sbwt: SS, // pub(crate) for testing from submodules
-    n_kmers: usize,
-    k: usize,
-    C: Vec<usize>, // Cumulative character counts (includes one ghost dollar)
-    prefix_lookup_table: PrefixLookupTable,
 }
 
 // When non-compatible changes to the serialization format occur, update the version number here to the current version 
