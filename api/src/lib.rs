@@ -157,7 +157,11 @@ pub use util::SliceSeqStream;
 /// Implementing SeqStream for a custom FastxStreamer class wrapping the FASTX parsers from
 /// [needletail](https://docs.rs/needletail) and passing it to [SbwtIndexBuilder::new]
 /// using [SbwtIndexBuilder::run]:
-/// ```rust
+/// ```compile_fail
+/// use needletail::Sequence;
+/// use sbwt::BitPackedKmerSorting;
+/// use sbwt::SbwtIndexBuilder;
+///
 /// struct FastxStreamer {
 ///     inner: Box<dyn needletail::parser::FastxReader>,
 ///     record: Vec<u8>
@@ -177,7 +181,7 @@ pub use util::SliceSeqStream;
 ///         }
 ///    }
 /// }
-/// let infile = "sequence.fasta.gz"
+/// let infile = "sequence.fasta.gz";
 /// let reader = FastxStreamer{inner: needletail::parse_fastx_file(infile).expect("valid path/file"), record: Vec::new()};
 ///
 /// let (sbwt, lcs) = SbwtIndexBuilder::new().k(31).n_threads(4).algorithm(BitPackedKmerSorting::new()).run(reader);
