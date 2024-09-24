@@ -157,7 +157,7 @@ pub use util::SliceSeqStream;
 /// Implementing SeqStream for a custom FastxStreamer class wrapping the FASTX parsers from
 /// [needletail](https://docs.rs/needletail) and passing it to [SbwtIndexBuilder::new]
 /// using [SbwtIndexBuilder::run]:
-/// ```compile_fail
+/// ```ignore
 /// use needletail::Sequence;
 /// use sbwt::BitPackedKmerSorting;
 /// use sbwt::SbwtIndexBuilder;
