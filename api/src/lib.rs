@@ -152,6 +152,41 @@ pub use util::SliceSeqStream;
 /// A stream of ASCII-encoded DNA-sequences. This is not necessarily a standard Rust iterator
 /// because we want to support streaming sequences from disk, which is not possible
 /// with a regular iterator due to lifetime constraints of the Iterator trait.
+///
+/// # Examples
+/// Implementing SeqStream for a custom FastxStreamer class wrapping the FASTX parsers from
+/// [needletail](https://docs.rs/needletail) and passing it to [SbwtIndexBuilder::new]
+/// using [SbwtIndexBuilder::run]:
+/// ```ignore
+/// use needletail::Sequence;
+/// use sbwt::BitPackedKmerSorting;
+/// use sbwt::SbwtIndexBuilder;
+///
+/// struct FastxStreamer {
+///     inner: Box<dyn needletail::parser::FastxReader>,
+///     record: Vec<u8>
+/// }
+///
+/// impl sbwt::SeqStream for FastxStreamer {
+///     fn stream_next(&mut self) -> Option<&[u8]> {
+///         let rec = self.inner.next();
+///         match rec {
+///             Some(Ok(seqrec)) => {
+///                 // Remove newlines and non IUPAC characters
+///                 let normalized = seqrec.normalize(true);
+///                 self.record = normalized.as_ref().to_vec();
+///                 Some(&self.record)
+///             },
+///             _ => None,
+///         }
+///    }
+/// }
+/// let infile = "sequence.fasta.gz";
+/// let reader = FastxStreamer{inner: needletail::parse_fastx_file(infile).expect("valid path/file"), record: Vec::new()};
+///
+/// let (sbwt, lcs) = SbwtIndexBuilder::new().k(31).n_threads(4).algorithm(BitPackedKmerSorting::new()).run(reader);
+/// ```
+///
 pub trait SeqStream{
     fn stream_next(&mut self) -> Option<&[u8]>;
 }
