@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.3
+
+- Documentation: Add an example using Needletail for FASTX parsing.
+- Change usize to u32 in `IS_DNA` for platform-independence.
+
 ## v0.3.2
 
 - Fixes to documentation.
