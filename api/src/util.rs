@@ -1,7 +1,11 @@
 //! Miscellaneous utility functions and constants used in the crate.
 
 use bitvec::prelude::*;
-use simple_sds_sbwt::raw_vector::AccessRaw;
+use simple_sds_sbwt::bit_vector::BitVector;
+use simple_sds_sbwt::ops::Select;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::ParallelIterator;
 
 // Returns the number of bytes written
 pub(crate) fn write_bytes<W: std::io::Write>(out: &mut W, bytes: &[u8]) -> std::io::Result<usize>{
@@ -40,18 +44,17 @@ pub const ACGT_TO_0123: [u8; 256] = [255, 255, 255, 255, 255, 255, 255, 255, 255
 pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
     let sigma = rawrows.len();
     assert!(sigma > 0);
-    let n = rawrows[0].len();
 
-    let mut C: Vec<usize> = vec![0; sigma];
-    for i in 0..n {
-        for c in 0..(sigma as u8) {
-            if rawrows[c as usize].bit(i){
-                for d in (c + 1)..(sigma as u8) {
-                    C[d as usize] += 1;
-                }
+    let mut C: Vec<usize> = rawrows.par_iter().enumerate().map(|(c, rawrow)| {
+        let bv = BitVector::from(rawrow.clone());
+        let mut C: Vec<usize> = vec![0; sigma];
+        bv.one_iter().for_each(|_| {
+            for d in (c + 1)..(sigma) {
+                C[d as usize] += 1;
             }
-        }
-    }
+        });
+        C
+    }).reduce(|| vec![0; sigma], |a, b| a.iter().zip(b.iter()).map(|(x, y)| x + y).collect());
 
     // Plus one for the ghost dollar
     #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
