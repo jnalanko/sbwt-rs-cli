@@ -45,7 +45,7 @@ pub trait SbwtConstructionAlgorithm {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>);
 }
 
-/// A construction algorithm based on sorting of bit-packed k-mers.
+/// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
 #[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BitPackedKmerSorting{
@@ -109,6 +109,61 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSorting {
                 panic!("k > 256 not supported with bitpacked sorting algorithm.");
             }
         } 
+    }
+}
+
+/// A construction algorithm based on sorting of bit-packed k-mers in memory.
+#[derive(Default)]
+#[derive(Clone, Eq, PartialEq, Debug)]
+#[cfg(feature = "bpks-mem")]
+pub struct BitPackedKmerSortingMem{
+    dedup_batches: bool,
+}
+
+#[cfg(feature = "bpks-mem")]
+impl BitPackedKmerSortingMem {
+
+    /// Initializes the algorithm with default settings:
+    /// - do not deduplicate k-mer batches before sorting.
+    /// - build entirely in memory
+    /// - use rayon threads for parallelism
+    pub fn new() -> Self {
+        Self{dedup_batches: false}
+    }
+
+    /// Whether to deduplicate k-mer batches before sorting. If the input has many duplicate k-mers, this will reduce the disk space required by the algorithm.
+    pub fn dedup_batches(mut self, enable: bool) -> Self {
+        self.dedup_batches = enable;
+        self
+    }
+}
+
+#[cfg(feature = "bpks-mem")]
+impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
+    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, _n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+        // Parallelisation is handled with rayon iterators,
+        // thread pool should be initialised before calling.
+        let dedup_batches = self.dedup_batches;
+        match k {
+            0..=32 => {
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, dedup_batches, build_lcs)
+            }
+            33..=64 => {
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, dedup_batches, build_lcs)
+            }
+            65..=96 => {
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, dedup_batches, build_lcs)
+            }
+            97..=128 => {
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, dedup_batches, build_lcs)
+            }
+            129..=256 => {
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, dedup_batches, build_lcs)
+            }
+            _ => {
+                panic!("k > 256 not supported with bitpacked sorting algorithm.");
+            }
+        }
     }
 }
 
