@@ -1,4 +1,4 @@
-use super::kmer::*;
+use crate::kmer::*;
 use super::kmer_chunk::KmerChunk;
 use crate::tempfile::{TempFile, TempFileManager};
 use crate::util::DNA_ALPHABET;

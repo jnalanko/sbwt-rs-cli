@@ -1,5 +1,5 @@
 use std::cmp::*;
-use super::kmer::LongKmer;
+use crate::kmer::LongKmer;
 
 // B is the number of u64 words in a k-mer
 pub struct KmerChunk<const B: usize>{

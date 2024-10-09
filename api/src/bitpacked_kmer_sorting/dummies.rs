@@ -1,6 +1,6 @@
 use std::io::{BufWriter, Write};
 
-use super::kmer::LongKmer;
+use crate::kmer::LongKmer;
 use crate::tempfile::TempFileManager;
 use simple_sds_sbwt::raw_vector::*;
 use rayon::prelude::*;
