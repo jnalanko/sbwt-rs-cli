@@ -361,6 +361,10 @@ mod tests {
     use std::io::BufRead;
 
     use crate::{builder::{BitPackedKmerSorting, SbwtIndexBuilder}, util};
+
+    #[cfg(feature = "bpks-mem")]
+    use crate::builder::BitPackedKmerSortingMem;
+
     use bitvec::prelude::*;
     use rand_chacha::rand_core::RngCore;
     use super::*;
@@ -693,5 +697,344 @@ mod tests {
         }
 
     }
-}
 
+    ///////////////////////////////////////////////////
+    //
+    // Same tests for bitpacked k-mer sorting in memory
+    //
+    ///////////////////////////////////////////////////
+
+
+    #[test]
+    #[cfg(feature = "bpks-mem")]
+    fn finimizer_paper_example_unitig_export_mem(){
+        // Note: this test does not cover the cyclic unitig case
+        let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
+        let mut seqs_copy: Vec<Vec<u8>> = seqs.iter().map(|x| x.to_vec()).collect(); // For verification in the end
+
+        let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
+        sbwt.build_select();
+        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+
+        let mut output = Vec::<u8>::new();
+        let out_cursor = std::io::Cursor::new(&mut output);
+        dbg.parallel_export_unitigs(out_cursor);
+
+        let mut unitigs: Vec<Vec<u8>> = vec![];
+        for line in output.lines(){
+            let line = line.unwrap();
+            if !line.starts_with('>'){
+                unitigs.push(line.as_bytes().to_vec());
+            }
+        }
+        unitigs.sort();
+        seqs_copy.sort();
+
+        assert_eq!(unitigs, seqs_copy);
+
+    }
+
+
+    #[test]
+    #[cfg(feature = "bpks-mem")]
+    fn finimizer_paper_example_dbg_operations_mem(){
+        let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
+        let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
+        sbwt.build_select();
+
+        let lcs = lcs.unwrap();
+        let dbg = Dbg::new(&sbwt, Some(&lcs));
+        let dbg_without_lcs = Dbg::new(&sbwt, None);
+
+        let true_dummy_marks = bitvec![1,1,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0];
+        assert_eq!(dbg.dummy_marks, true_dummy_marks);
+        assert_eq!(dbg_without_lcs.dummy_marks, true_dummy_marks);
+
+        let true_k_minus_1_marks = bitvec![1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1];
+        assert_eq!(dbg.k_minus_1_marks, true_k_minus_1_marks);
+        assert_eq!(dbg_without_lcs.k_minus_1_marks, true_k_minus_1_marks);
+
+        // Get node
+
+        assert!(dbg.get_node(b"TTAT").is_none());
+        let v = dbg.get_node(b"ACAG").unwrap();
+        assert_eq!(v.id, 11);
+        assert_eq!(dbg.outdegree(v), 1);
+
+        // Push node kmer
+
+        let mut buf = Vec::<u8>::new();
+        dbg.push_node_kmer(v, &mut buf);
+        assert_eq!(&buf, b"ACAG");
+
+        // Has outlabel
+
+        assert!(!dbg.has_outlabel(v , b'A'));
+        assert!(!dbg.has_outlabel(v , b'C'));
+        assert!(dbg.has_outlabel(v , b'G'));
+        assert!(!dbg.has_outlabel(v , b'T'));
+
+        // Follow outedge
+
+        assert!(dbg.follow_outedge(v, b'A').is_none());
+        let v = dbg.follow_outedge(v, b'G').unwrap();
+
+        // Outdegree
+
+        assert_eq!(dbg.outdegree(v), 2);
+
+        // Out labels
+
+        let mut outlabels = Vec::<u8>::new();
+        dbg.push_outlabels(v, &mut outlabels);
+        assert_eq!(outlabels, vec![b'A', b'T']);
+
+        let v = dbg.get_node(b"TAGG").unwrap();
+        let mut outlabels = Vec::<u8>::new();
+        dbg.push_outlabels(v, &mut outlabels);
+        assert_eq!(outlabels, vec![b'A', b'T']);
+
+        // Out neighbors
+
+        let v = dbg.get_node(b"CAGG").unwrap();
+        let mut out_neighbors = Vec::<(Node, u8)>::new();
+        dbg.push_out_neighbors(v, &mut out_neighbors);
+        assert_eq!(out_neighbors, vec![(dbg.get_node(b"AGGA").unwrap(), b'A'), (dbg.get_node(b"AGGT").unwrap(), b'T')]);
+
+        let mut out_neighbors = Vec::<(Node, u8)>::new();
+        dbg.push_out_neighbors(dbg.get_node(b"GTCT").unwrap(), &mut out_neighbors);
+        assert!(out_neighbors.is_empty());
+
+        // Get inlabel
+
+        assert_eq!(dbg.get_last_character(v), b'G');
+        assert_eq!(dbg.get_last_character(Node{id:11}), b'G'); // ACAG
+
+        // Indegree
+
+        let v = dbg.get_node(b"AGGA").unwrap();
+        assert_eq!(dbg.indegree(v), 2);
+
+        let v = dbg.get_node(b"AGGT").unwrap();
+        assert_eq!(dbg.indegree(v), 2);
+
+        let v = dbg.get_node(b"TAGG").unwrap();
+        assert_eq!(dbg.indegree(v), 1);
+
+        assert_eq!(dbg.indegree(Node{id: 11}), 0); // ACAG
+
+        // In neighbors
+
+        let v = dbg.get_node(b"AGGA").unwrap();
+        let mut in_neighbors = Vec::<(Node, u8)>::new();
+        dbg.push_in_neighbors(v, &mut in_neighbors);
+        assert_eq!(in_neighbors, vec![(dbg.get_node(b"CAGG").unwrap(), b'A'), (dbg.get_node(b"TAGG").unwrap(), b'A')]);
+
+        let v = dbg.get_node(b"AGGT").unwrap();
+        let mut in_neighbors = Vec::<(Node, u8)>::new();
+        dbg.push_in_neighbors(v, &mut in_neighbors);
+        assert_eq!(in_neighbors, vec![(dbg.get_node(b"CAGG").unwrap(), b'T'), (dbg.get_node(b"TAGG").unwrap(), b'T')]);
+
+        let mut in_neighbors = Vec::<(Node, u8)>::new();
+        dbg.push_in_neighbors(Node{id: 11}, &mut in_neighbors); // ACAG
+        assert!(in_neighbors.is_empty());
+
+    }
+
+    #[test]
+    #[cfg(feature = "bpks-mem")]
+    fn cyclic_unitigs_in_export_mem(){
+        use rand_chacha::ChaCha20Rng;
+        use rand_chacha::rand_core::SeedableRng;
+
+        let k = 10_usize;
+        let mut rng = ChaCha20Rng::from_seed([123; 32]);
+        let mut seqs = Vec::<Vec<u8>>::new();
+        for _ in 0..10 {
+            let seq: Vec<u8> = (0..3*k).map(|_| match rng.next_u32() % 4 {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'T',
+            }).collect();
+            seqs.push(seq.clone());
+        }
+
+        let x0 = seqs[0][0..k].to_vec();
+        seqs[0].extend(x0); // Make cyclic
+
+        let x1 = seqs[1][0..k].to_vec();
+        seqs[1].extend(x1); // Make cyclic
+
+        let x2 = seqs[2][0..k].to_vec();
+        seqs[2].extend(x2); // Make cyclic
+
+        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+
+        let mut unitig_ascii_out = Vec::<u8>::new();
+        dbg.parallel_export_unitigs(std::io::Cursor::new(&mut unitig_ascii_out));
+        let unitigs: Vec<Vec<u8>> = unitig_ascii_out.lines().map(|s| s.unwrap().as_bytes().to_owned()).filter(|s| s[0] != b'>').collect();
+
+        let mut n_kmers = 0_usize;
+        for unitig in unitigs.iter(){
+            let self_overlap: bool = unitig[0..k-1] == unitig[unitig.len()-k+1..];
+            eprintln!("{}", String::from_utf8_lossy(unitig));
+            eprintln!("self_overlap: {}", self_overlap);
+            for (i, kmer) in unitig.windows(k).enumerate() {
+                assert!(dbg.get_node(kmer).is_some());
+                let node = dbg.get_node(kmer).unwrap();
+                let indeg = dbg.indegree(node);
+                let outdeg = dbg.outdegree(node);
+
+                if i == 0 { // Check that the unitig is maximal to the left
+                    if self_overlap {
+                        assert_eq!(indeg, 1);
+                    } else if indeg == 1 { // Indeg 0 or >= 2 are always ok.
+                        let pred = dbg.follow_inedge(node, 0).unwrap();
+                        assert!(dbg.outdegree(pred) >= 2);
+                    }
+                }
+                if i + k == unitig.len() { // Check that the unitig is maximal to the right
+                    if self_overlap {
+                        assert_eq!(outdeg, 1);
+                    } else if outdeg == 1 { // Outdeg 0 or >= 2 are always ok.
+                        let mut outlabels = Vec::<u8>::new();
+                        dbg.push_outlabels(node, &mut outlabels);
+                        let succ = dbg.follow_outedge(node, *outlabels.first().unwrap()).unwrap();
+                        assert!(dbg.indegree(succ) >= 2);
+                    }
+                }
+                if i > 0 {
+                    assert_eq!(indeg, 1);
+                }
+                if i + k != unitig.len() {
+                    assert_eq!(outdeg, 1);
+                }
+                n_kmers += 1;
+            }
+        }
+        assert_eq!(n_kmers, sbwt.n_kmers());
+    }
+
+    #[test]
+    #[cfg(feature = "bpks-mem")]
+    fn randomized_test_mem(){
+        use rand_chacha::ChaCha20Rng;
+        use rand_chacha::rand_core::SeedableRng;
+
+        // Generate 1000 random k-mers using a seeded rng.
+        let k = 5_usize;
+        let mut rng = ChaCha20Rng::from_seed([123; 32]);
+
+        let mut seqs = Vec::<Vec<u8>>::new();
+        let mut seqs_hashset = std::collections::HashSet::<Vec<u8>>::new();
+        for _ in 0..1000 {
+            let kmer: Vec<u8> = (0..k).map(|_| match rng.next_u32() % 4 {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'T',
+            }).collect();
+            seqs.push(kmer.clone());
+            seqs_hashset.insert(kmer);
+        }
+
+        seqs.sort();
+        seqs.dedup();
+
+        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+
+
+        { // Check that node iterator iterates all k-mers (tests node_iterator, get_kmer)
+            let mut extracted_kmers: Vec<Vec<u8>> = dbg.node_iterator().map(|v| dbg.get_kmer(v)).collect();
+            extracted_kmers.sort();
+            eprintln!("{} {}", extracted_kmers.len(), seqs.len());
+            assert_eq!(extracted_kmers, seqs);
+        }
+
+        { // Test get_node
+            for kmer in seqs.iter() {
+                assert_eq!(dbg.get_kmer(dbg.get_node(kmer).unwrap()), *kmer);
+            }
+            // Try to get a non-existent k-mer.
+            assert!(dbg.get_node(b"XXXXX").is_none());
+        }
+
+        { // Test outdegree, has_outlabel, push_outlabels, follow_outedge, push_out_neighbors
+            for v in dbg.node_iterator(){
+                let kmer = dbg.get_kmer(v);
+                eprintln!("Processing {} {}", v.id, String::from_utf8_lossy(&kmer));
+                let mut true_outdegree = 0_usize;
+                let mut true_outlabels = Vec::<u8>::new();
+                let mut true_out_kmers = Vec::<Vec::<u8>>::new();
+                for &c in util::DNA_ALPHABET.iter() {
+                    let mut next = kmer[1..].to_vec();
+                    next.push(c);
+                    let has_c = seqs_hashset.contains(&next);
+                    true_outdegree += has_c as usize;
+                    assert_eq!(has_c, dbg.has_outlabel(v, c));
+                    if has_c {
+                        true_outlabels.push(c);
+                        true_out_kmers.push(next.clone());
+                        let next_node = dbg.follow_outedge(v, c).unwrap();
+                        eprintln!("From {} to {}", v.id, next_node.id);
+                        assert_eq!(dbg.get_kmer(next_node), next);
+                    } else {
+                        assert!(dbg.follow_outedge(v, c).is_none());
+                    }
+                }
+
+                let mut outlabels = Vec::<u8>::new();
+                dbg.push_outlabels(v, &mut outlabels);
+
+                let mut outneighbors = Vec::<(Node, u8)>::new();
+                dbg.push_out_neighbors(v, &mut outneighbors);
+
+                assert_eq!(true_outdegree, dbg.outdegree(v));
+                assert_eq!(outlabels, true_outlabels);
+
+                assert_eq!(outneighbors.len(), true_outdegree);
+                for i in 0..true_outdegree {
+                    assert_eq!(dbg.get_kmer(outneighbors[i].0), true_out_kmers[i]);
+                    assert_eq!(outneighbors[i].1, outlabels[i]);
+                }
+
+            }
+        }
+
+        { // Test indegree, get_last_character, follow_inedge, push_in_neighbors
+            for v in dbg.node_iterator(){
+                let kmer = dbg.get_kmer(v);
+                eprintln!("Processing {} {}", v.id, String::from_utf8_lossy(&kmer));
+                let mut true_indegree = 0_usize;
+                let mut true_in_kmers = Vec::<Vec::<u8>>::new();
+                let true_last_character = *kmer.last().unwrap();
+                assert_eq!(true_last_character, dbg.get_last_character(v));
+                for &c in util::DNA_ALPHABET.iter() {
+                    let mut prev = vec![c];
+                    prev.extend(&kmer[..k-1]);
+                    let has_c = seqs_hashset.contains(&prev);
+                    if has_c {
+                        let prev_node = dbg.follow_inedge(v, true_indegree).unwrap();
+                        assert_eq!(dbg.get_kmer(prev_node), prev);
+                        true_in_kmers.push(prev);
+                        true_indegree += 1;
+                    }
+                }
+                assert!(dbg.follow_inedge(v, true_indegree).is_none()); // As specced in follow_inedge documentation comment
+                assert_eq!(true_indegree, dbg.indegree(v));
+
+                let mut in_neighbors = Vec::<(Node, u8)>::new();
+                dbg.push_in_neighbors(v, &mut in_neighbors);
+
+                for i in 0..true_indegree {
+                    assert_eq!(dbg.get_kmer(in_neighbors[i].0), true_in_kmers[i]);
+                    assert_eq!(in_neighbors[i].1, true_last_character);
+                }
+            }
+        }
+
+    }
+}

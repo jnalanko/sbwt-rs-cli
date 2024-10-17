@@ -256,6 +256,9 @@ mod tests {
 
     use crate::builder::BitPackedKmerSorting;
 
+    #[cfg(feature = "bpks-mem")]
+    use crate::builder::BitPackedKmerSortingMem;
+
     use super::*;
 
     #[test_log::test]
@@ -353,5 +356,108 @@ mod tests {
         eprintln!("{:?}", SFS);
     }
 
+    ///////////////////////////////////////////////////
+    //
+    // Same tests for bitpacked k-mer sorting in memory
+    //
+    ///////////////////////////////////////////////////
+
+
+    #[test_log::test]
+    #[allow(non_snake_case)]
+    #[cfg(feature = "bpks-mem")]
+    fn LCS_paper_example_mem() {
+        let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
+
+        let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
+        let lcs = lcs.unwrap();
+        let from_sbwt = LcsArray::from_sbwt(&sbwt);
+
+        let true_lcs = [0,0,1,3,2,2,1,1,1,0,0,2,2,1,3,3,0,2];
+        for i in 0..lcs.len() {
+            println!("LCS {}", lcs.access(i));
+            assert_eq!(true_lcs[i], lcs.access(i));
+            assert_eq!(true_lcs[i], from_sbwt.access(i));
+        }
+
+        // Test streaming support
+        let SS = StreamingIndex::<SbwtIndex::<SubsetMatrix>, LcsArray>{contract_left: &lcs, extend_right: &sbwt, n: sbwt.n_sets(), k: sbwt.k()};
+        let mut I = 0..sbwt.sbwt.len();
+        I = SS.extend_right.extend_right(I, b'A') ;
+        I = SS.extend_right.extend_right(I, b'G') ;
+        I = SS.extend_right.extend_right(I, b'G') ;
+        assert_eq!(I, 13..16);
+
+        let I3 = SS.contract_left.contract_left(I.clone(), 3);
+        assert_eq!(I3, 13..16);
+
+        let I2 = SS.contract_left.contract_left(I.clone(), 2);
+        assert_eq!(I2, 13..16);
+
+        let I1 = SS.contract_left.contract_left(I.clone(), 1);
+        assert_eq!(I1, 10..16);
+
+        let I0 = SS.contract_left.contract_left(I.clone(), 0);
+        assert_eq!(I0, 0..18);
+        dbg!(I3, I2, I1, I0);
+
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    #[cfg(feature = "bpks-mem")]
+    fn finimizer_paper_example_mem(){
+
+        // This is a pretty weak test but it's something.
+        // Using the example from the finimizer paper.
+        let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
+        let k = 4;
+
+        let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs.as_slice());
+        let lcs = lcs.unwrap();
+        let SS = StreamingIndex::new(&sbwt, &lcs);
+        let MS = SS.matching_statistics(b"AAGTAA");
+        eprintln!("{:?}", MS);
+        let true_MS_lengths: [usize; 6] = [1,2,3,4,3,4];
+        let true_MS_freqs: [usize; 6] = [7,3,1,1,1,1];
+        let true_MS_colex_starts: [usize; 6] = [2,3,11,17,8,5];
+        assert_eq!(MS.len(), true_MS_lengths.len());
+        for i in 0..MS.len(){
+            assert_eq!(MS[i].0, true_MS_lengths[i]);
+            assert_eq!(MS[i].1.len(), true_MS_freqs[i]);
+            assert_eq!(MS[i].1.start + 1, true_MS_colex_starts[i]); // Paper has 1-indexing
+        }
+
+        let mut SFS = SS.shortest_freq_bound_suffixes(b"AAGTAA", 1);
+
+        let true_SFS = [None, None, Some((3,11..12)), Some((3, 17..18)), Some((2, 8..9)), Some((3, 5..6))];
+
+        // Put our SFS in 1-based indexing
+        for item in SFS.iter_mut(){
+            if let Some(X) = item{
+                *item = Some((X.0, X.1.start + 1..X.1.end + 1));
+            }
+
+        }
+        eprintln!("{:?}", SFS);
+
+        assert_eq!(SFS, true_SFS);
+
+        // Let's try a query that has an invalid character
+        let mut SFS = SS.shortest_freq_bound_suffixes(b"AANAAGTAA", 1);
+
+        let true_SFS = [None, None, None, None, None, Some((3,11..12)), Some((3, 17..18)), Some((2, 8..9)), Some((3, 5..6))];
+
+        // Put our SFS in 1-based indexing
+        for item in SFS.iter_mut(){
+            if let Some(X) = item{
+                *item = Some((X.0, X.1.start + 1..X.1.end + 1));
+            }
+
+        }
+        assert_eq!(SFS, true_SFS);
+
+        eprintln!("{:?}", SFS);
+    }
 
 }
