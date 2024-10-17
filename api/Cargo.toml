@@ -9,8 +9,7 @@ repository = "https://github.com/jnalanko/sbwt-rs-cli/tree/master/api"
 authors = ["Jarno Niklas Alanko <alanko.jarno@gmail.com>"]
 
 [features]
-default = ["bpks-disk"]
-bpks-disk = []
+default = []
 bpks-mem = []
 
 [dependencies]
