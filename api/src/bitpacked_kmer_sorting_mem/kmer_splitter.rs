@@ -118,7 +118,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     log::info!("Sorting k-mer bins");
     bins.par_iter_mut().for_each(|bin| {
         if !bin.is_empty() {
-            let label = &bin.first().unwrap().to_string()[0..2];
+            let label = &bin.first().unwrap().to_string()[0..bin_prefix_len];
             log::info!("Sorting bin {} of size {}", label, bin.len());
             bin.sort_unstable();
             bin.dedup();
