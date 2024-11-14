@@ -14,6 +14,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 ) -> Vec<LongKmer<B>> {
 
     let bin_prefix_len = 3_usize; // If you update this you must update all the logic below
+    assert!(k >= bin_prefix_len);
     let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
     let encoder_bin_buf_size = 1_000_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
@@ -116,8 +117,14 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     log::info!("Sorting k-mer bins");
     bins.par_iter_mut().for_each(|bin| {
-        bin.sort_unstable();
-        bin.dedup();
+        if !bin.is_empty() {
+            let label = &bin.first().unwrap().to_string()[0..2];
+            log::info!("Sorting bin {} of size {}", label, bin.len());
+            bin.sort_unstable();
+            bin.dedup();
+        } else {
+            log::info!("Empty bin -> not sorting.");
+        }
     });
 
 
