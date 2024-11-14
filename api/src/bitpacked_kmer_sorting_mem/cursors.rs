@@ -8,7 +8,7 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 
 pub fn find_in_dummy<const B: usize>(
-    dummy_file: &std::io::Cursor<Vec<(LongKmer<B>, u8)>>,
+    dummy_file: &std::io::Cursor<&[(LongKmer<B>, u8)]>,
     c: u8,
 ) -> u64 {
     let dummy_file_len = dummy_file.get_ref().len();
@@ -31,7 +31,7 @@ pub fn find_in_dummy<const B: usize>(
 }
 
 pub fn find_in_nondummy<const B: usize>(
-    nondummy_file: &std::io::Cursor<Vec<LongKmer<B>>>,
+    nondummy_file: &std::io::Cursor<&[LongKmer<B>]>,
     c: u8,
 ) -> u64 {
     let nondummy_file_len = nondummy_file.get_ref().len() as usize;
@@ -54,7 +54,7 @@ pub fn find_in_nondummy<const B: usize>(
 
 // Returns the LCS array
 pub fn build_lcs_array<const B: usize>(
-    kmers: &Vec<(LongKmer::<B>, u8)>,
+    kmers: &[(LongKmer::<B>, u8)],
     k: usize,
 ) -> simple_sds_sbwt::int_vector::IntVector {
     // LCS values are between 0 and k-1
@@ -74,8 +74,8 @@ pub fn build_lcs_array<const B: usize>(
 
 // Read the next kmer or dummy from data stored separately in memory
 pub fn read_kmer_or_dummy<const B: usize>(
-    kmers: &mut std::io::Cursor<Vec<LongKmer<B>>>,
-    dummies: &mut std::io::Cursor<Vec<(LongKmer<B>, u8)>>,
+    kmers: &mut std::io::Cursor<&[LongKmer<B>]>,
+    dummies: &mut std::io::Cursor<&[(LongKmer<B>, u8)]>,
     k: usize,
 ) -> (LongKmer<B>, u8) {
     let n_kmers = kmers.get_ref().len();
@@ -102,34 +102,38 @@ pub fn read_kmer_or_dummy<const B: usize>(
 
 
 pub fn merge_kmers_and_dummies<const B: usize>(
-    kmers: &mut std::io::Cursor<Vec<LongKmer<B>>>,
-    dummies: &mut std::io::Cursor<Vec<(LongKmer<B>, u8)>>,
+    kmers: &[LongKmer<B>],
+    dummies: &[(LongKmer<B>, u8)],
     k: usize,
-) -> std::io::Cursor<Vec<(LongKmer<B>, u8)>> {
+) -> Vec<(LongKmer<B>, u8)> {
 
-    let n_merged = kmers.get_ref().len() + dummies.get_ref().len();
+    let n_merged = kmers.len() + dummies.len();
 
-    std::io::Cursor::new(Vec::from((0..n_merged).map(|_| {
-        read_kmer_or_dummy(kmers, dummies, k)
-    }).collect::<Vec<(LongKmer::<B>, u8)>>()))
+    let mut kmer_cursor = std::io::Cursor::new(kmers);
+    let mut dummy_cursor = std::io::Cursor::new(dummies);
+
+    Vec::from((0..n_merged).map(|_| {
+        read_kmer_or_dummy(&mut kmer_cursor, &mut dummy_cursor, k)
+    }).collect::<Vec<(LongKmer::<B>, u8)>>())
 }
 
 // Returns the SBWT bit vectors and optionally the LCS array
 pub fn build_sbwt_bit_vectors<const B: usize>(
-    merged: &std::io::Cursor<Vec<(LongKmer<B>, u8)>>,
+    merged: &[(LongKmer<B>, u8)],
     k: usize,
     sigma: usize,
     build_lcs: bool,
 ) -> (Vec<simple_sds_sbwt::raw_vector::RawVector>, Option<simple_sds_sbwt::int_vector::IntVector>) {
 
-    let n = merged.get_ref().len();
+    let n = merged.len();
+    let merged_cursor = std::io::Cursor::new(merged);
 
     let rawrows = (0..sigma).collect::<Vec<usize>>().into_par_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut pointed_idx = find_in_dummy(&merged, c as u8) as usize;
-        let end = if c < sigma - 1 { find_in_dummy(&merged, c as u8 + 1) as usize } else { n };
+        let mut pointed_idx = find_in_dummy(&merged_cursor, c as u8) as usize;
+        let end = if c < sigma - 1 { find_in_dummy(&merged_cursor, c as u8 + 1) as usize } else { n };
 
-        merged.get_ref().iter().enumerate().for_each(|(kmer_idx, (kmer, len))| {
+        merged.iter().enumerate().for_each(|(kmer_idx, (kmer, len))| {
             let kmer_c = if *len as usize == k {
                 (
                     kmer
@@ -142,11 +146,11 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                 (kmer.right_shift(1).set_from_left(0, c as u8), len + 1) // Dummy
             };
 
-            while pointed_idx < end && merged.get_ref()[pointed_idx] < kmer_c {
+            while pointed_idx < end && merged[pointed_idx] < kmer_c {
                 pointed_idx += 1;
             }
 
-            if pointed_idx < end && merged.get_ref()[pointed_idx] == kmer_c {
+            if pointed_idx < end && merged[pointed_idx] == kmer_c {
                 rawrow.set_bit(kmer_idx, true);
                 pointed_idx += 1;
             }
@@ -156,7 +160,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
     let lcs = if build_lcs {
         // LCS values are between 0 and k-1
-        Some(build_lcs_array(merged.get_ref(), k))
+        Some(build_lcs_array(merged, k))
     } else {
         None
     };

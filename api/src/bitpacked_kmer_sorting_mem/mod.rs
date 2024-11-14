@@ -4,6 +4,11 @@ mod dummies;
 mod kmer_splitter;
 mod cursors;
 
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
+use rayon::prelude::ParallelSliceMut;
+use crate::kmer::LongKmer;
+
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, util::DNA_ALPHABET};
 /// Build SBWT and optionally the LCS array fully in memory using bitpacked k-mer sorting.
 ///
@@ -12,7 +17,7 @@ use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, sub
 ///
 /// Unused arguments for signature compatibility with the disk based building algorithm.
 pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(
-    seqs: IN,
+    mut seqs: IN,
     k: usize,
     n_threads: usize,
     dedup_batches: bool,
@@ -25,20 +30,35 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         let sigma = DNA_ALPHABET.len();
 
-        log::info!("Splitting k-mers into bins");
-        let mut kmer_bins = kmer_splitter::split_to_bins::<B, IN>(seqs, k, dedup_batches);
+        log::info!("Reading input sequences into memory");
 
-        log::info!("Sorting and deduplicating bins");
-        kmer_splitter::par_sort_and_dedup_bin_files::<B>(&mut kmer_bins);
+        let mut input_sequences = Vec::<Vec<u8>>::new();
+        while let Some(seq) = seqs.stream_next() {
+            input_sequences.push(seq.to_owned());
+        }
+
+
+        log::info!("Bit-packing all k-mers of all input sequences.");
+        let mut kmers = input_sequences.par_iter().map(|seq| {
+            seq.windows(k).filter_map(|bytes| {
+                LongKmer::<B>::from_ascii(bytes).ok()
+            }).collect::<Vec<LongKmer::<B>>>()
+        }).flatten().collect::<Vec<LongKmer::<B>>>();
+
+
+        log::info!("Sorting all k-mers");
+        kmers.par_sort_unstable_by_key(|kmer| {
+            kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize
+        });
+
+        log::info!("Deduplicating k-mers");
+        kmers.dedup();
 
         let (merged, n_kmers) = {
-            let mut kmers = kmer_splitter::concat_files(&mut kmer_bins);
-            let n_kmers = kmers.get_ref().len();
-
+            let n_kmers = kmers.len();
             log::info!("{} distinct k-mers found", n_kmers);
-            let mut dummies = dummies::get_sorted_dummies::<B>(&mut kmers, sigma, k);
-
-            (cursors::merge_kmers_and_dummies(&mut kmers, &mut dummies, k), n_kmers)
+            let dummies = dummies::get_sorted_dummies::<B>(&kmers, sigma, k);
+            (cursors::merge_kmers_and_dummies(&kmers, &dummies, k), n_kmers)
         };
 
         log::info!("Constructing the sbwt subset sequence");
