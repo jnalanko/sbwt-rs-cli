@@ -47,9 +47,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
 
         log::info!("Sorting all k-mers");
-        kmers.par_sort_unstable_by_key(|kmer| {
-            kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize
-        });
+        kmers.par_sort_unstable();
 
         log::info!("Deduplicating k-mers");
         kmers.dedup();
