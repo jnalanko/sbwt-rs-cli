@@ -34,7 +34,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         let mut rev_input_sequences = Vec::<Vec<u8>>::new(); // Reverse so lex-sorting becomes colex-sorting
         while let Some(seq) = seqs.stream_next() {
-            let rev: Vec<u8> = seq.iter().rev().map(|x| *x).collect();
+            let rev: Vec<u8> = seq.iter().rev().copied().collect();
             rev_input_sequences.push(rev);
         }
 
