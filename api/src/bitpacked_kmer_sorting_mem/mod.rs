@@ -4,6 +4,7 @@ mod dummies;
 mod kmer_splitter;
 mod cursors;
 
+use kmer_splitter::bitpack_rev_kmers;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSliceMut;
@@ -30,22 +31,8 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         let sigma = DNA_ALPHABET.len();
 
-        log::info!("Reading input sequences into memory");
-
-        let mut rev_input_sequences = Vec::<Vec<u8>>::new(); // Reverse so lex-sorting becomes colex-sorting
-        while let Some(seq) = seqs.stream_next() {
-            let rev: Vec<u8> = seq.iter().rev().copied().collect();
-            rev_input_sequences.push(rev);
-        }
-
-
-        log::info!("Bit-packing all k-mers of all input sequences.");
-        let mut rev_kmers = rev_input_sequences.par_iter().map(|seq| {
-            seq.windows(k).filter_map(|bytes| {
-                LongKmer::<B>::from_ascii(bytes).ok()
-            }).collect::<Vec<LongKmer::<B>>>()
-        }).flatten().collect::<Vec<LongKmer::<B>>>();
-
+        log::info!("Bit-packing all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
+        let mut rev_kmers = bitpack_rev_kmers::<B, IN>(seqs, k, n_threads, dedup_batches);
 
         log::info!("Sorting all k-mers");
         rev_kmers.par_sort_unstable();

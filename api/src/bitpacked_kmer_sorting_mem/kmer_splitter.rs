@@ -6,66 +6,89 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 use rayon::prelude::ParallelSliceMut;
 
-pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(
+pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
     k: usize,
+    n_threads: usize,
     dedup_batches: bool,
-) -> Vec<std::io::Cursor::<Vec<LongKmer::<B>>>> {
+) -> Vec<LongKmer<B>> {
 
-    // Beware: changing the number of bins, or their order, messes up the
-    // results and may not always break all tests.
-    //
-    // This function makes weird implicit assumptions that are violated if the
-    // operations are performed differently?
+    let producer_buf_size = 1_000_000_usize; // TODO: respect this
 
-    let mut buf = Vec::<Box<[u8]>>::new();
-    while let Some(seq) = seqs.stream_next() {
-        let mut seq_copy = seq.to_owned();
-        seq_copy.reverse(); // Reverse to get colex sorting
-        buf.push(seq_copy.into_boxed_slice());
-    }
+    // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
+    let mut kmers = std::thread::scope(|scope| {
+        use crossbeam::crossbeam_channel::unbounded;
+        let (parser_out, encoder_in) = unbounded();
+        let (encoder_out, collector_in) = unbounded();
 
-    let mut kmers = buf.par_iter().map(|seq| {
-        seq.windows(k).filter_map(|bytes| {
-            LongKmer::<B>::from_ascii(bytes).ok()
-        }).collect::<Vec<LongKmer::<B>>>()
-    }).flatten().collect::<Vec<LongKmer::<B>>>();
+        // Create producer
+        let producer_handle = scope.spawn(move || {
+            let mut buf = Vec::<Box<[u8]>>::new();
+            let mut current_total_buffer_size = 0_usize;
+            
+            while let Some(seq) = seqs.stream_next(){
+                current_total_buffer_size += seq.len();
+                let mut seq_copy = seq.to_owned();
+                seq_copy.reverse(); // Reverse to get colex sorting
+                buf.push(seq_copy.into_boxed_slice());
+                if current_total_buffer_size > producer_buf_size {
+                    let mut sendbuf = Vec::<Box<[u8]>>::new();
+                    std::mem::swap(&mut sendbuf, &mut buf);
+                    parser_out.send(sendbuf).unwrap();
+                    current_total_buffer_size = 0;
+                }
+            }
+            
+            parser_out.send(buf).unwrap();
+            drop(parser_out);
+        });
 
-    kmers.par_sort_unstable_by_key(|kmer| {
-        kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize
-    });
-
-    kmers.par_chunk_by(|&a, &b| {
-        let x = a.get_from_left(0) as usize * 16 + a.get_from_left(1) as usize * 4 + a.get_from_left(2) as usize;
-        let y = b.get_from_left(0) as usize * 16 + b.get_from_left(1) as usize * 4 + b.get_from_left(2) as usize;
-        x == y}).map(|chunk| {
-        if dedup_batches {
-            let mut dd_chunk = chunk.to_vec();
-            dd_chunk.sort_unstable();
-            dd_chunk.dedup();
-            std::io::Cursor::<Vec<LongKmer::<B>>>::new(dd_chunk)
-        } else {
-            std::io::Cursor::<Vec<LongKmer::<B>>>::new(chunk.to_vec())
+        // Create encoders
+        let mut encoder_handles = Vec::<std::thread::JoinHandle::<()>>::new();
+        for _ in 0..n_threads{
+            let receiver_clone = encoder_in.clone();
+            let sender_clone = encoder_out.clone();
+            encoder_handles.push(std::thread::spawn(move || {
+                while let Ok(batch) = receiver_clone.recv(){
+                    let mut encoded_batch = Vec::<LongKmer::<B>>::new();
+                    for seq in batch{
+                        for kmer in seq.windows(k){
+                            match LongKmer::<B>::from_ascii(kmer) {
+                                Ok(kmer) => {
+                                    encoded_batch.push(kmer);
+                                }
+                                Err(crate::kmer::KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
+                                Err(crate::kmer::KmerEncodingError::TooLong(_)) => panic!("k = {} is too long", k),
+                            }        
+                        }
+                    }
+                    if dedup_batches {
+                        encoded_batch.sort_unstable();
+                        encoded_batch.dedup();
+                    }
+                    sender_clone.send(encoded_batch).unwrap();
+                }
+            }));
         }
-    }).collect::<Vec<std::io::Cursor::<Vec<LongKmer::<B>>>>>()
-}
 
-// Overwrite the bins with sorted and deduplicates files. Returns back the files after overwriting.
-pub fn par_sort_and_dedup_bin_files<const B: usize>(
-    bins: &mut Vec<std::io::Cursor::<Vec<LongKmer::<B>>>>,
-) {
-   bins.par_iter_mut().for_each(|f| {
-        f.get_mut().sort_unstable();
-        f.get_mut().dedup();
-        f.set_position(0);
+        let collector_handle = std::thread::spawn( move || {
+            let mut kmers = Vec::<LongKmer::<B>>::new();
+            while let Ok(batch) = collector_in.recv(){
+                kmers.extend(batch);
+            }
+            kmers
+        });
+
+        producer_handle.join().unwrap(); // Wait for the producer to finish
+        drop(encoder_in); // Close the channel
+        for h in encoder_handles { // Wait for the encoders to finish
+            h.join().unwrap();
+        }
+        drop(encoder_out); // Close the channel
+
+        collector_handle.join().unwrap() // Wait for the collector to finish and return the kmers
     });
-}
 
-// The original data are deleted
-pub fn concat_files<const B: usize>(
-    binned_kmers: &mut Vec<std::io::Cursor::<Vec<LongKmer::<B>>>>
-) -> std::io::Cursor::<Vec<LongKmer::<B>>> {
-    let mut concat_kmers: Vec<LongKmer::<B>> = Vec::new();
-    binned_kmers.iter_mut().for_each(|file| concat_kmers.append(file.get_mut()));
-    std::io::Cursor::<Vec<LongKmer::<B>>>::new(Vec::from(concat_kmers))
+    kmers
+
 }
