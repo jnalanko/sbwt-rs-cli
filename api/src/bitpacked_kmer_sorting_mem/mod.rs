@@ -32,14 +32,15 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         log::info!("Reading input sequences into memory");
 
-        let mut input_sequences = Vec::<Vec<u8>>::new();
+        let mut rev_input_sequences = Vec::<Vec<u8>>::new(); // Reverse so lex-sorting becomes colex-sorting
         while let Some(seq) = seqs.stream_next() {
-            input_sequences.push(seq.to_owned());
+            let rev: Vec<u8> = seq.iter().rev().map(|x| *x).collect();
+            rev_input_sequences.push(rev);
         }
 
 
         log::info!("Bit-packing all k-mers of all input sequences.");
-        let mut kmers = input_sequences.par_iter().map(|seq| {
+        let mut rev_kmers = rev_input_sequences.par_iter().map(|seq| {
             seq.windows(k).filter_map(|bytes| {
                 LongKmer::<B>::from_ascii(bytes).ok()
             }).collect::<Vec<LongKmer::<B>>>()
@@ -47,16 +48,16 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
 
         log::info!("Sorting all k-mers");
-        kmers.par_sort_unstable();
+        rev_kmers.par_sort_unstable();
 
         log::info!("Deduplicating k-mers");
-        kmers.dedup();
+        rev_kmers.dedup();
 
         let (merged, n_kmers) = {
-            let n_kmers = kmers.len();
+            let n_kmers = rev_kmers.len();
             log::info!("{} distinct k-mers found", n_kmers);
-            let dummies = dummies::get_sorted_dummies::<B>(&kmers, sigma, k);
-            (cursors::merge_kmers_and_dummies(&kmers, &dummies, k), n_kmers)
+            let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k);
+            (cursors::merge_kmers_and_dummies(&rev_kmers, &dummies, k), n_kmers)
         };
 
         log::info!("Constructing the sbwt subset sequence");
