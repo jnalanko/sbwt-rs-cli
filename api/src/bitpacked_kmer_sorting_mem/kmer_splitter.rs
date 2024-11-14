@@ -13,10 +13,13 @@ pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
     dedup_batches: bool,
 ) -> Vec<LongKmer<B>> {
 
+    let bin_prefix_len = 3_usize; // If you update this you must update all the logic below
+    let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
+    let encoder_bin_buf_size = 1_000_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
 
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
-    let mut kmers = std::thread::scope(|scope| {
+    let mut bins = std::thread::scope(|scope| {
         use crossbeam::crossbeam_channel::unbounded;
         let (parser_out, encoder_in) = unbounded();
         let (encoder_out, collector_in) = unbounded();
@@ -50,33 +53,53 @@ pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
             let sender_clone = encoder_out.clone();
             encoder_handles.push(std::thread::spawn(move || {
                 while let Ok(batch) = receiver_clone.recv(){
-                    let mut encoded_batch = Vec::<LongKmer::<B>>::new();
+                    let mut bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
+                    for buf in bin_buffers.iter_mut(){
+                        buf.reserve_exact(encoder_bin_buf_size);
+                    }
                     for seq in batch{
                         for kmer in seq.windows(k){
                             match LongKmer::<B>::from_ascii(kmer) {
                                 Ok(kmer) => {
-                                    encoded_batch.push(kmer);
+                                    let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
+                                    bin_buffers[bin_id].push(kmer);
+                                    if bin_buffers[bin_id].len() == encoder_bin_buf_size{
+                                        if dedup_batches{
+                                            bin_buffers[bin_id].sort_unstable();
+                                            bin_buffers[bin_id].dedup();
+                                        }
+                                        sender_clone.send(bin_buffers[bin_id].clone()).unwrap();
+                                        bin_buffers[bin_id].clear();
+                                    }
                                 }
                                 Err(crate::kmer::KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
                                 Err(crate::kmer::KmerEncodingError::TooLong(_)) => panic!("k = {} is too long", k),
                             }        
                         }
                     }
-                    if dedup_batches {
-                        encoded_batch.sort_unstable();
-                        encoded_batch.dedup();
+
+                    // Send remaining buffers
+                    for mut b in bin_buffers{
+                        if dedup_batches{
+                            b.sort_unstable();
+                            b.dedup();
+                        }
+                        sender_clone.send(b).unwrap();
                     }
-                    sender_clone.send(encoded_batch).unwrap();
                 }
             }));
         }
 
         let collector_handle = std::thread::spawn( move || {
+            let mut bins = vec![Vec::<LongKmer::<B>>::new(); n_bins];
             let mut kmers = Vec::<LongKmer::<B>>::new();
             while let Ok(batch) = collector_in.recv(){
-                kmers.extend(batch);
+                if !batch.is_empty() {
+                    let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
+                    bins[bin_id].extend(batch);
+                }
             }
-            kmers
+            bins
         });
 
         producer_handle.join().unwrap(); // Wait for the producer to finish
@@ -86,9 +109,24 @@ pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
         }
         drop(encoder_out); // Close the channel
 
-        collector_handle.join().unwrap() // Wait for the collector to finish and return the kmers
+        collector_handle.join().unwrap() // Wait for the collector to finish and return the bins
+
     });
 
-    kmers
+    // Sort bins in parallel: todo: largest first
+
+    bins.par_iter_mut().for_each(|bin| {
+        bin.sort();
+    });
+
+
+    let mut bin_concat = Vec::<LongKmer::<B>>::new();
+
+    // Concat bins. Each of them is sorted, and they are bucketed by the first 3-mer in order, so the concatenation is sorted.
+    for bin in bins {
+        bin_concat.extend(bin.iter());
+    }
+
+    bin_concat
 
 }
