@@ -4,11 +4,7 @@ mod dummies;
 mod kmer_splitter;
 mod cursors;
 
-use kmer_splitter::bitpack_rev_kmers;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
-use rayon::prelude::ParallelSliceMut;
-use crate::kmer::LongKmer;
+use kmer_splitter::get_bitpacked_sorted_distinct_kmers;
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, util::DNA_ALPHABET};
 /// Build SBWT and optionally the LCS array fully in memory using bitpacked k-mer sorting.
@@ -32,13 +28,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         let sigma = DNA_ALPHABET.len();
 
         log::info!("Bit-packing all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
-        let mut rev_kmers = bitpack_rev_kmers::<B, IN>(seqs, k, n_threads, dedup_batches);
-
-        log::info!("Sorting all k-mers");
-        rev_kmers.par_sort_unstable();
-
-        log::info!("Deduplicating k-mers");
-        rev_kmers.dedup();
+        let mut rev_kmers = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches);
 
         let (merged, n_kmers) = {
             let n_kmers = rev_kmers.len();

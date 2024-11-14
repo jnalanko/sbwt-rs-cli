@@ -6,7 +6,7 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 use rayon::prelude::ParallelSliceMut;
 
-pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
+pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
     k: usize,
     n_threads: usize,
@@ -92,7 +92,6 @@ pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
 
         let collector_handle = std::thread::spawn( move || {
             let mut bins = vec![Vec::<LongKmer::<B>>::new(); n_bins];
-            let mut kmers = Vec::<LongKmer::<B>>::new();
             while let Ok(batch) = collector_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
@@ -115,13 +114,16 @@ pub fn bitpack_rev_kmers<const B: usize, IN: crate::SeqStream + Send>(
 
     // Sort bins in parallel: todo: largest first
 
+    log::info!("Sorting k-mer bins");
     bins.par_iter_mut().for_each(|bin| {
-        bin.sort();
+        bin.sort_unstable();
+        bin.dedup();
     });
 
 
     let mut bin_concat = Vec::<LongKmer::<B>>::new();
 
+    log::info!("Concatenating k-mer bins");
     // Concat bins. Each of them is sorted, and they are bucketed by the first 3-mer in order, so the concatenation is sorted.
     for bin in bins {
         bin_concat.extend(bin.iter());
