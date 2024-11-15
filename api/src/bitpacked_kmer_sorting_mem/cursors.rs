@@ -15,8 +15,7 @@ pub fn find_in_dummy<const B: usize>(
     let dummy_file_len = dummy_file.len();
 
     let access_fn = |pos| {
-        let record = dummy_file[pos];
-        record
+        dummy_file[pos]
     };
 
     let pred_fn = |kmer: (LongKmer::<B>,u8)| {
