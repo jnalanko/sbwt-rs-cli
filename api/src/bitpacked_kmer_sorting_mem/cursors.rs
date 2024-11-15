@@ -87,27 +87,25 @@ pub fn build_lcs_array<const B: usize>(
 
 // Read the next kmer or dummy from data stored separately in memory
 pub fn read_kmer_or_dummy<const B: usize>(
-    kmers: &mut std::io::Cursor<&[LongKmer<B>]>,
-    dummies: &mut std::io::Cursor<&[(LongKmer<B>, u8)]>,
+    kmers: &[LongKmer<B>], kmers_pos: &mut usize,
+    dummies: &[(LongKmer<B>, u8)], dummies_pos: &mut usize,
     k: usize,
 ) -> (LongKmer<B>, u8) {
-    let n_kmers = kmers.get_ref().len();
-    let n_dummies = dummies.get_ref().len();
-    let kmers_pos = kmers.position() as usize;
-    let dummies_pos = dummies.position() as usize;
+    let n_kmers = kmers.len();
+    let n_dummies = dummies.len();
 
-    if kmers_pos == n_kmers {
-        dummies.set_position(dummies_pos as u64 + 1);
-        dummies.get_ref()[dummies_pos]
-    } else if dummies_pos == n_dummies {
-        kmers.set_position(kmers_pos as u64 + 1);
-        (kmers.get_ref()[kmers_pos], k as u8)
-    } else if dummies.get_ref()[dummies_pos] < (kmers.get_ref()[kmers_pos], k as u8) {
-        dummies.set_position(dummies_pos as u64 + 1);
-        dummies.get_ref()[dummies_pos]
+    if *kmers_pos == n_kmers {
+        *dummies_pos += 1;
+        dummies[*dummies_pos - 1]
+    } else if *dummies_pos == n_dummies {
+        *kmers_pos += 1;
+        (kmers[*kmers_pos - 1], k as u8)
+    } else if dummies[*dummies_pos] < (kmers[*kmers_pos], k as u8) {
+        *dummies_pos += 1;
+        dummies[*dummies_pos - 1]
     } else {
-        kmers.set_position(kmers_pos as u64 + 1);
-        (kmers.get_ref()[kmers_pos], k as u8)
+        *kmers_pos += 1;
+        (kmers[*kmers_pos - 1], k as u8)
     }
 }
 
@@ -120,12 +118,14 @@ pub fn merge_kmers_and_dummies<const B: usize>(
 
     let n_merged = kmers.len() + dummies.len();
 
-    let mut kmer_cursor = std::io::Cursor::new(kmers);
-    let mut dummy_cursor = std::io::Cursor::new(dummies);
+    let mut kmers_pos = 0;
+    let mut dummies_pos = 0;
 
-    Vec::from((0..n_merged).map(|_| {
-        read_kmer_or_dummy(&mut kmer_cursor, &mut dummy_cursor, k)
-    }).collect::<Vec<(LongKmer::<B>, u8)>>())
+    let mut merged = Vec::<(LongKmer<B>, u8)>::with_capacity(n_merged);
+    for _ in 0..n_merged {
+        merged.push(read_kmer_or_dummy(kmers, &mut kmers_pos, dummies, &mut dummies_pos, k))
+    }
+    merged
 }
 
 // Returns the SBWT bit vectors and optionally the LCS array
