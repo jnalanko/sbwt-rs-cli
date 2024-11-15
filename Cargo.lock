@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "sbwt"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bitvec",
  "byteorder",
@@ -971,9 +971,9 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "simple-sds-sbwt"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "055b42bf14cb7f81318e8b8179dc4936d00050850dbcaa7eb3dc4f6697da6312"
+checksum = "bf90dbe5fd0e2195b52079f8c48a15273ef4e1f62541784054242ee7d5da7057"
 dependencies = [
  "libc",
 ]

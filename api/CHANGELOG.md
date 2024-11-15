@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.4
+
+- Add an optional in-memory construction implementation by Tommi Mäklin: https://github.com/jnalanko/sbwt-rs-cli/pull/4. This can be built with by enabling the feature `bpks-mem`.
+- Fixes to make the crate work with WebAssembly.
+- Parallel C-array construction.
+
 ## v0.3.3
 
 - Documentation: Add an example using Needletail for FASTX parsing.
