@@ -9,13 +9,13 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 
 pub fn find_in_dummy<const B: usize>(
-    dummy_file: &std::io::Cursor<&[(LongKmer<B>, u8)]>,
+    dummy_file: &[(LongKmer<B>, u8)],
     c: u8,
 ) -> u64 {
-    let dummy_file_len = dummy_file.get_ref().len();
+    let dummy_file_len = dummy_file.len();
 
     let access_fn = |pos| {
-        let record = dummy_file.get_ref()[pos];
+        let record = dummy_file[pos];
         record
     };
 
@@ -32,13 +32,13 @@ pub fn find_in_dummy<const B: usize>(
 }
 
 pub fn find_in_nondummy<const B: usize>(
-    nondummy_file: &std::io::Cursor<&[LongKmer<B>]>,
+    nondummy_file: &[LongKmer<B>],
     c: u8,
 ) -> u64 {
-    let nondummy_file_len = nondummy_file.get_ref().len() as usize;
+    let nondummy_file_len = nondummy_file.len();
 
     let access_fn = |pos| {
-        nondummy_file.get_ref()[pos as usize]
+        nondummy_file[pos]
     };
 
     let pred_fn = |kmer: LongKmer::<B>| {
@@ -102,14 +102,12 @@ pub fn read_kmer_or_dummy<const B: usize>(
     } else if dummies_pos == n_dummies {
         kmers.set_position(kmers_pos as u64 + 1);
         (kmers.get_ref()[kmers_pos], k as u8)
+    } else if dummies.get_ref()[dummies_pos] < (kmers.get_ref()[kmers_pos], k as u8) {
+        dummies.set_position(dummies_pos as u64 + 1);
+        dummies.get_ref()[dummies_pos]
     } else {
-        if dummies.get_ref()[dummies_pos] < (kmers.get_ref()[kmers_pos], k as u8) {
-            dummies.set_position(dummies_pos as u64 + 1);
-            dummies.get_ref()[dummies_pos]
-        } else {
-            kmers.set_position(kmers_pos as u64 + 1);
-            (kmers.get_ref()[kmers_pos], k as u8)
-        }
+        kmers.set_position(kmers_pos as u64 + 1);
+        (kmers.get_ref()[kmers_pos], k as u8)
     }
 }
 
@@ -139,12 +137,11 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 ) -> (Vec<simple_sds_sbwt::raw_vector::RawVector>, Option<simple_sds_sbwt::int_vector::IntVector>) {
 
     let n = merged.len();
-    let merged_cursor = std::io::Cursor::new(merged);
 
     let rawrows = (0..sigma).collect::<Vec<usize>>().into_par_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut pointed_idx = find_in_dummy(&merged_cursor, c as u8) as usize;
-        let end = if c < sigma - 1 { find_in_dummy(&merged_cursor, c as u8 + 1) as usize } else { n };
+        let mut pointed_idx = find_in_dummy(merged, c as u8) as usize;
+        let end = if c < sigma - 1 { find_in_dummy(merged, c as u8 + 1) as usize } else { n };
 
         merged.iter().enumerate().for_each(|(kmer_idx, (kmer, len))| {
             let kmer_c = if *len as usize == k {

@@ -15,10 +15,9 @@ pub fn get_set_bits<const B: usize>(
 ) -> simple_sds_sbwt::raw_vector::RawVector {
     let mut bits = simple_sds_sbwt::raw_vector::RawVector::new();
     bits.resize(kmers.len(), false);
-    // let mut set_bits: Vec<usize> = Vec::new();
     let mut pointed_idx = 0;
     kmers.iter().for_each(|x| {
-        let xc = x.set_from_left(k-1, 0).right_shift(1).set_from_left(0, c as u8);
+        let xc = x.set_from_left(k-1, 0).right_shift(1).set_from_left(0, c);
 
         while pointed_idx < cursor.0.get_ref().len() {
             match cursor.0.get_ref()[pointed_idx].cmp(&xc) {
@@ -26,7 +25,6 @@ pub fn get_set_bits<const B: usize>(
                     break
                 },
                 std::cmp::Ordering::Equal => {
-                    // set_bits.push(cursor.nondummy_position());
                     bits.set_bit(pointed_idx + cursor.1, true);
                     pointed_idx += 1; // Advance
                     break
@@ -50,13 +48,13 @@ pub fn get_sorted_dummies<const B: usize>(
     // Number of k-mers in file
     let n = sorted_kmers.len();
 
-    let mut sorted_kmers_cursor = std::io::Cursor::new(sorted_kmers);
+    let sorted_kmers_cursor = std::io::Cursor::new(sorted_kmers);
 
     let mut char_cursors: Vec<(std::io::Cursor::<&[LongKmer::<B>]>, usize)> = (0..sigma).map(|c|{
-        let pos = find_in_nondummy::<B>(&mut sorted_kmers_cursor, c as u8);
+        let pos = find_in_nondummy::<B>(sorted_kmers, c as u8);
         let start = pos as usize;
         let end = if c < sigma - 1 {
-            find_in_nondummy::<B>(&mut sorted_kmers_cursor, c as u8 + 1)
+            find_in_nondummy::<B>(sorted_kmers, c as u8 + 1)
         } else {
             sorted_kmers.len() as u64
         };
@@ -85,7 +83,7 @@ pub fn get_sorted_dummies<const B: usize>(
         }).collect::<Vec<(LongKmer::<B>, u8)>>()
     }).flatten().collect();
 
-    // We always assume that the empty k-mer exists. This assumption is reflected in the C-arrya
+    // We always assume that the empty k-mer exists. This assumption is reflected in the C-array
     // later, which adds one "ghost dollar" count to all counts.
     required_dummies.push((LongKmer::<B>::from_ascii(b"").unwrap(), 0));
 
