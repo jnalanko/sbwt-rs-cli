@@ -1,5 +1,5 @@
 use simple_sds_sbwt::ops::Push;
-use simple_sds_sbwt::{raw_vector::AccessRaw};
+use simple_sds_sbwt::raw_vector::AccessRaw;
 use std::cmp::min;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;

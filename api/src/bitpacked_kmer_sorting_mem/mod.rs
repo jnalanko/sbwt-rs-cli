@@ -14,7 +14,7 @@ use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, sub
 ///
 /// Unused arguments for signature compatibility with the disk based building algorithm.
 pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(
-    mut seqs: IN,
+    seqs: IN,
     k: usize,
     n_threads: usize,
     dedup_batches: bool,

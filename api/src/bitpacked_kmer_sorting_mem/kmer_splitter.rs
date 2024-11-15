@@ -1,10 +1,7 @@
 use crate::kmer::LongKmer;
 
-use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
-use rayon::prelude::ParallelSlice;
-use rayon::prelude::ParallelSliceMut;
 
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
