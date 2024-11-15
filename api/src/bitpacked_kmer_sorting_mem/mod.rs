@@ -27,7 +27,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         let sigma = DNA_ALPHABET.len();
 
-        log::info!("Bit-packing all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
+        log::info!("Bit-packing and sorting all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
         let mut rev_kmers = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches);
 
         let (merged, n_kmers) = {

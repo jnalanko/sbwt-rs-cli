@@ -19,6 +19,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
     let encoder_bin_buf_size = 1_000_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
 
+    log::info!("Bitpacking and binning k-mers");
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
     let mut bins = std::thread::scope(|scope| {
         use crossbeam::crossbeam_channel::unbounded;
