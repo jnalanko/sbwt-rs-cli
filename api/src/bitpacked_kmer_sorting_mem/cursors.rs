@@ -1,3 +1,4 @@
+use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::{raw_vector::AccessRaw};
 use std::cmp::min;
 use crate::kmer::LongKmer;
@@ -52,7 +53,10 @@ pub fn find_in_nondummy<const B: usize>(
     start as u64
 }
 
-// Returns the LCS array
+// Returns the LCS array.
+// This first builds the uncompressed LCS array, and then compressed it to log(k) bits per element.
+// This means that the peak memory is high, but we have the k-mers in memory anyway, so it's only
+// twice that for B = 8 (k <= 32). TODO: compute the compressed LCS directly. 
 pub fn build_lcs_array<const B: usize>(
     kmers: &[(LongKmer::<B>, u8)],
     k: usize,
@@ -60,16 +64,25 @@ pub fn build_lcs_array<const B: usize>(
     // LCS values are between 0 and k-1
     assert!(k > 0);
 
-    std::iter::once(0_usize).chain(kmers.par_windows(2).map(|window| {
+    let bitwidth = 64 - (k as u64 - 1).leading_zeros();
+
+    let non_compressed_lcs = std::iter::once(0_usize).chain(kmers.par_windows(2).map(|window| {
         // The longest common suffix is the longest common prefix of reversed k-mers
         let prev_kmer = &window[0].0;
         let prev_len = &window[0].1;
         let kmer = &window[1].0;
         let len = &window[1].1;
-        let mut lcs_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
+        let mut lcs_value = LongKmer::<B>::lcp(prev_kmer, kmer);
         lcs_value = min(lcs_value, min(*prev_len as usize, *len as usize));
         lcs_value
-    }).collect::<Vec<usize>>().into_iter()).collect::<simple_sds_sbwt::int_vector::IntVector>()
+    }).collect::<Vec<usize>>());
+
+    // Compress into log(k) bits per element
+    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(kmers.len(), bitwidth as usize).unwrap();
+    for x in non_compressed_lcs {
+        compressed_lcs.push(x as u64);
+    }
+    compressed_lcs
 }
 
 // Read the next kmer or dummy from data stored separately in memory
