@@ -8,6 +8,10 @@ description = "Indexing sets of DNA k-mers with the spectral Burrow-Wheeler tran
 repository = "https://github.com/jnalanko/sbwt-rs-cli/tree/master/api"
 authors = ["Jarno Niklas Alanko <alanko.jarno@gmail.com>"]
 
+[features]
+default = []
+bpks-mem = []
+
 [dependencies]
 rayon = "1"
 num = "0.4"

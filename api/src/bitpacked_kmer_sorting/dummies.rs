@@ -1,17 +1,9 @@
 use std::io::{BufWriter, Write};
 
-use super::kmer::LongKmer;
+use crate::kmer::LongKmer;
 use crate::tempfile::TempFileManager;
 use simple_sds_sbwt::raw_vector::*;
 use rayon::prelude::*;
-
-struct NullReader{}
-
-impl std::io::Read for NullReader{
-    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize>{
-        Ok(0) // EoF
-    }
-}
 
 // We take in a path and not a file object because we need multiple readers to the same file
 pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Path, sigma: usize, k: usize, temp_file_manager: &mut TempFileManager) -> Vec<(LongKmer::<B>, u8)>{

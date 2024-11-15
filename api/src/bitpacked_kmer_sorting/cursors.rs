@@ -3,7 +3,7 @@ use std::{io::{BufReader, Seek, Read}, fs::File, path::Path};
 use simple_sds_sbwt::{ops::Access, raw_vector::AccessRaw};
 use std::io::SeekFrom;
 use std::cmp::min;
-use super::kmer::LongKmer;
+use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
 
 pub struct DummyNodeMerger<R: std::io::Read, const B: usize> {

@@ -70,6 +70,7 @@ pub fn reverse_complement_in_place(seq: &mut [u8]){
     jseqio::reverse_complement_in_place(seq);
 }
 
+#[allow(dead_code)]
 pub(crate) struct FastXReader{
     inner: jseqio::reader::DynamicFastXReader
 }

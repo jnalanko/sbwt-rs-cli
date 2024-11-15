@@ -6,6 +6,7 @@ pub struct Kmer{
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum KmerEncodingError{
     InvalidNucleotide(char), // contains the offending char
     TooLong(usize), // Contains the length of the k-mer which was too long
@@ -21,6 +22,7 @@ pub struct LongKmer<const B: usize>{
 }
 
 // TODO: always pass these by value since this type is Copy?
+#[allow(dead_code)]
 impl<const B: usize> LongKmer<B>{
 
     // If the length of the ASCII string is less than 32*B, the k-mer is padded with A's from the left

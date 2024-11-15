@@ -571,6 +571,9 @@ mod tests {
 
     use crate::builder::{BitPackedKmerSorting, SbwtIndexBuilder};
 
+    #[cfg(feature = "bpks-mem")]
+    use crate::builder::BitPackedKmerSortingMem;
+
     use super::*;
 
     #[allow(non_snake_case)]
@@ -699,6 +702,134 @@ mod tests {
     fn from_subset_seq() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
         let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let ss = sbwt_index.sbwt().clone();
+        let sbwt_index2 = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss, sbwt_index.n_sets(), sbwt_index.k(), sbwt_index.prefix_lookup_table.prefix_length);
+
+        let kmers1 = sbwt_index.reconstruct_padded_spectrum();
+        let kmers2 = sbwt_index2.reconstruct_padded_spectrum();
+        assert_eq!(kmers1, kmers2);
+
+    }
+
+    ///////////////////////////////////////////////////
+    //
+    // Same tests for bitpacked k-mer sorting in memory
+    //
+    ///////////////////////////////////////////////////
+
+    #[test_log::test]
+    #[allow(non_snake_case)]
+    #[cfg(feature = "bpks-mem")]
+    fn doc_example_mem() {
+        // The example used in the documentation page for SbwtIndex.
+        let seqs: Vec<&[u8]> = vec![b"TGTTTG", b"TTGCTAT", b"ACGTAGTATAT", b"TGTAAA"];
+        let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).run_from_slices(seqs.as_slice());
+        let mut doc_sbwt = vec![vec![b'A',b'T'], vec![b'C'], vec![], vec![b'A'], vec![b'T'], vec![b'T'], vec![b'A',b'G',b'T'], vec![], vec![], vec![b'G'], vec![b'T'], vec![b'T'], vec![b'T'], vec![b'T'], vec![b'C'], vec![b'G'], vec![b'A'], vec![], vec![], vec![b'A'], vec![b'A'], vec![b'A'], vec![b'A',b'T'], vec![b'T'], vec![b'G']];
+
+        // ACGT to 0123
+        for set in doc_sbwt.iter_mut() {
+            for c in set.iter_mut(){
+                *c = sbwt.char_idx(*c) as u8;
+            }
+        }
+        let computed_sbwt: Vec<Vec<u8>> = (0..sbwt.n_sets()).map(|i| sbwt.sbwt.access(i)).collect();
+        assert_eq!(doc_sbwt, computed_sbwt);
+    }
+
+    #[test_log::test]
+    #[allow(non_snake_case)]
+    #[cfg(feature = "bpks-mem")]
+    fn LCS_paper_example_mem() {
+
+        let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
+
+        let (mut sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).run_from_slices(seqs.as_slice());
+
+        assert_eq!(sbwt.sbwt.len(), 18);
+
+        assert_eq!(sbwt.sbwt.access(0), encode("A")); //   $$$$
+        assert_eq!(sbwt.sbwt.access(1), encode("C")); //   $$$A
+        assert_eq!(sbwt.sbwt.access(2), encode("G")); //   GAAA
+        assert_eq!(sbwt.sbwt.access(3), encode("")); //    TAAA
+        assert_eq!(sbwt.sbwt.access(4), encode("A")); //   GGAA
+        assert_eq!(sbwt.sbwt.access(5), encode("A")); //   GTAA
+        assert_eq!(sbwt.sbwt.access(6), encode("G")); //   $ACA
+        assert_eq!(sbwt.sbwt.access(7), encode("A")); //   AGGA
+        assert_eq!(sbwt.sbwt.access(8), encode("AG")); //  GGTA
+        assert_eq!(sbwt.sbwt.access(9), encode("A")); //   $$AC
+        assert_eq!(sbwt.sbwt.access(10), encode("GT")); // AAAG
+        assert_eq!(sbwt.sbwt.access(11), encode("G")); //  ACAG
+        assert_eq!(sbwt.sbwt.access(12), encode("G")); //  GTAG
+        assert_eq!(sbwt.sbwt.access(13), encode("AT")); // AAGG
+        assert_eq!(sbwt.sbwt.access(14), encode("")); //   CAGG
+        assert_eq!(sbwt.sbwt.access(15), encode("")); //   TAGG
+        assert_eq!(sbwt.sbwt.access(16), encode("")); //   AAGT
+        assert_eq!(sbwt.sbwt.access(17), encode("A")); //  AGGT
+
+        let true_padded_spectrum: Vec<&[u8]> = vec![b"$$$$", b"$$$A", b"GAAA", b"TAAA", b"GGAA", b"GTAA", b"$ACA", b"AGGA", b"GGTA", b"$$AC", b"AAAG", b"ACAG", b"GTAG", b"AAGG", b"CAGG", b"TAGG", b"AAGT", b"AGGT"];
+
+        let reconstructed_padded_spectrum = sbwt.reconstruct_padded_spectrum();
+        sbwt.sbwt.build_select();
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..18 {
+            eprintln!("{} {}",i, String::from_utf8_lossy(&sbwt.access_kmer(i)));
+            assert_eq!(sbwt.access_kmer(i), true_padded_spectrum[i]);
+            assert_eq!(&reconstructed_padded_spectrum[i*sbwt.k..(i+1)*sbwt.k], true_padded_spectrum[i]);
+        }
+
+
+        assert_eq!(sbwt.search(b""), Some(0..18));
+        assert_eq!(sbwt.search(b"AGG"), Some(13..16));
+        assert_eq!(sbwt.search(b"AAGT"), Some(16..17));
+
+        // Test prefix looup table
+        let two_mers = [b"AA", b"AC", b"AG", b"AT", b"CA", b"CC", b"CG", b"CT", b"GA", b"GC", b"GG", b"GT", b"TA", b"TC", b"TG", b"TT"];
+        let lut = PrefixLookupTable::new(&sbwt, 2);
+        for two_mer in two_mers {
+            let I1 = match sbwt.search(two_mer){
+                Some(I) => I,
+                None => 0..0
+            };
+            let I2 = lut.lookup(two_mer);
+            assert_eq!(I1, I2);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "bpks-mem")]
+    fn serialize_and_load_mem() {
+        let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
+
+        let (sbwt, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).run_from_slices(seqs.as_slice());
+
+        let mut buf = Vec::<u8>::new();
+        sbwt.serialize(&mut buf).unwrap();
+        let sbwt2 = SbwtIndex::<SubsetMatrix>::load(&mut buf.as_slice()).unwrap();
+
+        assert_eq!(sbwt, sbwt2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    #[cfg(feature = "bpks-mem")]
+    fn non_ACGT_mem(){
+        let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGANAAGGAAAGT"];
+        //..................................................^...................
+
+        let (sbwt, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).run_from_slices(seqs.as_slice());
+
+        let mut buf = Vec::<u8>::new();
+        sbwt.serialize(&mut buf).unwrap();
+        let sbwt2 = SbwtIndex::<SubsetMatrix>::load(&mut buf.as_slice()).unwrap();
+
+        assert_eq!(sbwt, sbwt2);
+    }
+
+    #[test]
+    #[cfg(feature = "bpks-mem")]
+    fn from_subset_seq_mem() {
+        let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
+        let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).run_from_slices(seqs.as_slice());
         let ss = sbwt_index.sbwt().clone();
         let sbwt_index2 = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss, sbwt_index.n_sets(), sbwt_index.k(), sbwt_index.prefix_lookup_table.prefix_length);
 

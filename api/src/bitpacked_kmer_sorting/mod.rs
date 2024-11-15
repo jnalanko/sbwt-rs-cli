@@ -3,8 +3,9 @@
 mod dummies;
 mod kmer_splitter;
 mod cursors;
-mod kmer;
 mod kmer_chunk;
+
+use crate::kmer::LongKmer;
 
 use std::io::Seek;
 
@@ -29,7 +30,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
         kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-        let n_kmers = std::fs::metadata(&kmers_file.path).unwrap().len() as usize / kmer::LongKmer::<B>::byte_size();
+        let n_kmers = std::fs::metadata(&kmers_file.path).unwrap().len() as usize / LongKmer::<B>::byte_size();
 
         log::info!("{} distinct k-mers found", n_kmers);
 
