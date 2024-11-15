@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 pub fn get_set_bits<const B: usize>(
     kmers: &[LongKmer::<B>],
-    cursor: &mut (std::io::Cursor<&[LongKmer<B>]>, usize),
+    char_slice: (&[LongKmer<B>], usize),
     k: usize,
     c: u8,
 ) -> simple_sds_sbwt::raw_vector::RawVector {
@@ -19,13 +19,13 @@ pub fn get_set_bits<const B: usize>(
     kmers.iter().for_each(|x| {
         let xc = x.set_from_left(k-1, 0).right_shift(1).set_from_left(0, c);
 
-        while pointed_idx < cursor.0.get_ref().len() {
-            match cursor.0.get_ref()[pointed_idx].cmp(&xc) {
+        while pointed_idx < char_slice.0.len() {
+            match char_slice.0[pointed_idx].cmp(&xc) {
                 std::cmp::Ordering::Greater => {
                     break
                 },
                 std::cmp::Ordering::Equal => {
-                    bits.set_bit(pointed_idx + cursor.1, true);
+                    bits.set_bit(pointed_idx + char_slice.1, true);
                     pointed_idx += 1; // Advance
                     break
                 },
@@ -48,9 +48,7 @@ pub fn get_sorted_dummies<const B: usize>(
     // Number of k-mers in file
     let n = sorted_kmers.len();
 
-    let sorted_kmers_cursor = std::io::Cursor::new(sorted_kmers);
-
-    let mut char_cursors: Vec<(std::io::Cursor::<&[LongKmer::<B>]>, usize)> = (0..sigma).map(|c|{
+    let mut char_cursors: Vec<(&[LongKmer::<B>], usize)> = (0..sigma).map(|c|{
         let pos = find_in_nondummy::<B>(sorted_kmers, c as u8);
         let start = pos as usize;
         let end = if c < sigma - 1 {
@@ -58,11 +56,11 @@ pub fn get_sorted_dummies<const B: usize>(
         } else {
             sorted_kmers.len() as u64
         };
-        (std::io::Cursor::new(&sorted_kmers[start..(end as usize)]), pos as usize)
+        (&sorted_kmers[start..(end as usize)], pos as usize)
     }).collect();
 
     let has_predecessor = char_cursors.par_iter_mut().enumerate().map(|(c, cursor)| {
-        get_set_bits(sorted_kmers, cursor, k, c as u8)
+        get_set_bits(sorted_kmers, *cursor, k, c as u8)
     }).reduce(|| {
         let mut res = simple_sds_sbwt::raw_vector::RawVector::new();
         res.resize(n, false);
