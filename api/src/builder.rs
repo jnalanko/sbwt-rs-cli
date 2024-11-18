@@ -140,9 +140,15 @@ impl BitPackedKmerSortingMem {
 
 #[cfg(feature = "bpks-mem")]
 impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
-    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, _n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        // Parallelisation is handled with rayon iterators,
-        // thread pool should be initialised before calling.
+    /// NOTE: the parameter n_threads does nothing.
+    /// Parallelisation is instead handled with rayon iterators, using
+    /// the global Rayon thread pool. We could use a local thread pool
+    /// that is initialized inside this function, but this apparently causes a
+    /// crash when compiled for WebAssembly. Currently, the only active use case for
+    /// in-memory construction is WebAssembly, so we're leaving it like this for now.
+    /// The compiler warning "unused variable: n_threads" shall remain unfixed until
+    /// a real fix is found.
+    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let dedup_batches = self.dedup_batches;
         match k {
             0..=32 => {
