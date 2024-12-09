@@ -112,6 +112,63 @@ pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtInd
 
 }
 
+/// Loads an index that was previously serialized either with the C++ API https://github.com/algbio/SBWT,
+/// or the associated CLI. Supports only version v0.1.
+#[allow(non_snake_case)] // For C-array
+pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std::io::Result<SbwtIndexVariant> {
+
+    // The file format with the CLI is:
+    // [type id len] [type id] [version string id] [version string] [data]
+
+    // For example:
+    // 00000000  0c 00 00 00 00 00 00 00  70 6c 61 69 6e 2d 6d 61  |........plain-ma|
+    // 00000010  74 72 69 78 04 00 00 00  00 00 00 00 76 30 2e 31  |trix........v0.1|
+    // 00000020  b6 09 2c 0f 00 00 00 00  ff ff ff 8b 48 44 2a 95  |..,.........HD*.|
+    
+    // We only support type-id "plain-matrix" and version v0.1.
+
+    // The file format of the raw API is:
+    // [version string id] [version string] [data]
+
+    // We can tell which format we have by checking what the first encoded string is:
+    // - If it's the version string, we check it and proceed to load the sbwt.
+    // - If it's plain-matrix, we ignore it, then read the next string, and check that it's the correct version.
+    // - If it's a string other than plain-matrix or a version string, we throw an error
+
+    let SUPPORTED_CPP_SBWT_VARIANT = b"plain-matrix"; // If you change this, remember to update all the comments above.
+    let SUPPORTED_CPP_FILE_FORMAT = b"v0.1"; // If you change this, remember to update all the comments above, including the doc comment.
+
+    let mut string_length = input.read_u64::<LittleEndian>().unwrap();
+    if string_length > 100 { // The first string is never this long
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let mut string_buf = vec![0u8; string_length as usize];
+    input.read_exact(&mut string_buf).unwrap();
+
+    if string_buf == SUPPORTED_CPP_SBWT_VARIANT { 
+        // Ok. Ignore and read the next string.
+
+        string_length = input.read_u64::<LittleEndian>().unwrap();
+        if string_length > 100 { // The second string is never this long
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        string_buf = vec![0u8; string_length as usize];
+        input.read_exact(&mut string_buf).unwrap();
+    }
+
+    if string_buf == SUPPORTED_CPP_FILE_FORMAT { 
+        // Ok. Todo: proceed to deserialize
+
+        //panic!("Error loading SBWT in C++ API format: incorrect version string: expected \"{}\", found \"{}\"", String::from_utf8(SUPPORTED_CPP_FILE_FORMAT.to_vec()).unwrap(), String::from_utf8_lossy(&version_string_buf));
+    } else {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+
+    todo!();
+
+}
+
+
 // When non-compatible changes to the serialization format occur, update the version number here to the current version 
 const SERIALIZATION_MAGIC_STRING: &[u8] = b"sbwtfile-v0.3.0"; 
 
