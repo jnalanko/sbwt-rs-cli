@@ -6,7 +6,6 @@ use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
-use simple_sds_sbwt::ops::BitVec;
 
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
@@ -852,7 +851,11 @@ mod tests {
 
         let data = decode_hex(data_hex).unwrap();
 
-        let sbwt = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data)).unwrap();
+        let SbwtIndexVariant::SubsetMatrix(cpp_sbwt) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data)).unwrap();
+
+        let (rust_sbwt, _lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(3).precalc_length(2).run_from_slices(&[b"ACACTG", b"GCACTAA"]);
+
+        assert_eq!(cpp_sbwt, rust_sbwt);
 
     }
 
