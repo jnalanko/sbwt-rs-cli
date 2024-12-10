@@ -1,5 +1,3 @@
-use std::io::{BufReader, Cursor};
-
 use byteorder::{LittleEndian, ReadBytesExt};
 use rand::AsByteSliceMut;
 use simple_sds_sbwt::serialize::Serialize;
@@ -53,5 +51,14 @@ mod tests {
             }
         }
         println!();
+    }
+
+    #[test]
+    fn test_load_empty_sdsl_bit_vector(){
+
+        let data = hex!("00 00 00 00 00 00 00 00");
+
+        let v = load_sdsl_bit_vector(&mut std::io::Cursor::new(&data)).unwrap();
+        assert!(v.is_empty());
     }
 }
