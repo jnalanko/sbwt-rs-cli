@@ -30,9 +30,10 @@ pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<s
 
 /// Loads an sdsl::int_vector<0> (width is determined at runtime)
 pub fn load_runtime_len_sdsl_int_vector(input: &mut impl std::io::Read) -> std::io::Result<simple_sds_sbwt::int_vector::IntVector> {
-    // The SDSL vector might or might include the bit width. If it does, then the format is:
+    // The sdsl::int_vector<0> is serialized in the following format:
     // [number of bits as u64][width as u8][data]
-    // We assume that the format is this.
+    // (If the width is assumed to be known at compile-time, that is, if the template parameter is greater than zero, 
+    // then the width is not serialized, but we are not concerned with that case here).
 
     // The simple_sds format is:
     // [number of elements as u64] [width as u64] [RawVector]
