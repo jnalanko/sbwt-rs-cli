@@ -188,7 +188,8 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
         let n_kmers = input.read_u64::<LittleEndian>()? as usize;
         let k = input.read_u64::<LittleEndian>()? as usize;
 
-        let subset_rank = SubsetMatrix::new_from_bit_vectors(vec![A_bits, C_bits, G_bits, T_bits]);
+        let mut subset_rank = SubsetMatrix::new_from_bit_vectors(vec![A_bits, C_bits, G_bits, T_bits]);
+        subset_rank.build_rank();
 
         Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::from_subset_seq(subset_rank, n_kmers, k, precalc_k)))
 
@@ -795,6 +796,63 @@ mod tests {
         let kmers1 = sbwt_index.reconstruct_padded_spectrum();
         let kmers2 = sbwt_index2.reconstruct_padded_spectrum();
         assert_eq!(kmers1, kmers2);
+
+    }
+
+    // https://stackoverflow.com/questions/52987181/how-can-i-convert-a-hex-string-to-a-u8-slice
+    pub fn decode_hex(s: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
+        (0..s.len())
+            .step_by(3)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+            .collect()
+    }
+
+
+    #[test]
+    fn from_cpp_plain_matrix_with_plain_matrix_type_id() {
+
+        // C++ SBWT of {ACACTG, GCACTAA}
+        // Built with ./build/bin/sbwt build -i small.fna -k 3 -p 2 -o small.sbwt
+
+        let data_hex = concat!(
+        "0c 00 00 00 00 00 00 00 70 6c 61 69 6e 2d 6d 61 ",
+        "74 72 69 78 04 00 00 00 00 00 00 00 76 30 2e 31 ",
+        "0a 00 00 00 00 00 00 00 70 02 00 00 00 00 00 00 ",
+        "0a 00 00 00 00 00 00 00 84 00 00 00 00 00 00 00 ",
+        "0a 00 00 00 00 00 00 00 01 02 00 00 00 00 00 00 ",
+        "0a 00 00 00 00 00 00 00 20 00 00 00 00 00 00 00 ",
+        "80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ",
+        "00 00 00 00 00 00 00 00 80 00 00 00 00 00 00 00 ",
+        "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ",
+        "80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ",
+        "00 00 00 00 00 00 00 00 80 00 00 00 00 00 00 00 ",
+        "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ",
+        "0a 00 00 00 00 00 00 00 f7 03 00 00 00 00 00 00 ",
+        "20 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 ",
+        "05 00 00 00 00 00 00 00 07 00 00 00 00 00 00 00 ",
+        "09 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 ",
+        "01 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 ",
+        "02 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "04 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00 ",
+        "05 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00 ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "06 00 00 00 00 00 00 00 06 00 00 00 00 00 00 00 ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "08 00 00 00 00 00 00 00 08 00 00 00 00 00 00 00 ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "09 00 00 00 00 00 00 00 09 00 00 00 00 00 00 00 ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ",
+        "02 00 00 00 00 00 00 00 0a 00 00 00 00 00 00 00 ",
+        "07 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00");
+
+        let data = decode_hex(data_hex).unwrap();
+
+        let sbwt = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data)).unwrap();
 
     }
 
