@@ -161,16 +161,20 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
     if string_buf == SUPPORTED_CPP_FILE_FORMAT { 
         // Ok. Proceed to deserialize. 
 
+        log::info!("Reading bit vectors");
         let A_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
         let C_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
         let G_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
         let T_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
+
         let _A_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
         let _C_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
         let _G_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
         let _T_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own 
 
         let _suffix_group_starts = load_sdsl_bit_vector(input); // Ignore: we don't use this
+
+        log::info!("Reading C array and constants");
 
         let C_array_byte_length = input.read_u64::<LittleEndian>()?;
         assert!(C_array_byte_length % 8 == 0);
@@ -187,9 +191,11 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
         let n_kmers = input.read_u64::<LittleEndian>()? as usize;
         let k = input.read_u64::<LittleEndian>()? as usize;
 
+        log::info!("Building rank structures");
         let mut subset_rank = SubsetMatrix::new_from_bit_vectors(vec![A_bits, C_bits, G_bits, T_bits]);
         subset_rank.build_rank();
 
+        log::info!("Building precalc table");
         Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::from_subset_seq(subset_rank, n_kmers, k, precalc_k)))
 
     } else {
