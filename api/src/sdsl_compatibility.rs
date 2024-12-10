@@ -3,6 +3,7 @@ use rand::AsByteSliceMut;
 use simple_sds_sbwt::serialize::Serialize;
 use std::io::Read;
 
+// Loads an sdsl::bit_vector
 pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<simple_sds_sbwt::raw_vector::RawVector> {
     // The simple_sds format is: [number of bits][number of words][data]
     // sdsl format is: [number of bits][data]
@@ -27,7 +28,8 @@ pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<s
 
 }
 
-pub fn load_sdsl_int_vector(input: &mut impl std::io::Read) -> std::io::Result<simple_sds_sbwt::int_vector::IntVector> {
+/// Loads an sdsl::int_vector<0> whose width is determined at runtime
+pub fn load_runtime_len_sdsl_int_vector(input: &mut impl std::io::Read) -> std::io::Result<simple_sds_sbwt::int_vector::IntVector> {
     // The SDSL vector might or might include the bit width. If it does, then the format is:
     // [number of bits as u64][width as u8][data]
     // We assume that the format is this.
@@ -96,7 +98,7 @@ mod tests {
         // This is an sdsl bit vector width 20 elements of width 5, such that v[3] = 7 and all other elements are zero
         let data = hex!("64 00 00 00 00 00 00 00 05 00 80 03 00 00 00 00 00 00 00 00 00 00 00 00 00");
 
-        let v = load_sdsl_int_vector(&mut std::io::Cursor::new(&data)).unwrap();
+        let v = load_runtime_len_sdsl_int_vector(&mut std::io::Cursor::new(&data)).unwrap();
         assert!(v.len() == 20);
         assert!(v.width() == 5);
 
