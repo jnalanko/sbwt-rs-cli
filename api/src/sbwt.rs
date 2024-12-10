@@ -6,7 +6,9 @@ use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
+use simple_sds_sbwt::ops::BitVec;
 
+use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
 use crate::util;
@@ -158,29 +160,41 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
     }
 
     if string_buf == SUPPORTED_CPP_FILE_FORMAT { 
-        // Ok. Todo: proceed to deserialize
+        // Ok. Proceed to deserialize. 
 
-        let A_bits = load_sdsl_bit_vector(input);
-        let C_bits = load_sdsl_bit_vector(input);
-        let G_bits = load_sdsl_bit_vector(input);
-        let T_bits = load_sdsl_bit_vector(input);
+        let A_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
+        let C_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
+        let G_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
+        let T_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
+        let _A_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
+        let _C_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
+        let _G_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
+        let _T_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own 
 
-        // Todo: Read and ignore rank supports.
+        let _suffix_group_starts = load_sdsl_bit_vector(input); // Ignore: we don't use this
 
-        let suffix_group_starts = load_sdsl_bit_vector(input);
+        let C_array_byte_length = input.read_u64::<LittleEndian>()?;
+        assert!(C_array_byte_length % 8 == 0);
+        let mut C_array_bytes = vec![0u8; C_array_byte_length as usize];
+        input.read_exact(C_array_bytes.as_mut_slice())?; // Ignore: we build our own
 
-        // Todo: C-array
-        // Todo: precalc array
-        // Todo: precalc k
-        // Todo: # nodes
-        // Todo: # kmers
-        // Todo: k
+        let precalc_array_byte_length = input.read_u64::<LittleEndian>()?;
+        assert!(precalc_array_byte_length % 16 == 0);
+        let mut precalc_array_bytes = vec![0u8; precalc_array_byte_length as usize];
+        input.read_exact(precalc_array_bytes.as_mut_slice())?; // Ignore: we build our own
+
+        let precalc_k = input.read_u64::<LittleEndian>()? as usize;
+        let _n_nodes = input.read_u64::<LittleEndian>()? as usize;
+        let n_kmers = input.read_u64::<LittleEndian>()? as usize;
+        let k = input.read_u64::<LittleEndian>()? as usize;
+
+        let subset_rank = SubsetMatrix::new_from_bit_vectors(vec![A_bits, C_bits, G_bits, T_bits]);
+
+        Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::from_subset_seq(subset_rank, n_kmers, k, precalc_k)))
 
     } else {
-        return Err(std::io::ErrorKind::InvalidData.into());
+        Err(std::io::ErrorKind::InvalidData.into())
     }
-
-    todo!();
 
 }
 
