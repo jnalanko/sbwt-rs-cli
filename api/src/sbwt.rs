@@ -86,11 +86,15 @@ pub struct SbwtIndex<SS: SubsetSeq> {
     prefix_lookup_table: PrefixLookupTable,
 }
 
+/// An enum listing SbwtIndex types built on different subset rank implementations provided in this crate. 
+/// Currently, only the [SubsetMatrix] structure is supported, but in the future there might be more.
 pub enum SbwtIndexVariant {
     SubsetMatrix(SbwtIndex<SubsetMatrix>),
-    //SubsetConcat(SbwtIndex<SubsetConcat>),
+    //SubsetConcat(SbwtIndex<SubsetConcat>), // Remember to update the doc comment if a variant is added
 }
 
+/// Loads an index that is wrapped in an enum describing the used subset rank structure type. 
+/// The format includes a type identifier so the correct variant can later be loaded with [load_sbwt_index_variant].
 pub fn write_sbwt_index_variant(sbwt: &SbwtIndexVariant, out: &mut impl std::io::Write) -> std::io::Result<usize> {
     match sbwt {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
@@ -101,6 +105,8 @@ pub fn write_sbwt_index_variant(sbwt: &SbwtIndexVariant, out: &mut impl std::io:
     }
 }
 
+/// Loads an index that was stored with [write_sbwt_index_variant]. This includes a type identifier
+/// to load the correct subset rank variant.
 pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtIndexVariant, Box<dyn std::error::Error>> {
     let type_id_len = input.read_u64::<LittleEndian>().unwrap();
     let mut type_id = vec![0_u8; type_id_len as usize];
