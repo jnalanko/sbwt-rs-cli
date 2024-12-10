@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.5
+
+- Add `load_from_cpp_plain_matrix_format` to load the index from the C++ API
+  or CLI format: https://github.com/algbio/SBWT.
+
 ## v0.3.4
 
 - Add an optional in-memory construction implementation by Tommi Mäklin: https://github.com/jnalanko/sbwt-rs-cli/pull/4. This can be built with by enabling the feature `bpks-mem`.

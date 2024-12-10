@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "sbwt"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "bitvec",
  "byteorder",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "sbwt-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "byteorder",
  "chrono",
