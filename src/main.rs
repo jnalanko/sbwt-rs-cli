@@ -58,10 +58,16 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let include_dummies = matches.get_flag("include-dummy-kmers");
     let all_at_once = matches.get_flag("all-at-once");
+    let cpp_format = matches.get_flag("load-cpp-format");
 
     // Don't care if there is LCS support or not
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
+
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
             dump_kmers(&mut sbwt, all_at_once, include_dummies);
@@ -219,10 +225,15 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
     let membership_only = matches.get_flag("membership-only");
+    let cpp_format = matches.get_flag("load-cpp-format");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
@@ -308,11 +319,16 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
 
     // Read sbwt
     log::info!("Loading sbwt index from file {}", indexfile.display());
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
 
     // Load the lcs array
     let mut lcsfile = indexfile.clone();
@@ -346,10 +362,15 @@ fn benchmark<SS: SubsetSeq>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
 
 fn benchmark_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
@@ -390,10 +411,15 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Opt
 fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
@@ -508,6 +534,11 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
         )
         .subcommand(clap::Command::new("lookup")
             .about("Look up the colex ranks of all k-mers. Printed as space-separated ascii integers, one line per query sequence. If a k-mer does not exist in the index, the colex rank is -1.")
@@ -539,6 +570,11 @@ fn main() {
                 .long("membership-only")
                 .action(clap::ArgAction::SetTrue)
             )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
         )
         .subcommand(clap::Command::new("matching-statistics")
             .arg_required_else_help(true)
@@ -563,6 +599,11 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
         )
         .subcommand(clap::Command::new("dump-kmers")
             .about("Prints all k-mer strings in colex order, one per line.")
@@ -585,6 +626,11 @@ fn main() {
                 .long("all-at-once")
                 .action(clap::ArgAction::SetTrue)
             )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
         )
         .subcommand(clap::Command::new("dump-unitigs")
             .about("Print all unitigs in arbitrary order in FASTA format")
@@ -594,6 +640,11 @@ fn main() {
                 .long("index")
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("cpp-format")
+                .action(clap::ArgAction::SetTrue)
             )
         )
         ;
