@@ -174,29 +174,63 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
 
         let _suffix_group_starts = load_sdsl_bit_vector(input); // Ignore: we don't use this
 
-        log::info!("Reading C array and constants");
-
-        let C_array_byte_length = input.read_u64::<LittleEndian>()?;
+        log::info!("Reading the C-array");
+        let C_array_byte_length = input.read_u64::<LittleEndian>()? as usize;
         assert!(C_array_byte_length % 8 == 0);
-        let mut C_array_bytes = vec![0u8; C_array_byte_length as usize];
-        input.read_exact(C_array_bytes.as_mut_slice())?; // Ignore: we build our own
+        let C_array_len = C_array_byte_length / 8;
+        let mut C_array = Vec::<usize>::with_capacity(C_array_len);
+        for _ in 0..C_array_len {
+            C_array.push(input.read_u64::<LittleEndian>()? as usize);
+        }
 
+        log::info!("Reading the precalc table");
         let precalc_array_byte_length = input.read_u64::<LittleEndian>()?;
         assert!(precalc_array_byte_length % 16 == 0);
         let mut precalc_array_bytes = vec![0u8; precalc_array_byte_length as usize];
-        input.read_exact(precalc_array_bytes.as_mut_slice())?; // Ignore: we build our own
+        input.read_exact(precalc_array_bytes.as_mut_slice())?;
 
+        log::info!("Reading constants");
         let precalc_k = input.read_u64::<LittleEndian>()? as usize;
         let _n_nodes = input.read_u64::<LittleEndian>()? as usize;
         let n_kmers = input.read_u64::<LittleEndian>()? as usize;
         let k = input.read_u64::<LittleEndian>()? as usize;
 
+        log::info!("Permuting the precalc table");
+        // For some stupid reason the lookup table in the Rust code stores the ranges in the
+        // lexicographic order of the prefixes, not colexicographic like in the C++ code, which
+        // also would make more sense since then the intervals are non-decreasing. We could change
+        // to colex order in the Rust code, but that would break index compatibility. So we permute
+        // the lookup table here to the lexicographic order.
+        let n_ranges = (precalc_array_byte_length/16) as usize;
+        let mut ranges = vec![0..0; n_ranges];
+        let mut buf = [0_u8; 8];
+        for i in 0..n_ranges {
+
+            buf.copy_from_slice(&precalc_array_bytes[(2*i)*8..(2*i+1)*8]);
+            let left = i64::from_le_bytes(buf);
+            buf.copy_from_slice(&precalc_array_bytes[(2*i+1)*8..(2*i+2)*8]);
+            let right = i64::from_le_bytes(buf);
+
+            let mut lut_idx = 0; // Index in the new lookup table
+            for j in 0..precalc_k {
+                lut_idx = (lut_idx << 2) | ((i >> (2*j)) & 0x3); // Trust me
+            }
+
+            ranges[lut_idx] = if left == -1 {
+                0..0
+            } else {
+                left as usize .. (right+1) as usize // +1 to make the end exclusive
+            }
+        }
+        drop(precalc_array_bytes); // Free some memory
+
         log::info!("Building rank structures");
         let mut subset_rank = SubsetMatrix::new_from_bit_vectors(vec![A_bits, C_bits, G_bits, T_bits]);
         subset_rank.build_rank();
 
-        log::info!("Building precalc table");
-        Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::from_subset_seq(subset_rank, n_kmers, k, precalc_k)))
+        let prefix_lut = PrefixLookupTable{ranges, prefix_length: precalc_k};
+
+        Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::from_components(subset_rank, n_kmers, k, C_array, prefix_lut)))
 
     } else {
         Err(std::io::ErrorKind::InvalidData.into())
@@ -814,7 +848,7 @@ mod tests {
 
 
     #[test]
-    fn from_cpp_plain_matrix_with_plain_matrix_type_id() {
+    fn from_cpp_plain_matrix() {
 
         // C++ SBWT of {ACACTG, GCACTAA}
         // Built with ./build/bin/sbwt build -i small.fna -k 3 -p 2 -o small.sbwt
