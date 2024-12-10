@@ -139,6 +139,8 @@ mod kmer;
 pub mod dbg;
 pub mod benchmark;
 
+mod sdsl_compatibility;
+
 mod sbwt;
 pub use sbwt::*;
 
