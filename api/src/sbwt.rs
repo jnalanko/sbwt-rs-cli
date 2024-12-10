@@ -851,11 +851,18 @@ mod tests {
 
         let data = decode_hex(data_hex).unwrap();
 
-        let SbwtIndexVariant::SubsetMatrix(cpp_sbwt) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data)).unwrap();
+        let SbwtIndexVariant::SubsetMatrix(cpp_sbwt) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(&data)).unwrap();
 
         let (rust_sbwt, _lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(3).precalc_length(2).run_from_slices(&[b"ACACTG", b"GCACTAA"]);
 
         assert_eq!(cpp_sbwt, rust_sbwt);
+
+        // Check also that the loading works when the plain-matrix type id is not present.
+
+        let data_without_type_id = &data[20..]; // Skip 8 bytes of (u64 length of type id string) + 12 bytes of "plain-matrix"
+        let SbwtIndexVariant::SubsetMatrix(cpp_sbwt2) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data_without_type_id)).unwrap();
+
+        assert_eq!(cpp_sbwt2, rust_sbwt);
 
     }
 
