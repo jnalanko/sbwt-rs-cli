@@ -29,7 +29,7 @@ pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<s
 }
 
 /// Loads an sdsl::int_vector<0> (width is determined at runtime)
-pub fn load_runtime_len_sdsl_int_vector(input: &mut impl std::io::Read) -> std::io::Result<simple_sds_sbwt::int_vector::IntVector> {
+pub fn load_runtime_width_sdsl_int_vector(input: &mut impl std::io::Read) -> std::io::Result<simple_sds_sbwt::int_vector::IntVector> {
     // The sdsl::int_vector<0> is serialized in the following format:
     // [number of bits as u64][width as u8][data]
     // (If the width is assumed to be known at compile-time, that is, if the template parameter is greater than zero, 
@@ -57,6 +57,20 @@ pub fn load_runtime_len_sdsl_int_vector(input: &mut impl std::io::Read) -> std::
     let mut modified_input = new_header.as_byte_slice_mut().chain(input);
 
     simple_sds_sbwt::int_vector::IntVector::load(&mut modified_input)
+}
+
+/// Loads an sdsl::int_vector<w> (width w is known at compile time) 
+pub fn load_known_width_sdsl_int_vector(input: &mut impl std::io::Read, width: u8) -> std::io::Result<simple_sds_sbwt::int_vector::IntVector> {
+    // We insert the width byte to the header so that we can use load_runtime_width_sdsl_int_vector to read the vector.
+    let n_bits = input.read_u64::<LittleEndian>()?; // Not including the header
+    let mut new_header = [0u8; 9];
+    new_header[0..8].copy_from_slice(&n_bits.to_le_bytes());
+    new_header[8] = width;
+
+    let mut modified_input = new_header.as_byte_slice_mut().chain(input);
+
+    load_runtime_width_sdsl_int_vector(&mut modified_input)
+
 }
 
 #[cfg(test)]
@@ -95,11 +109,32 @@ mod tests {
     }
 
     #[test]
-    fn test_load_sdsl_int_vector(){
+    fn test_load_runtime_sdsl_int_vector(){
         // This is an sdsl bit vector width 20 elements of width 5, such that v[3] = 7 and all other elements are zero
         let data = hex!("64 00 00 00 00 00 00 00 05 00 80 03 00 00 00 00 00 00 00 00 00 00 00 00 00");
 
-        let v = load_runtime_len_sdsl_int_vector(&mut std::io::Cursor::new(&data)).unwrap();
+        let v = load_runtime_width_sdsl_int_vector(&mut std::io::Cursor::new(&data)).unwrap();
+        assert!(v.len() == 20);
+        assert!(v.width() == 5);
+
+        for i in 0..v.len() {
+            print!("{} ", v.get(i));
+            if i == 3 {
+                assert!(v.get(i) == 7);
+            } else {
+                assert!(v.get(i) == 0);
+            }
+        }
+        println!();
+    }
+
+    #[test]
+    fn test_load_compile_time_sdsl_int_vector(){
+        // This is an sdsl bit vector width 20 elements of width 5, such that v[3] = 7 and all other elements are zero
+        let data = hex!("64 00 00 00 00 00 00 00 00 80 03 00 00 00 00 00 00 00 00 00 00 00 00 00");
+        let width = 5;
+
+        let v = load_known_width_sdsl_int_vector(&mut std::io::Cursor::new(&data), width).unwrap();
         assert!(v.len() == 20);
         assert!(v.width() == 5);
 

@@ -7,6 +7,7 @@ use byteorder::ReadBytesExt;
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
 
+use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
 use crate::util;
 use crate::util::ACGT_TO_0123;
@@ -159,7 +160,22 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
     if string_buf == SUPPORTED_CPP_FILE_FORMAT { 
         // Ok. Todo: proceed to deserialize
 
-        //panic!("Error loading SBWT in C++ API format: incorrect version string: expected \"{}\", found \"{}\"", String::from_utf8(SUPPORTED_CPP_FILE_FORMAT.to_vec()).unwrap(), String::from_utf8_lossy(&version_string_buf));
+        let A_bits = load_sdsl_bit_vector(input);
+        let C_bits = load_sdsl_bit_vector(input);
+        let G_bits = load_sdsl_bit_vector(input);
+        let T_bits = load_sdsl_bit_vector(input);
+
+        // Todo: Read and ignore rank supports.
+
+        let suffix_group_starts = load_sdsl_bit_vector(input);
+
+        // Todo: C-array
+        // Todo: precalc array
+        // Todo: precalc k
+        // Todo: # nodes
+        // Todo: # kmers
+        // Todo: k
+
     } else {
         return Err(std::io::ErrorKind::InvalidData.into());
     }
