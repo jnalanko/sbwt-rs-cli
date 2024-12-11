@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.6
+
+- Fixed a corner case when importing an index with an empty precalc table from the C++ format. This caused a crash at query time, which is fixed in this patch.
+
+
 ## v0.3.5
 
 - Add `load_from_cpp_plain_matrix_format` to load the index from the C++ API
