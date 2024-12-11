@@ -197,7 +197,7 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
 
         log::info!("Reading constants");
         let precalc_k = input.read_u64::<LittleEndian>()? as usize;
-        let _n_nodes = input.read_u64::<LittleEndian>()? as usize;
+        let n_nodes = input.read_u64::<LittleEndian>()? as usize;
         let n_kmers = input.read_u64::<LittleEndian>()? as usize;
         let k = input.read_u64::<LittleEndian>()? as usize;
 
@@ -227,6 +227,9 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
             } else {
                 left as usize .. (right+1) as usize // +1 to make the end exclusive
             }
+        }
+        if precalc_k == 0 {
+            ranges.push(0..n_nodes); // Special case: range of the empty string
         }
         drop(precalc_array_bytes); // Free some memory
 
