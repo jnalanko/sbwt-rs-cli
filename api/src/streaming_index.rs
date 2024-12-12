@@ -175,6 +175,8 @@ impl LcsArray {
             compressed_lcs.push(x as u64);
         }
 
+        log::info!("LCS construction complete");
+
         Self{lcs: compressed_lcs}
 
     }
