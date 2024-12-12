@@ -148,7 +148,7 @@ impl LcsArray {
         for round in 0..k {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
-                last = sbwt.push_labels_forward(&last);
+                last = sbwt.push_all_labels_forward(&last);
             }
 
             for i in 1..n_nodes {

@@ -506,7 +506,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         for round in 0..k {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
-                last = self.push_labels_forward(&last);
+                last = self.push_all_labels_forward(&last);
             }
 
             for i in 0..n_nodes {
@@ -551,21 +551,51 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         index
     }
 
-    /// Internal function: Returns vector v such that v[i] = labels[inverse_lf_step(i)].
-    pub(crate) fn push_labels_forward(&self, labels: &[u8]) -> Vec<u8> {
-        assert_eq!(labels.len(), self.n_sets());
-        let mut propagated = vec![b'$'; self.n_sets()];
-        let mut ptrs = self.C.clone();
+    /// Internal function. A wrapper around [SbwtIndex::push_labels_forward] that works the full range over all of the SBWT.
+    /// The effect is this: if `labels` is a list of labels, one for each node in the SBWT in colex order, then the output
+    /// is those labels pushed forward along the edges in the SBWT graph. Those nodes that do not have a predecessor
+    /// (just the root of the graph) get a dollar.
+    pub(crate) fn push_all_labels_forward(&self, labels: &[u8]) -> Vec<u8> {
+        let mut ans = vec![b'$'; self.n_sets()];
+        let mut remaining_output_range = &mut ans.as_mut_slice()[1..]; // Drop index 0 because it's the root of the graph
+        let mut output_ranges = Vec::<&mut[u8]>::new();
+
+        for i in 0..self.alphabet().len() {
+            let range_length = if i + 1 < self.alphabet().len() {
+                self.C[i+1] - self.C[i]
+            } else {
+                self.n_sets() - self.C[i]
+            };
+
+            let (head, tail) = remaining_output_range.split_at_mut(range_length); 
+            output_ranges.push(head);
+            remaining_output_range = tail;
+        }
+        assert!(remaining_output_range.is_empty());
+
+        self.push_labels_forward(labels, 0..self.n_sets(), output_ranges); // This modifies ans
+
+        ans
+    }
+
+    /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).
+    /// Output: writes the input labels to the output ranges. Read the code for details. 
+    /// The length of output_ranges[j] must be equal to the number of occurrences of character j in the input range.
+    pub(crate) fn push_labels_forward(&self, labels: &[u8], input_range: std::ops::Range<usize>, mut output_ranges: Vec<&mut[u8]>){
+        assert_eq!(labels.len(), input_range.len());
+        assert_eq!(output_ranges.len(), self.alphabet().len());
+
+        let mut range_offsets = vec![0_usize; output_ranges.len()];
         #[allow(clippy::needless_range_loop)]
-        for i in 0..self.n_sets(){
-            for char_idx in 0..DNA_ALPHABET.len() {
+        for i in input_range.clone() {
+            for char_idx in 0..DNA_ALPHABET.len() { // Using the constant DNA_ALPHABET array here to allow loop unrolling
                 if self.sbwt.set_contains(i, char_idx as u8) {
-                    propagated[ptrs[char_idx]] = labels[i];
-                    ptrs[char_idx] += 1;
+                    let input_char = labels[i - input_range.start];
+                    output_ranges[char_idx][range_offsets[char_idx]] = input_char;
+                    range_offsets[char_idx] += 1;
                 }
             }
         }
-        propagated
     }
 
     /// Internal function: builds the last column of the SBWT matrix.
@@ -599,7 +629,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
 
-                last = self.push_labels_forward(&last);
+                last = self.push_all_labels_forward(&last);
             }
 
             for i in 1..n_nodes {
