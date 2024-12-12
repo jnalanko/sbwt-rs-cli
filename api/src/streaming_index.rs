@@ -3,7 +3,6 @@
 use crate::subsetseq::*;
 use crate::sbwt::*;
 use simple_sds_sbwt::ops::Access;
-use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::ops::Vector;
 use simple_sds_sbwt::serialize::Serialize;
 
@@ -134,11 +133,8 @@ impl LcsArray {
         // ceil(log2(k)) = bits per element.
         let k = sbwt.k();
         let bit_width = 64 - u64::leading_zeros((k as isize -1) as u64);
-        let mut lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(sbwt.n_sets(), bit_width as usize).unwrap();
+        let mut lcs = simple_sds_sbwt::int_vector::IntVector::with_len(sbwt.n_sets(), bit_width as usize, 0).unwrap();
         let n_nodes = sbwt.n_sets();
-        for _ in 0..n_nodes {
-            lcs.push(0);
-        }
 
         // Build the last column of the SBWT matrix
         log::info!("Building column {} of the SBWT matrix", k-1);
