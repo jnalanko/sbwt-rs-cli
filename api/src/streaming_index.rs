@@ -135,7 +135,10 @@ impl LcsArray {
         let k = sbwt.k();
         let bit_width = 64 - u64::leading_zeros((k as isize -1) as u64);
 
-        assert!(k < 256); // Storing 1 byte per value before IntVector compression
+        // We store 1 byte per value before IntVector compression, and use lcs[i] = k to
+        // mark that the value has not been computed yet. So the maximum k we can support
+        // is k = 255.
+        assert!(k <= 255);
 
         log::info!("Initializing...");
         // The value of k is used to denote that a value has not been computed yet.
