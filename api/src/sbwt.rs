@@ -502,21 +502,23 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         // Build the last column of the SBWT matrix
         log::info!("Building column {} of the SBWT matrix", k-1);
-        let mut last = self.build_last_column();
+        let mut labels_in = self.build_last_column();
+        let mut labels_out = labels_in.clone();
 
         // Iterate columns from right to left
         let mut kmers_concat = vec![0u8; n_nodes * k];
         for round in 0..k {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
-                last = self.push_all_labels_forward(&last, n_threads);
+                self.push_all_labels_forward(&labels_in, &mut labels_out, n_threads);
             }
 
             for i in 0..n_nodes {
                 let pos = k - 1 - round;
-                kmers_concat[i * k + pos] = last[i];
+                kmers_concat[i * k + pos] = labels_out[i];
             }
 
+            (labels_in, labels_out) = (labels_out, labels_in);
         }
 
         kmers_concat
@@ -576,14 +578,14 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     }
 
     /// Internal function. A wrapper around [SbwtIndex::push_labels_forward] that works the full range over all of the SBWT.
-    /// The effect is this: if `labels` is a list of labels, one for each node in the SBWT in colex order, then the output
+    /// The effect is this: if `labels_in` is a list of labels, one for each node in the SBWT in colex order, then the output
     /// is those labels pushed forward along the edges in the SBWT graph. Those nodes that do not have a predecessor
     /// (just the root of the graph) get a dollar.
-    pub(crate) fn push_all_labels_forward(&self, labels: &[u8], n_threads: usize) -> Vec<u8> 
+    pub(crate) fn push_all_labels_forward(&self, labels_in: &[u8], labels_out: &mut [u8], n_threads: usize) 
     where Self: Sync {
 
-        let mut output_range = vec![b'$'; self.n_sets()];
-        let mut remaining_char_output_ranges = self.split_output_range_by_char(&mut output_range);
+        //let mut output_range = vec![b'$'; self.n_sets()];
+        let mut remaining_char_output_ranges = self.split_output_range_by_char(labels_out);
 
         let input_piece_len = self.n_sets().div_ceil(n_threads);
 
@@ -617,11 +619,9 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
         thread_pool.install(||{
             thread_input_output_ranges.into_par_iter().for_each(|(input_subrange, output_subranges)| {
-                self.push_labels_forward(&labels[input_subrange.clone()], input_subrange.clone(), output_subranges);
+                self.push_labels_forward(&labels_in[input_subrange.clone()], input_subrange.clone(), output_subranges);
             });
         });
-
-        output_range
     }
 
     /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).
@@ -666,7 +666,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         // Build the last column of the SBWT matrix
         log::info!("Building column {} of the SBWT matrix", k-1);
-        let mut last = self.build_last_column(); 
+        let mut labels_in = self.build_last_column(); 
+        let mut labels_out = labels_in.clone();
 
         let mut marks = bitvec::bitvec![0; self.n_sets()];
         marks.set(0, true);
@@ -676,14 +677,16 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
 
-                last = self.push_all_labels_forward(&last, n_threads);
+                self.push_all_labels_forward(&labels_in, &mut labels_out, n_threads);
             }
 
             for i in 1..n_nodes {
-                if last[i] != last[i-1] {
+                if labels_out[i] != labels_out[i-1] {
                     marks.set(i, true);
                 }
             }
+
+            (labels_in, labels_out) = (labels_out, labels_in);
         }
 
         marks

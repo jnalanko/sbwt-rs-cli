@@ -140,7 +140,8 @@ impl LcsArray {
 
         // Build the last column of the SBWT matrix
         log::info!("Building column {} of the SBWT matrix", k-1);
-        let mut last = sbwt.build_last_column(); 
+        let mut labels_in = sbwt.build_last_column(); 
+        let mut labels_out = labels_in.clone();
 
         let mut computed_values = bitvec::bitvec![0; sbwt.n_sets()];
         lcs.set(0, 0);
@@ -150,16 +151,18 @@ impl LcsArray {
         for round in 0..k {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
-                last = sbwt.push_all_labels_forward(&last, n_threads);
+                sbwt.push_all_labels_forward(&labels_in, &mut labels_out, n_threads);
             }
 
             log::info!("Storing LCS values of {}", round);
             for i in 1..n_nodes {
-                if !computed_values[i] && last[i] != last[i-1] {
+                if !computed_values[i] && labels_out[i] != labels_out[i-1] {
                     lcs.set(i, round as u64);
                     computed_values.set(i, true);
                 }
             }
+
+            (labels_in, labels_out) = (labels_out, labels_in);
         }
 
         Self{lcs}
