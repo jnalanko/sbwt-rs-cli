@@ -151,6 +151,7 @@ impl LcsArray {
                 last = sbwt.push_all_labels_forward(&last, n_threads);
             }
 
+            log::info!("Storing LCS values of {}", round);
             for i in 1..n_nodes {
                 if !computed_values[i] && last[i] != last[i-1] {
                     lcs.set(i, round as u64);
