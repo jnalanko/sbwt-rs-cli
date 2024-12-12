@@ -551,13 +551,10 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         index
     }
 
-    /// Internal function. A wrapper around [SbwtIndex::push_labels_forward] that works the full range over all of the SBWT.
-    /// The effect is this: if `labels` is a list of labels, one for each node in the SBWT in colex order, then the output
-    /// is those labels pushed forward along the edges in the SBWT graph. Those nodes that do not have a predecessor
-    /// (just the root of the graph) get a dollar.
-    pub(crate) fn push_all_labels_forward(&self, labels: &[u8]) -> Vec<u8> {
-        let mut ans = vec![b'$'; self.n_sets()];
-        let mut remaining_output_range = &mut ans.as_mut_slice()[1..]; // Drop index 0 because it's the root of the graph
+    /// Private helper function for label propagation.
+    /// The output range must have length self.n_sets().
+    fn split_output_range_by_char<'a>(&self, output_range: &'a mut[u8]) -> Vec::<&'a mut[u8]>{
+        let mut remaining_output_range = &mut output_range[1..]; // Drop index 0 because it's the root of the graph
         let mut output_ranges = Vec::<&mut[u8]>::new();
 
         for i in 0..self.alphabet().len() {
@@ -572,10 +569,24 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             remaining_output_range = tail;
         }
         assert!(remaining_output_range.is_empty());
+        output_ranges
+    }
+
+    /// Internal function. A wrapper around [SbwtIndex::push_labels_forward] that works the full range over all of the SBWT.
+    /// The effect is this: if `labels` is a list of labels, one for each node in the SBWT in colex order, then the output
+    /// is those labels pushed forward along the edges in the SBWT graph. Those nodes that do not have a predecessor
+    /// (just the root of the graph) get a dollar.
+    pub(crate) fn push_all_labels_forward(&self, labels: &[u8]) -> Vec<u8> {
+        let mut ans = vec![b'$'; self.n_sets()];
+        let output_ranges = self.split_output_range_by_char(&mut ans);
 
         self.push_labels_forward(labels, 0..self.n_sets(), output_ranges); // This modifies ans
 
         ans
+    }
+
+    pub(crate) fn push_all_labels_forward_parallel(&self, labels: &[u8], n_threads: usize) -> Vec<u8> {
+        todo!();
     }
 
     /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).
