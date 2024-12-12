@@ -2,6 +2,9 @@
 
 use crate::subsetseq::*;
 use crate::sbwt::*;
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 use simple_sds_sbwt::ops::Access;
 use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::ops::Vector;
@@ -130,6 +133,8 @@ impl LcsArray {
     /// 2n bytes of extra working space. The algorithm is described in the paper
     /// [Longest Common Prefix Arrays for Succinct k-spectra](https://doi.org/10.48550/arXiv.2306.04850).
     pub fn from_sbwt<SS: SubsetSeq + Sync>(sbwt: &SbwtIndex<SS>, n_threads: usize) -> Self {
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+
         // The array stores values in the range [0..k-1], so we need
         // ceil(log2(k)) = bits per element.
         let k = sbwt.k();
@@ -144,7 +149,6 @@ impl LcsArray {
         // The value of k is used to denote that a value has not been computed yet.
         // This is okay since all LCS value are strictly smaller than k.
         let mut lcs = vec![k as u8; sbwt.n_sets()]; 
-        let n_nodes = sbwt.n_sets();
 
         // Build the last column of the SBWT matrix
         log::info!("Building column {} of the SBWT matrix", k-1);
@@ -161,11 +165,13 @@ impl LcsArray {
             }
 
             log::info!("Storing LCS values of {}", round);
-            for i in 1..n_nodes {
-                if lcs[i] == k as u8 && labels_out[i] != labels_out[i-1] {
-                    lcs[i] = round as u8;
-                }
-            }
+            thread_pool.install(||{
+                lcs.par_iter_mut().enumerate().for_each(|(i, x)| {
+                    if *x == k as u8 && labels_out[i] != labels_out[i-1] {
+                        *x = round as u8;
+                    }
+                });
+            });
 
             (labels_in, labels_out) = (labels_out, labels_in);
         }
