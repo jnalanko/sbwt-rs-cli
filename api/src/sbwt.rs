@@ -6,6 +6,10 @@ use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
@@ -578,15 +582,52 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     /// (just the root of the graph) get a dollar.
     pub(crate) fn push_all_labels_forward(&self, labels: &[u8]) -> Vec<u8> {
         let mut ans = vec![b'$'; self.n_sets()];
-        let output_ranges = self.split_output_range_by_char(&mut ans);
+        let char_output_ranges = self.split_output_range_by_char(&mut ans);
 
-        self.push_labels_forward(labels, 0..self.n_sets(), output_ranges); // This modifies ans
+        self.push_labels_forward(labels, 0..self.n_sets(), char_output_ranges); // This modifies ans
 
         ans
     }
 
-    pub(crate) fn push_all_labels_forward_parallel(&self, labels: &[u8], n_threads: usize) -> Vec<u8> {
-        todo!();
+    pub(crate) fn push_all_labels_forward_parallel(&self, labels: &[u8], n_threads: usize) -> Vec<u8> 
+    where Self: Sync {
+        let mut output_range = vec![b'$'; self.n_sets()];
+        let mut remaining_char_output_ranges = self.split_output_range_by_char(&mut output_range);
+
+        let input_piece_len = self.n_sets().div_ceil(n_threads);
+
+        // Subdivide char output ranges for threads.
+        // For each thread one input sbwt range and four (= |ACGT|) output ranges. 
+        let mut thread_input_output_ranges = Vec::<(std::ops::Range<usize>, Vec::<&mut[u8]>)>::new();
+
+        for t in 0..n_threads {
+
+            let input_range_start = t*input_piece_len;
+            let input_range_end = std::cmp::min((t+1)*input_piece_len, self.n_sets());
+            let input_subrange = input_range_start..input_range_end;
+
+            let mut thread_output_subranges: Vec<&mut[u8]> = Vec::new();
+
+            let mut range_tails = Vec::<&mut[u8]>::new();
+            for (char_idx, output_range) in remaining_char_output_ranges.into_iter().enumerate() {
+
+                // The length of the output range is equal to the number of occurrences of the current character in the input range
+                let output_range_len = self.sbwt.rank(char_idx as u8, input_range_end) - self.sbwt.rank(char_idx as u8, input_range_start);
+                let (output_subrange, tail) = output_range.split_at_mut(output_range_len); 
+                range_tails.push(tail);
+
+                thread_output_subranges.push(output_subrange);
+            }
+            remaining_char_output_ranges = range_tails;
+            
+            thread_input_output_ranges.push((input_subrange, thread_output_subranges));
+        }
+
+        thread_input_output_ranges.into_par_iter().for_each(|(input_subrange, output_subranges)| {
+            self.push_labels_forward(&labels[input_subrange.clone()], input_subrange.clone(), output_subranges);
+        });
+
+        output_range
     }
 
     /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).
