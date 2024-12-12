@@ -133,6 +133,8 @@ impl LcsArray {
         // ceil(log2(k)) = bits per element.
         let k = sbwt.k();
         let bit_width = 64 - u64::leading_zeros((k as isize -1) as u64);
+
+        log::info!("Initializing...");
         let mut lcs = simple_sds_sbwt::int_vector::IntVector::with_len(sbwt.n_sets(), bit_width as usize, 0).unwrap();
         let n_nodes = sbwt.n_sets();
 
