@@ -20,11 +20,11 @@ impl sbwt::SeqStream for MySeqReader {
 }
 
 // sbwt is taken as mutable because we need to build select support if all_at_once is true
-fn dump_kmers<SS: SubsetSeq>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool, include_dummies: bool) {
+fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool, include_dummies: bool, n_threads: usize) {
     let mut stdout = BufWriter::new(io::stdout());
     if all_at_once {
         log::info!("Reconstructing the k-mers");
-        let concat = sbwt.reconstruct_padded_spectrum();
+        let concat = sbwt.reconstruct_padded_spectrum(n_threads);
         assert!(concat.len() % sbwt.k() == 0);
 
         log::info!("Dumping to stdout");
@@ -56,6 +56,7 @@ fn dump_kmers<SS: SubsetSeq>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool, includ
 
 fn dump_kmers_command(matches: &clap::ArgMatches){
 
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let include_dummies = matches.get_flag("include-dummy-kmers");
     let all_at_once = matches.get_flag("all-at-once");
@@ -71,7 +72,7 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
 
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            dump_kmers(&mut sbwt, all_at_once, include_dummies);
+            dump_kmers(&mut sbwt, all_at_once, include_dummies, n_threads);
         }
     };
 
@@ -125,6 +126,7 @@ fn build_command(matches: &clap::ArgMatches){
 }
 
 fn build_lcs_command(matches: &clap::ArgMatches) {
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
     let outfile = matches.get_one::<std::path::PathBuf>("output");
@@ -153,7 +155,7 @@ fn build_lcs_command(matches: &clap::ArgMatches) {
     log::info!("Computing the LCS array");
     let lcs = match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            LcsArray::from_sbwt(&sbwt)
+            LcsArray::from_sbwt(&sbwt, n_threads)
         }
     };
 
@@ -436,14 +438,14 @@ fn benchmark_command(matches: &clap::ArgMatches) {
 
 }
 
-fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Option<LcsArray>) {
+fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Option<LcsArray>, n_threads: usize) {
     let out = std::io::stdout();
     let mut out = std::io::BufWriter::new(out);
 
     log::info!("Preparing the de Bruijn graph");
     sbwt.build_select();
 
-    let dbg = Dbg::new(sbwt, lcs.as_ref());
+    let dbg = Dbg::new(sbwt, lcs.as_ref(), n_threads);
 
     log::info!("Dumping unitigs");
     dbg.parallel_export_unitigs(&mut out);
@@ -451,6 +453,7 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Opt
 
 fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
 
@@ -479,7 +482,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            dump_unitigs(&mut sbwt, &lcs);
+            dump_unitigs(&mut sbwt, &lcs, n_threads);
         }
     };
 
