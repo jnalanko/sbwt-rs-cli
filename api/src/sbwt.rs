@@ -650,8 +650,9 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         last.push(b'$');
         for c_i in 0..self.alphabet().len(){
             let count = self.sbwt().rank(c_i as u8, self.n_sets());
+            let c = self.alphabet()[c_i];
             for _ in 0..count {
-                last.push(self.alphabet()[c_i]);
+                last.push(c);
             }
         }
         assert_eq!(last.len(), self.n_sets());
