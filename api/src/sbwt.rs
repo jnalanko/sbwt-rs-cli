@@ -7,8 +7,6 @@ use byteorder::ReadBytesExt;
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
 use rayon::iter::IntoParallelIterator;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
@@ -497,7 +495,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     /// Reconstruct all k-mers in the [padded k-spectrum](#sbwt-graph) in the data structure.
     /// The reconstructed k-mers concatenated into a single ascii string in colexicographic order.
     /// The i-th k-mer starts at position i*k in the string.
-    pub fn reconstruct_padded_spectrum(&self) -> Vec<u8> {
+    pub fn reconstruct_padded_spectrum(&self, n_threads: usize) -> Vec<u8> 
+    where Self: Sync {
         let n_nodes = self.n_sets();
         let k = self.k;
 
@@ -510,7 +509,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         for round in 0..k {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
-                last = self.push_all_labels_forward(&last);
+                last = self.push_all_labels_forward(&last, n_threads);
             }
 
             for i in 0..n_nodes {
@@ -580,17 +579,9 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     /// The effect is this: if `labels` is a list of labels, one for each node in the SBWT in colex order, then the output
     /// is those labels pushed forward along the edges in the SBWT graph. Those nodes that do not have a predecessor
     /// (just the root of the graph) get a dollar.
-    pub(crate) fn push_all_labels_forward(&self, labels: &[u8]) -> Vec<u8> {
-        let mut ans = vec![b'$'; self.n_sets()];
-        let char_output_ranges = self.split_output_range_by_char(&mut ans);
-
-        self.push_labels_forward(labels, 0..self.n_sets(), char_output_ranges); // This modifies ans
-
-        ans
-    }
-
-    pub(crate) fn push_all_labels_forward_parallel(&self, labels: &[u8], n_threads: usize) -> Vec<u8> 
+    pub(crate) fn push_all_labels_forward(&self, labels: &[u8], n_threads: usize) -> Vec<u8> 
     where Self: Sync {
+
         let mut output_range = vec![b'$'; self.n_sets()];
         let mut remaining_char_output_ranges = self.split_output_range_by_char(&mut output_range);
 
@@ -623,8 +614,11 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             thread_input_output_ranges.push((input_subrange, thread_output_subranges));
         }
 
-        thread_input_output_ranges.into_par_iter().for_each(|(input_subrange, output_subranges)| {
-            self.push_labels_forward(&labels[input_subrange.clone()], input_subrange.clone(), output_subranges);
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+        thread_pool.install(||{
+            thread_input_output_ranges.into_par_iter().for_each(|(input_subrange, output_subranges)| {
+                self.push_labels_forward(&labels[input_subrange.clone()], input_subrange.clone(), output_subranges);
+            });
         });
 
         output_range
@@ -665,7 +659,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     } 
 
     // Internal function: marks the first k-mer of every (k-1)-suffix group.
-    pub(crate) fn mark_k_minus_1_mers(&self) -> bitvec::vec::BitVec {
+    pub(crate) fn mark_k_minus_1_mers(&self, n_threads: usize) -> bitvec::vec::BitVec 
+    where Self: Sync {
         let n_nodes = self.n_sets();
         let k = self.k();
 
@@ -681,7 +676,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
 
-                last = self.push_all_labels_forward(&last);
+                last = self.push_all_labels_forward(&last, n_threads);
             }
 
             for i in 1..n_nodes {
@@ -861,7 +856,7 @@ mod tests {
 
         let true_padded_spectrum: Vec<&[u8]> = vec![b"$$$$", b"$$$A", b"GAAA", b"TAAA", b"GGAA", b"GTAA", b"$ACA", b"AGGA", b"GGTA", b"$$AC", b"AAAG", b"ACAG", b"GTAG", b"AAGG", b"CAGG", b"TAGG", b"AAGT", b"AGGT"];
 
-        let reconstructed_padded_spectrum = sbwt.reconstruct_padded_spectrum();
+        let reconstructed_padded_spectrum = sbwt.reconstruct_padded_spectrum(3);
         sbwt.sbwt.build_select();
         #[allow(clippy::needless_range_loop)]
         for i in 0..18 {
@@ -923,8 +918,8 @@ mod tests {
         let ss = sbwt_index.sbwt().clone();
         let sbwt_index2 = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss, sbwt_index.n_sets(), sbwt_index.k(), sbwt_index.prefix_lookup_table.prefix_length);
 
-        let kmers1 = sbwt_index.reconstruct_padded_spectrum();
-        let kmers2 = sbwt_index2.reconstruct_padded_spectrum();
+        let kmers1 = sbwt_index.reconstruct_padded_spectrum(3);
+        let kmers2 = sbwt_index2.reconstruct_padded_spectrum(3);
         assert_eq!(kmers1, kmers2);
 
     }

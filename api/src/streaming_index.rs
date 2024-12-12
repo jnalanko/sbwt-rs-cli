@@ -128,7 +128,7 @@ impl LcsArray {
     /// of the k-mers. The algorithm works by inverting the SBWT column by column, which takes
     /// 2n bytes of extra working space. The algorithm is described in the paper
     /// [Longest Common Prefix Arrays for Succinct k-spectra](https://doi.org/10.48550/arXiv.2306.04850).
-    pub fn from_sbwt<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) -> Self {
+    pub fn from_sbwt<SS: SubsetSeq + Sync>(sbwt: &SbwtIndex<SS>, n_threads: usize) -> Self {
         // The array stores values in the range [0..k-1], so we need
         // ceil(log2(k)) = bits per element.
         let k = sbwt.k();
@@ -148,7 +148,7 @@ impl LcsArray {
         for round in 0..k {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
-                last = sbwt.push_all_labels_forward(&last);
+                last = sbwt.push_all_labels_forward(&last, n_threads);
             }
 
             for i in 1..n_nodes {
@@ -264,7 +264,7 @@ mod tests {
 
         let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         let lcs = lcs.unwrap();
-        let from_sbwt = LcsArray::from_sbwt(&sbwt);
+        let from_sbwt = LcsArray::from_sbwt(&sbwt, 3);
 
         let true_lcs = [0,0,1,3,2,2,1,1,1,0,0,2,2,1,3,3,0,2];
         for i in 0..lcs.len() {

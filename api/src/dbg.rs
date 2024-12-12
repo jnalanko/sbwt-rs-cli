@@ -101,7 +101,8 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// Initializes supports for de Bruijn graph operation based on the given [SbwtIndex].
     /// If the Lcs array of the SBWT is available, it can be given to significantly speed up construction.
     /// IMPORTANT: [select support][SbwtIndex::build_select()] must be built before calling this function. 
-    pub fn new(sbwt: &'a SbwtIndex<SS>, lcs: Option<&crate::streaming_index::LcsArray>) -> Self {
+    pub fn new(sbwt: &'a SbwtIndex<SS>, lcs: Option<&crate::streaming_index::LcsArray>, n_threads: usize) -> Self
+    where SS: Sync {
         assert!(sbwt.sbwt.has_select_support());
         let k_minus_1_marks = match lcs {
             Some(lcs) => {
@@ -110,7 +111,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
             }
             None => {
                 log::info!("No LCS-array given. Building (k-1)-mer marks with column inversion.");
-                sbwt.mark_k_minus_1_mers()
+                sbwt.mark_k_minus_1_mers(n_threads)
             }
         };
         let dummy_marks = Self::mark_dummies(sbwt);
@@ -377,7 +378,7 @@ mod tests {
 
         let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         sbwt.build_select();
-        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut output = Vec::<u8>::new();
         let out_cursor = std::io::Cursor::new(&mut output);
@@ -405,8 +406,8 @@ mod tests {
         sbwt.build_select();
 
         let lcs = lcs.unwrap();
-        let dbg = Dbg::new(&sbwt, Some(&lcs));
-        let dbg_without_lcs = Dbg::new(&sbwt, None);
+        let dbg = Dbg::new(&sbwt, Some(&lcs), 3);
+        let dbg_without_lcs = Dbg::new(&sbwt, None, 3);
 
         let true_dummy_marks = bitvec![1,1,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0];
         assert_eq!(dbg.dummy_marks, true_dummy_marks);
@@ -531,7 +532,7 @@ mod tests {
         seqs[2].extend(x2); // Make cyclic
 
         let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
-        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut unitig_ascii_out = Vec::<u8>::new();
         dbg.parallel_export_unitigs(std::io::Cursor::new(&mut unitig_ascii_out));
@@ -604,7 +605,7 @@ mod tests {
         seqs.dedup();
 
         let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
-        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         
         { // Check that node iterator iterates all k-mers (tests node_iterator, get_kmer)
