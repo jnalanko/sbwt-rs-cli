@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io;
 use std::io::BufWriter;
 use std::io::Write;
@@ -121,6 +122,46 @@ fn build_command(matches: &clap::ArgMatches){
         let lcs_bytes = lcs.serialize(&mut lcs_out).unwrap();
         log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt_kmers as f64);
     }
+}
+
+fn build_lcs_command(matches: &clap::ArgMatches) {
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+    let outfile = matches.get_one::<std::path::PathBuf>("output");
+    let outfile = match outfile {
+        Some(out) => out.clone(),
+        None => {
+            let mut f = indexfile.clone();
+            f.set_extension("lcs");
+            f
+        }
+    };
+
+    log::info!("The LCS array will be saved to {}", outfile.display());
+
+    let mut out = BufWriter::new(File::create(&outfile).unwrap());
+
+    // Read sbwt
+    log::info!("Loading the SBWT from {}", indexfile.display());
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
+
+    log::info!("Computing the LCS array");
+    let lcs = match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            LcsArray::from_sbwt(&sbwt)
+        }
+    };
+
+    log::info!("Writing to {}", outfile.display());
+    let n_bytes = lcs.serialize(&mut out).unwrap();
+
+    log::info!("{} bytes written", n_bytes);
+
 }
 
 fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], membership_only: bool){
@@ -465,6 +506,7 @@ fn main() {
             .action(clap::ArgAction::SetTrue)
         )
         .subcommand(clap::Command::new("build")
+            .about("Build the SBWT and possibly the LCS array")
             .arg_required_else_help(true)
             .arg(clap::Arg::new("input")
                 .help("Input fasta or fastq sequence file")
@@ -487,7 +529,7 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("build-lcs")
-                .help("Include the lcs array in the index (costs about log(k) bits SBWT node)")
+                .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
                 .short('l')
                 .long("build-lcs")
                 .action(clap::ArgAction::SetTrue)
@@ -523,6 +565,28 @@ fn main() {
                 .short('p')
                 .default_value("8")
                 .value_parser(clap::value_parser!(usize)))
+        )
+        .subcommand(clap::Command::new("build-lcs")
+            .arg_required_else_help(true)
+            .about("Build the LCS array given an existing SBWT. Note that it's also possible build the SBWT and the LCS at the same time with the build-command.")
+            .arg(clap::Arg::new("index")
+                .help("SBWT index file")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("output")
+                .help("The output filename. By default if the input is at index.sbwt, the output will be at index.lcs.")
+                .long("output")
+                .short('o')
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
         )
         .subcommand(clap::Command::new("benchmark")
             .about("Benchmark queries on the index")
@@ -687,6 +751,7 @@ fn main() {
 
     match matches.subcommand(){
         Some(("build", sub_matches)) => build_command(sub_matches),
+        Some(("build-lcs", sub_matches)) => build_lcs_command(sub_matches),
         Some(("lookup", sub_matches)) => lookup_query_command(sub_matches),
         Some(("matching-statistics", sub_matches)) => matching_statistics_command(sub_matches),
         Some(("benchmark", sub_matches)) => benchmark_command(sub_matches),
