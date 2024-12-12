@@ -3,6 +3,7 @@
 use crate::subsetseq::*;
 use crate::sbwt::*;
 use simple_sds_sbwt::ops::Access;
+use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::ops::Vector;
 use simple_sds_sbwt::serialize::Serialize;
 
@@ -134,8 +135,12 @@ impl LcsArray {
         let k = sbwt.k();
         let bit_width = 64 - u64::leading_zeros((k as isize -1) as u64);
 
+        assert!(k < 256); // Storing 1 byte per value before IntVector compression
+
         log::info!("Initializing...");
-        let mut lcs = simple_sds_sbwt::int_vector::IntVector::with_len(sbwt.n_sets(), bit_width as usize, 0).unwrap();
+        // The value of k is used to denote that a value has not been computed yet.
+        // This is okay since all LCS value are strictly smaller than k.
+        let mut lcs = vec![k as u8; sbwt.n_sets()]; 
         let n_nodes = sbwt.n_sets();
 
         // Build the last column of the SBWT matrix
@@ -143,9 +148,7 @@ impl LcsArray {
         let mut labels_in = sbwt.build_last_column(); 
         let mut labels_out = labels_in.clone();
 
-        let mut computed_values = bitvec::bitvec![0; sbwt.n_sets()];
-        lcs.set(0, 0);
-        computed_values.set(0, true);
+        lcs[0] = 0; // By definition
 
         // Iterate columns from right to left
         for round in 0..k {
@@ -156,16 +159,23 @@ impl LcsArray {
 
             log::info!("Storing LCS values of {}", round);
             for i in 1..n_nodes {
-                if !computed_values[i] && labels_out[i] != labels_out[i-1] {
-                    lcs.set(i, round as u64);
-                    computed_values.set(i, true);
+                if lcs[i] == k as u8 && labels_out[i] != labels_out[i-1] {
+                    lcs[i] = round as u8;
                 }
             }
 
             (labels_in, labels_out) = (labels_out, labels_in);
         }
 
-        Self{lcs}
+        log::info!("Compressing into log(k) bits per element");
+        drop(labels_in); // Free some memory
+        drop(labels_out); // Free some memory
+        let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(sbwt.n_sets(), bit_width as usize).unwrap();
+        for x in lcs {
+            compressed_lcs.push(x as u64);
+        }
+
+        Self{lcs: compressed_lcs}
 
     }
 
