@@ -466,9 +466,10 @@ fn benchmark_command(matches: &clap::ArgMatches) {
 
 }
 
-fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Option<LcsArray>, n_threads: usize) {
-    let out = std::io::stdout();
-    let mut out = std::io::BufWriter::new(out);
+fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&std::path::Path>, lcs: &Option<LcsArray>, n_threads: usize) {
+    let stdout = std::io::stdout();
+    let stdout = std::io::BufWriter::new(stdout);
+    let mut fileout = outfile.map(|f| BufWriter::new(File::create(f).unwrap()));
 
     log::info!("Preparing the de Bruijn graph");
     sbwt.build_select();
@@ -476,7 +477,10 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, lcs: &Opt
     let dbg = Dbg::new(sbwt, lcs.as_ref(), n_threads);
 
     log::info!("Dumping unitigs");
-    dbg.parallel_export_unitigs(&mut out);
+    match fileout {
+        Some(ref mut fileout) => dbg.parallel_export_unitigs(fileout),
+        None => dbg.parallel_export_unitigs(stdout),
+    }
 }
 
 fn dump_unitigs_command(matches: &clap::ArgMatches) {
@@ -484,6 +488,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let outfile = matches.get_one::<std::path::PathBuf>("output");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
@@ -510,7 +515,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            dump_unitigs(&mut sbwt, &lcs, n_threads);
+            dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
         }
     };
 
