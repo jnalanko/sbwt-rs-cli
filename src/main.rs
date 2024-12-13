@@ -21,7 +21,8 @@ impl sbwt::SeqStream for MySeqReader {
 }
 
 // sbwt is taken as mutable because we need to build select support if all_at_once is true
-fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool, include_dummies: bool, n_threads: usize) {
+fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&std::path::Path>, all_at_once: bool, include_dummies: bool, n_threads: usize) {
+    let mut fileout = outfile.map(|f| BufWriter::new(File::create(f).unwrap()));
     let mut stdout = BufWriter::new(io::stdout());
     if all_at_once {
         log::info!("Reconstructing the k-mers");
@@ -33,8 +34,16 @@ fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool,
         for i in 0..n_padded_kmers {
             let kmer = &concat[i*sbwt.k()..(i+1)*sbwt.k()];
             if include_dummies || kmer.iter().all(|&c| c != b'$') {
-                stdout.write_all(kmer).unwrap();
-                stdout.write_all(b"\n").unwrap();
+                match fileout {
+                    Some(ref mut fileout) => {
+                        fileout.write_all(kmer).unwrap();
+                        fileout.write_all(b"\n").unwrap();
+                    },
+                    None => {
+                        stdout.write_all(kmer).unwrap();
+                        stdout.write_all(b"\n").unwrap();
+                    }
+                }
             }
         }
     } else {
@@ -42,13 +51,20 @@ fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, all_at_once: bool,
         sbwt.build_select();
 
         log::info!("Dumping k-mers to stdout");
-        let mut buf = vec![0u8; sbwt.k()];
+        let mut buf = vec![0u8; sbwt.k() + 1];
         for i in 0..sbwt.n_sets() {
             buf.clear();
             sbwt.push_kmer_to_vec(i, &mut buf);
+            buf.push(b'\n');
             if include_dummies || buf.iter().all(|&c| c != b'$') {
-                stdout.write_all(&buf).unwrap();
-                stdout.write_all(b"\n").unwrap();
+                match fileout {
+                    Some(ref mut fileout) => {
+                        fileout.write_all(&buf).unwrap();
+                    },
+                    None => {
+                        stdout.write_all(&buf).unwrap();
+                    }
+                }
             }
         }
     }
@@ -62,6 +78,7 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
     let include_dummies = matches.get_flag("include-dummy-kmers");
     let all_at_once = matches.get_flag("all-at-once");
     let cpp_format = matches.get_flag("load-cpp-format");
+    let outfile = matches.get_one::<std::path::PathBuf>("output");
 
     // Don't care if there is LCS support or not
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
@@ -73,7 +90,7 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
 
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            dump_kmers(&mut sbwt, all_at_once, include_dummies, n_threads);
+            dump_kmers(&mut sbwt, outfile.map(|f| &**f), all_at_once, include_dummies, n_threads);
         }
     };
 
@@ -690,6 +707,12 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
+            .arg(clap::Arg::new("output")
+                .help("Output text file. Prints to stdout if not given.")
+                .short('o')
+                .long("output")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
             .arg(clap::Arg::new("include-dummy-kmers")
                 .help("Include the dollar-padded dummy k-mers required for the SBWT")
                 .short('d')
@@ -715,6 +738,12 @@ fn main() {
                 .short('i')
                 .long("index")
                 .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("output")
+                .help("Output text file. Prints to stdout if not given.")
+                .short('o')
+                .long("output")
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("load-cpp-format")
