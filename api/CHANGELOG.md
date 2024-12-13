@@ -4,7 +4,7 @@
 
 - Parallelise the subroutine `push_labels_forward`. This speeds up the k-mer dump, LCS array construction and DBG construction.
 - Add a CLI command `build-lcs` to build the LCS array from the SBWT on the command line.
-- Make CLI commands `lookup`, `matching-statistics`, `dump-kmers` and `dump-unitigs` all print to a file if an output file is not given.
+- Make CLI commands `lookup`, `matching-statistics`, `dump-kmers` and `dump-unitigs` all print to stdout if an output file is not given.
 
 ## v0.3.6
 
