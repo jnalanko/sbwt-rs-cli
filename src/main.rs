@@ -403,7 +403,7 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
     match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            matching_statistics(&sbwt, &lcs, queryfile, outfile)
+            matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| &**v))
         }
     };
 
