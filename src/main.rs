@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io;
+use std::io::stdout;
 use std::io::BufWriter;
 use std::io::Write;
 use sbwt::dbg::Dbg;
@@ -225,11 +226,13 @@ fn streaming_search<SS: SubsetSeq>(ss: &StreamingIndex<SbwtIndex<SS>, LcsArray>,
     }
 }
 
-fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: &std::path::Path, membership_only: bool) {
+// Writes to stdout if the outfile is not given
+fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: Option<&std::path::Path>, membership_only: bool) {
     log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
 
     let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
-    let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
+    let mut out = outfile.map(|f| std::io::BufWriter::new(std::fs::File::create(f).unwrap()));
+    let mut stdout = stdout();
 
     let streaming_index = lcs.as_ref().map(|lcs| StreamingIndex::new(sbwt, lcs)); 
 
@@ -249,7 +252,10 @@ fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, quer
         n_query_kmers += colex_ranks.len();
         n_found += colex_ranks.iter().fold(0_usize, |count, r| count + r.is_some() as usize);
 
-        report_lookup_results(&mut out, &colex_ranks, membership_only);
+        match out {
+            Some(ref mut out) => report_lookup_results(out, &colex_ranks, membership_only),
+            None => report_lookup_results(&mut stdout, &colex_ranks, membership_only)
+        }
 
         colex_ranks.clear();
 
@@ -265,7 +271,7 @@ fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, quer
 #[allow(non_snake_case)]
 fn lookup_query_command(matches: &clap::ArgMatches){
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output");
     let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
     let membership_only = matches.get_flag("membership-only");
     let cpp_format = matches.get_flag("load-cpp-format");
@@ -295,7 +301,7 @@ fn lookup_query_command(matches: &clap::ArgMatches){
 
     match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            lookup_query(&sbwt, lcs, queryfile, outfile, membership_only)
+            lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only)
         }
     };
 
@@ -625,10 +631,9 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("output")
-                .help("Output text file")
+                .help("Output text file. If not given, prints to stdout.")
                 .short('o')
                 .long("output")
-                .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("membership-only")
