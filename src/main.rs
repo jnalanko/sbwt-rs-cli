@@ -433,6 +433,7 @@ fn benchmark<SS: SubsetSeq>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
 
 fn benchmark_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let precalc_length = matches.get_one::<usize>("prefix-precalc-length");
     let cpp_format = matches.get_flag("load-cpp-format");
 
     // Read sbwt
@@ -458,8 +459,15 @@ fn benchmark_command(matches: &clap::ArgMatches) {
         }
     };
 
+
     match index {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            if let Some(p) = precalc_length {
+                log::info!("Rebuilding the precalc table with prefix length {}", p);
+                let new_table = PrefixLookupTable::new(&sbwt, *p);
+                sbwt.set_lookup_table(new_table);
+            }
+
             benchmark(sbwt, lcs);
         }
     };
@@ -638,6 +646,12 @@ fn main() {
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
                 .long("load-cpp-format")
                 .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("prefix-precalc-length")
+                .help("Disregard the precalc table that is stored in the index, and compute a new table with this prefix length." )
+                .long("prefix-precalc")
+                .short('p')
+                .value_parser(clap::value_parser!(usize))
             )
         )
         .subcommand(clap::Command::new("lookup")
