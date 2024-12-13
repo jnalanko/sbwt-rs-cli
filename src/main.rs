@@ -324,9 +324,10 @@ fn usize_to_ascii(mut x: usize, bytes: &mut[u8; 32]) -> usize {
     byte_idx
 }
 
-fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, queryfile: &std::path::Path, outfile: &std::path::Path) {
+fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, queryfile: &std::path::Path, outfile: Option<&std::path::Path>) {
     let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
-    let mut out = std::io::BufWriter::new(std::fs::File::create(outfile).unwrap());
+    let mut out = outfile.map(|f| std::io::BufWriter::new(std::fs::File::create(f).unwrap()));
+    let mut stdout = stdout();
 
     let streaming_index = StreamingIndex::new(sbwt, lcs);
 
@@ -354,7 +355,11 @@ fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, quer
             out_buffer.extend(&number_ascii_buffer[0..ascii_length]);
         }
         out_buffer.push(b'\n');
-        out.write_all(out_buffer.as_slice()).unwrap();
+
+        match out {
+            Some(ref mut out) => out.write_all(out_buffer.as_slice()).unwrap(),
+            None => stdout.write_all(out_buffer.as_slice()).unwrap(),
+        }
     }
 
     let total_elapsed = std::time::Instant::now() - start_time;
@@ -366,7 +371,7 @@ fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, quer
 
 fn matching_statistics_command(matches: &clap::ArgMatches){
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
-    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output");
     let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
 
@@ -665,10 +670,9 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("output")
-                .help("Output text file")
+                .help("Output text file. Prints to stdout if not given.")
                 .short('o')
                 .long("output")
-                .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("load-cpp-format")
