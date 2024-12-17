@@ -3,6 +3,7 @@ use std::io;
 use std::io::stdout;
 use std::io::BufWriter;
 use std::io::Write;
+use std::path::PathBuf;
 use sbwt::dbg::Dbg;
 use sbwt::*;
 use sbwt::benchmark;
@@ -426,15 +427,23 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
 }
 
-fn benchmark<SS: SubsetSeq>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
+fn benchmark<SS: SubsetSeq, W: Write>(sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>, json_out: Option<&mut W>) {
     log::info!("benchmarking index with k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
-    benchmark::benchmark_all(sbwt, lcs);
+    let results = benchmark::benchmark_all(sbwt, lcs);
+
+    // Write results in json if requested
+    if let Some(out) = json_out {
+        let json = serde_json::to_string(&results).unwrap();
+        out.write_all(json.as_bytes()).unwrap();
+        out.write_all(b"\n").unwrap();
+    };
 }
 
 fn benchmark_command(matches: &clap::ArgMatches) {
-    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let indexfile = matches.get_one::<PathBuf>("index").unwrap();
     let precalc_length = matches.get_one::<usize>("prefix-precalc-length");
     let cpp_format = matches.get_flag("load-cpp-format");
+    let json_outfile = matches.get_one::<PathBuf>("json-out");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
@@ -459,6 +468,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
         }
     };
 
+    let mut json_out = json_outfile.map(|path| File::create(path).unwrap());
 
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
@@ -468,7 +478,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
                 sbwt.set_lookup_table(new_table);
             }
 
-            let _results = benchmark(sbwt, lcs);
+            benchmark(sbwt, lcs, json_out.as_mut());
         }
     };
 
@@ -652,6 +662,12 @@ fn main() {
                 .long("prefix-precalc")
                 .short('p')
                 .value_parser(clap::value_parser!(usize))
+            )
+            .arg(clap::Arg::new("json-out")
+                .help("The results are written to this file in JSON format.")
+                .short('j')
+                .long("json-out")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
             )
         )
         .subcommand(clap::Command::new("lookup")

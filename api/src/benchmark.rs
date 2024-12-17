@@ -6,6 +6,7 @@ use rand::SeedableRng;
 use crate::streaming_index::StreamingIndex;
 use crate::{sbwt::SbwtIndex, streaming_index::LcsArray, subsetseq::SubsetSeq};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BenchmarkResults {
     n_indexed_kmers: usize,
     positive_single_lookup_ns: usize, // ns/kmer
