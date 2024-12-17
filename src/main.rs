@@ -468,7 +468,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
                 sbwt.set_lookup_table(new_table);
             }
 
-            benchmark(sbwt, lcs);
+            let _results = benchmark(sbwt, lcs);
         }
     };
 

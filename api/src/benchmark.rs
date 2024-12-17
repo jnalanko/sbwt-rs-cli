@@ -6,6 +6,14 @@ use rand::SeedableRng;
 use crate::streaming_index::StreamingIndex;
 use crate::{sbwt::SbwtIndex, streaming_index::LcsArray, subsetseq::SubsetSeq};
 
+pub struct BenchmarkResults {
+    n_indexed_kmers: usize,
+    positive_single_lookup_ns: usize, // ns/kmer
+    negative_single_lookup_ns: usize, // ns/kmer
+    streaming_lookup_ns: Option<usize>, // ns/kmer
+    access_ns: usize, // ns/kmer
+}
+
 fn sample_kmers<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, n_queries: usize) -> Vec<Vec<u8>> {
     let mut rng = StdRng::from_entropy();
     let mut queries = Vec::<Vec::<u8>>::new();
@@ -42,8 +50,8 @@ fn generate_random_kmers(n_queries: usize, k: usize, rng: &mut StdRng) -> Vec<Ve
     queries
 }
 
-
-fn benchmark_single_positive_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) {
+// Returns nanoseconds per k-mer
+fn benchmark_single_positive_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) -> usize {
 
     let n_queries = 1_000_000;
 
@@ -59,10 +67,12 @@ fn benchmark_single_positive_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) {
     let end_time = std::time::Instant::now();
     log::info!("Sum of answers: {}", checksum);
     println!("Elapsed time: {:.2} seconds", (end_time - start_time).as_secs_f64());
-    println!("{:.2} nanoseconds / k-mer", (end_time - start_time).as_nanos() as f64 / queries.len() as f64);
+    let nanos_per_kmer = (end_time - start_time).as_nanos() as f64 / queries.len() as f64;
+    println!("{:.2} nanoseconds / k-mer", nanos_per_kmer);
+    nanos_per_kmer.round() as usize
 }
 
-fn benchmark_streaming_random_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray) {
+fn benchmark_streaming_random_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray) -> usize {
     let n_queries = 100;
     let query_len = 10_000;
 
@@ -85,10 +95,13 @@ fn benchmark_streaming_random_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &L
     let end_time = std::time::Instant::now();
     log::info!("Sum of answers: {}", checksum);
     println!("Elapsed time: {:.2} seconds", (end_time - start_time).as_secs_f64());
-    println!("{:.2} nanoseconds / k-mer", (end_time - start_time).as_nanos() as f64 / n_kmers_queried as f64);
+    let nanos_per_kmer = (end_time - start_time).as_nanos() as f64 / n_kmers_queried as f64;
+    println!("{:.2} nanoseconds / k-mer", nanos_per_kmer);
+
+    nanos_per_kmer.round() as usize
 }
 
-fn benchmark_single_random_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) {
+fn benchmark_single_random_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) -> usize {
     
     let n_queries = 1_000_000;
     let mut rng = StdRng::from_entropy();
@@ -105,12 +118,14 @@ fn benchmark_single_random_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) {
     let end_time = std::time::Instant::now();
     log::info!("Sum of answers: {}", checksum);
     println!("Elapsed time: {:.2} seconds", (end_time - start_time).as_secs_f64());
-    println!("{:.2} nanoseconds / k-mer", (end_time - start_time).as_nanos() as f64 / queries.len() as f64);
+    let nanos_per_kmer = (end_time - start_time).as_nanos() as f64 / queries.len() as f64;
+    println!("{:.2} nanoseconds / k-mer", nanos_per_kmer);
 
+    nanos_per_kmer.round() as usize
 }
 
 // Assumes sbwt has select support
-fn benchmark_access<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>){
+fn benchmark_access<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>) -> usize {
     let n_queries = 1_000_000;
     let mut rng = StdRng::from_entropy();
     let queries = (0..n_queries).map(|_| rng.gen_range(0, sbwt.n_kmers())).collect::<Vec<usize>>();
@@ -127,23 +142,31 @@ fn benchmark_access<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>){
     let end_time = std::time::Instant::now();
     log::info!("Sum of answers: {}", checksum);
     println!("Elapsed time: {:.2} seconds", (end_time - start_time).as_secs_f64());
-    println!("{:.2} nanoseconds / k-mer", (end_time - start_time).as_nanos() as f64 / queries.len() as f64);
+    let nanos_per_kmer = (end_time - start_time).as_nanos() as f64 / queries.len() as f64;
+    println!("{:.2} nanoseconds / k-mer", nanos_per_kmer);
 
+    nanos_per_kmer.round() as usize
 }
 
 /// Bechmark various queries on the sbwt. If the LCS array is given, also benchmarks
 /// streaming search.
-pub fn benchmark_all<SS: SubsetSeq>(mut sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) {
+pub fn benchmark_all<SS: SubsetSeq>(mut sbwt: SbwtIndex<SS>, lcs: Option<LcsArray>) -> BenchmarkResults {
 
     log::info!("Preparing for benchmarks");
     sbwt.build_select();
-    benchmark_single_positive_query(&sbwt);
-    benchmark_single_random_query(&sbwt);
+    let single_pos = benchmark_single_positive_query(&sbwt);
+    let single_neg = benchmark_single_random_query(&sbwt);
 
-    if let Some(lcs) = lcs {
-        // Todo: streaming positive. Where do we get the queries?
-        benchmark_streaming_random_query(&sbwt, &lcs);
+    // Todo: streaming positive. Where do we get the queries?
+    let streaming = lcs.map(|lcs| benchmark_streaming_random_query(&sbwt, &lcs));
+
+    let access = benchmark_access(&sbwt);
+
+    BenchmarkResults {
+        n_indexed_kmers: sbwt.n_kmers(),
+        positive_single_lookup_ns: single_pos, 
+        negative_single_lookup_ns: single_neg, 
+        streaming_lookup_ns: streaming, 
+        access_ns: access
     }
-
-    benchmark_access(&sbwt);
 }
