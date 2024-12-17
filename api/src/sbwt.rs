@@ -78,6 +78,8 @@ use crate::util::DNA_ALPHABET;
 #[embed_doc_image::embed_doc_image("sbwt_sequence", "doc_images/sbwt_figure.drawio.svg")] 
 #[embed_doc_image::embed_doc_image("sbwt_search", "doc_images/sbwt_figure_with_search.drawio.png")] // This is as .png because there is a bug in vertical centering in the svg export of drawio.
 
+pub const CARGO_API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
 pub struct SbwtIndex<SS: SubsetSeq> {

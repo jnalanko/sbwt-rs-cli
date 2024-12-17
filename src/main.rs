@@ -825,6 +825,8 @@ fn main() {
     });
     builder.init();
 
+    log::info!("sbwt-rs-cli version {}, api version {}", env!("CARGO_PKG_VERSION"), sbwt::CARGO_API_VERSION);
+
     match matches.subcommand(){
         Some(("build", sub_matches)) => build_command(sub_matches),
         Some(("build-lcs", sub_matches)) => build_lcs_command(sub_matches),
