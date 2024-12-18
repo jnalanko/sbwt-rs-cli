@@ -6,6 +6,7 @@ mod cursors;
 mod kmer_chunk;
 
 use crate::kmer::LongKmer;
+use human_bytes::human_bytes;
 
 use std::{io::Seek, path::Path};
 
@@ -27,18 +28,18 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Splitting k-mers into bins");
         let (bin_files, n_bytes_in_bins) = kmer_splitter::split_to_bins::<B, IN>(seqs, k, mem_gb, n_threads, dedup_batches, temp_file_manager);
 
-        log::info!("Total size of k-mer bins: {} bytes", n_bytes_in_bins);
+        log::info!("Total size of k-mer bins: {} bytes ({})", n_bytes_in_bins, human_bytes(n_bytes_in_bins as f64));
 
         log::info!("Sorting and deduplicating bins");
         let (bin_files, n_bytes_after_dedup) = kmer_splitter::par_sort_and_dedup_bin_files::<B>(bin_files, mem_gb, n_threads);
 
-        log::info!("Total size of deduplicated k-mer bins: {} bytes", n_bytes_after_dedup);
+        log::info!("Total size of deduplicated k-mer bins: {} bytes ({})", n_bytes_after_dedup, human_bytes(n_bytes_after_dedup as f64));
 
         let mut kmers_file = temp_file_manager.create_new_file("kmers-", 10, ".bin");
         let concat_space_overhead = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
 
         let concat_space_peak = n_bytes_after_dedup + concat_space_overhead;
-        log::info!("Disk peak space during concatenation: {} bytes", concat_space_peak);
+        log::info!("Disk peak space during concatenation: {} bytes ({})", concat_space_peak, human_bytes(concat_space_peak as f64));
         kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
         let n_kmers = file_size(&kmers_file.path) / LongKmer::<B>::byte_size();
@@ -57,7 +58,8 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         dummies::write_to_disk(required_dummies, &mut dummy_file.file);
 
         let dummy_merge_peak = file_size(&kmers_file.path) + file_size(&dummy_file.path);
-        log::info!("Temporary disk space peak: {} bytes", std::cmp::max(dummy_merge_peak, concat_space_peak));
+        let disk_peak_total = std::cmp::max(dummy_merge_peak, concat_space_peak);
+        log::info!("Temporary disk space peak: {} bytes ({})", disk_peak_total, human_bytes(disk_peak_total as f64));
 
         log::info!("Constructing the sbwt subset sequence");
 
