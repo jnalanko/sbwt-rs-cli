@@ -31,9 +31,9 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Total size of deduplicated k-mer bins: {} bytes", n_bytes_after_dedup);
 
         let mut kmers_file = temp_file_manager.create_new_file("kmers-", 10, ".bin");
-        let concat_space_peak = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
+        let concat_space_overhead = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
 
-        log::info!("Disk peak space during concatenation: {} bytes", concat_space_peak);
+        log::info!("Disk peak space during concatenation: {} bytes", n_bytes_after_dedup + concat_space_overhead);
         kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
         let n_kmers = std::fs::metadata(&kmers_file.path).unwrap().len() as usize / LongKmer::<B>::byte_size();
