@@ -7,9 +7,13 @@ mod kmer_chunk;
 
 use crate::kmer::LongKmer;
 
-use std::io::Seek;
+use std::{io::Seek, path::Path};
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, tempfile::TempFileManager, util::DNA_ALPHABET};
+
+fn file_size(path: &Path) -> usize {
+    std::fs::metadata(path).unwrap().len() as usize
+}
 
 /// Build using bitpacked k-mer sorting. See [SbwtIndexBuilder](crate::builder::SbwtIndexBuilder) for a wrapper with a more 
 /// user-friendly interface. B is the number u64 words in a k-mer.
@@ -33,10 +37,11 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         let mut kmers_file = temp_file_manager.create_new_file("kmers-", 10, ".bin");
         let concat_space_overhead = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
 
-        log::info!("Disk peak space during concatenation: {} bytes", n_bytes_after_dedup + concat_space_overhead);
+        let concat_space_peak = n_bytes_after_dedup + concat_space_overhead;
+        log::info!("Disk peak space during concatenation: {} bytes", concat_space_peak);
         kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-        let n_kmers = std::fs::metadata(&kmers_file.path).unwrap().len() as usize / LongKmer::<B>::byte_size();
+        let n_kmers = file_size(&kmers_file.path) / LongKmer::<B>::byte_size();
 
         log::info!("{} distinct k-mers found", n_kmers);
 
@@ -47,9 +52,13 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         let n = n_kmers + required_dummies.len();
 
         // Write dummies to disk
+        log::info!("Writing dummies to disk");
         let mut dummy_file = temp_file_manager.create_new_file("dummies-", 10, ".bin");
         dummies::write_to_disk(required_dummies, &mut dummy_file.file);
-        
+
+        let dummy_merge_peak = file_size(&kmers_file.path) + file_size(&dummy_file.path);
+        log::info!("Temporary disk space peak: {} bytes", std::cmp::max(dummy_merge_peak, concat_space_peak));
+
         log::info!("Constructing the sbwt subset sequence");
 
         let char_cursors = cursors::init_char_cursors::<B>(&dummy_file.path, &kmers_file.path, k, sigma);
@@ -61,6 +70,9 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         );
 
         let (rawrows, lcs) = cursors::build_sbwt_bit_vectors(global_cursor, char_cursors, n, k, sigma, build_lcs);
+
+        drop(kmers_file); // Free disk space
+        drop(dummy_file); // Free disk space
 
         // Create the C array
         #[allow(non_snake_case)] // C-array is an established convention in BWT indexes

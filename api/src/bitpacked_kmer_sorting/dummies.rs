@@ -81,7 +81,8 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
 
 }
 
-pub fn write_to_disk<const B: usize>(dummies: Vec<(LongKmer::<B>, u8)>, writer: &mut std::fs::File){   
+// Returns the number of bytes written
+pub fn write_to_disk<const B: usize>(dummies: Vec<(LongKmer::<B>, u8)>, writer: &mut std::fs::File){ 
     let mut bw = BufWriter::new(writer);
     for (kmer, len) in dummies.iter(){
         kmer.serialize(&mut bw).unwrap();
