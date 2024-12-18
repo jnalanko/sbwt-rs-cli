@@ -19,7 +19,8 @@ fn colex_sorted_binmers(bin_prefix_len: usize) -> Vec<Vec<u8>> {
     binmers
 }
 
-pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, temp_file_manager: &mut TempFileManager) -> Vec<TempFile>{
+// Returns the files of the bins, and the total number of bytes written to the files.
+pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, temp_file_manager: &mut TempFileManager) -> (Vec<TempFile>, usize){
 
     // Suppose we have a memory budget of m bytes and t threads.
     // Suppose each k-mer takes s bytes and there are 64 bins.
@@ -123,16 +124,17 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
 
 
         let writer_handle = thread::spawn( move || {
+            let mut n_bytes_written = 0_usize;
             while let Ok(batch) = writer_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
                     let bin_file = &mut bin_writers[bin_id];
                     for kmer in batch{
-                        kmer.serialize(bin_file).unwrap(); // Todo: write all at once
+                        n_bytes_written += kmer.serialize(bin_file).unwrap(); // Todo: write all at once
                     }
                 }
             }
-            bin_writers
+            (bin_writers, n_bytes_written)
         });
 
         producer_handle.join().unwrap();
@@ -142,19 +144,20 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
         }
         drop(encoder_out); // Close the channel
 
-        // Return the TempFiles
-        let writers = writer_handle.join().unwrap();
+        // Return the TempFiles and the total number of bytes written to them
+        let (writers, n_bytes_written) = writer_handle.join().unwrap();
         let mut writers: Vec<TempFile> = writers.into_iter().map(|w| w.into_inner().unwrap()).collect();
         for w in writers.iter_mut(){
             w.file.seek(std::io::SeekFrom::Start(0)).unwrap();
         }
-        writers
+
+        (writers, n_bytes_written)
 
     })
 }
 
-// Overwrite the files with sorted and deduplicates files. Returns back the files after overwriting.
-pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, mem_gb: usize, n_threads: usize) -> Vec<TempFile> {
+// Overwrite the files with sorted and deduplicates files. Returns back the files after overwriting, and their total size in the end.
+pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, mem_gb: usize, n_threads: usize) -> (Vec<TempFile>, usize) {
 
     let filesizes = bin_files.iter().map(|f| f.path.metadata().unwrap().len() as usize).collect::<Vec<usize>>();
     let mut files_and_sizes = bin_files.into_iter().enumerate().map(|(i, f)| (f, filesizes[i], i)).collect::<Vec<(TempFile, usize, usize)>>();
@@ -200,7 +203,7 @@ pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, me
         drop(queue_sender); // Close the channel
     });
 
-    let mut consumer_handles = Vec::<thread::JoinHandle<Vec::<(TempFile, usize)>>>::new();
+    let mut consumer_handles = Vec::<thread::JoinHandle<Vec::<(TempFile, usize, usize)>>>::new(); // (file, file index, bytes in file)
 
     // Spawn consumers
     for _ in 0..n_threads{
@@ -208,9 +211,11 @@ pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, me
         let producer_notify = producer_notify.clone();
 
         consumer_handles.push(std::thread::spawn( move || {
-            let mut processed_files = Vec::<(TempFile, usize)>::new(); // File, index
+            let mut processed_files = Vec::<(TempFile, usize, usize)>::new(); // (File, index), number of bytes in file
             while let Ok((mut f, s, i)) = recv_clone.recv(){
+                let mut n_bytes_written = 0_usize;
                 // Using debug log level as a more verbose info level
+
                 log::debug!("Sorting bin {} of size {}", f.path.display(), s);
                 let mut reader = std::io::BufReader::new(&f.file);
                 let chunk = KmerChunk::<B>::load(&mut reader).unwrap();
@@ -222,7 +227,7 @@ pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, me
                 f.file.set_len(0).unwrap();
                 f.file.seek(std::io::SeekFrom::Start(0)).unwrap();
                 let chunk_out = std::io::BufWriter::new(&mut f);
-                chunk.serialize(chunk_out).unwrap();
+                n_bytes_written += chunk.serialize(chunk_out).unwrap();
                 f.flush().unwrap();
                 f.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
@@ -230,32 +235,38 @@ pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, me
                 // new work can possibly be pushed to the queue.
                 let _ = producer_notify.send(s); // This may fail if the producer has already exited. That is ok.
 
-                processed_files.push((f,i));
+                processed_files.push((f,i,n_bytes_written));
             }
             processed_files // Return to owner
         }));
     }
 
-    let mut processed_files = Vec::<(TempFile, usize)>::new();
+    let mut processed_files = Vec::<(TempFile, usize, usize)>::new();
     producer_handle.join().unwrap();
     for h in consumer_handles{
         processed_files.extend(h.join().unwrap());
     }
-    processed_files.sort_by(|(_, i1), (_, i2)| i1.cmp(i2));
+    processed_files.sort_by(|(_, i1, _), (_, i2, _)| i1.cmp(i2));
 
-    processed_files.into_iter().map(|(f,_)| f).collect() // Return to owner
+    let total_file_size = processed_files.iter().fold(0_usize, |acc, (_,_,size)| acc + size);
+
+    (processed_files.into_iter().map(|(f,_, _)| f).collect(), total_file_size) // Return to owner
 
 }
 
 // The original files are deleted
-pub fn concat_files(infiles: Vec<TempFile>, out_writer: &mut impl std::io::Write){
+// Returns the disk overhead = size of largest file
+pub fn concat_files(infiles: Vec<TempFile>, out_writer: &mut impl std::io::Write) -> usize {
     let mut bw = BufWriter::new(out_writer);
+    let mut max_file_len = 0_usize;
     for mut fp in infiles {
         let mut reader = std::io::BufReader::new(&mut fp.file);
-        std::io::copy(&mut reader, &mut bw).unwrap();
+        let n_bytes = std::io::copy(&mut reader, &mut bw).unwrap();
+        max_file_len = std::cmp::max(max_file_len, n_bytes as usize);
         // fp is dropped here, which deletes the file
     }
     bw.flush().unwrap();
+    max_file_len
 }
 
 mod tests {
