@@ -8,7 +8,7 @@ mod kmer_chunk;
 use crate::kmer::LongKmer;
 use human_bytes::human_bytes;
 
-use std::{io::Seek, path::Path};
+use std::{cmp::max, io::Seek, path::Path};
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, tempfile::TempFileManager, util::DNA_ALPHABET};
 
@@ -58,7 +58,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         dummies::write_to_disk(required_dummies, &mut dummy_file.file);
 
         let dummy_merge_peak = file_size(&kmers_file.path) + file_size(&dummy_file.path);
-        let disk_peak_total = std::cmp::max(dummy_merge_peak, concat_space_peak);
+        let disk_peak_total = max(max(dummy_merge_peak, concat_space_peak), n_bytes_in_bins);
         log::info!("Temporary disk space peak: {} bytes ({})", disk_peak_total, human_bytes(disk_peak_total as f64));
 
         log::info!("Constructing the sbwt subset sequence");
