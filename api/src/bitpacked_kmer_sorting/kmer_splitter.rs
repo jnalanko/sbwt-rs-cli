@@ -125,7 +125,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
 
         let writer_handle = thread::spawn( move || {
             let mut n_bytes_written = 0_usize;
-            let last_log_time = std::time::SystemTime::now();
+            let mut last_log_time = std::time::SystemTime::now();
             let log_interval_seconds = 10; // Write to log at most every this many seconds
             while let Ok(batch) = writer_in.recv(){
                 if !batch.is_empty() {
@@ -138,6 +138,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
 
                 if std::time::SystemTime::now().duration_since(last_log_time).is_ok_and(|x| x.as_secs() >= log_interval_seconds) {
                     log::debug!("total {} written to disk", human_bytes::human_bytes(n_bytes_written as f64));
+                    last_log_time = std::time::SystemTime::now();
                 }
             }
             (bin_writers, n_bytes_written)
