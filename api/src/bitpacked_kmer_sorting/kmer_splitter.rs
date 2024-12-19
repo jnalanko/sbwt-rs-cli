@@ -125,6 +125,8 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
 
         let writer_handle = thread::spawn( move || {
             let mut n_bytes_written = 0_usize;
+            let last_log_time = std::time::SystemTime::now();
+            let log_interval_seconds = 10; // Write to log at most every this many seconds
             while let Ok(batch) = writer_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
@@ -133,7 +135,10 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                         n_bytes_written += kmer.serialize(bin_file).unwrap(); // Todo: write all at once
                     }
                 }
-                log::debug!("total {} written to disk", human_bytes::human_bytes(n_bytes_written as f64));
+
+                if std::time::SystemTime::now().duration_since(last_log_time).is_ok_and(|x| x.as_secs() >= log_interval_seconds) {
+                    log::debug!("total {} written to disk", human_bytes::human_bytes(n_bytes_written as f64));
+                }
             }
             (bin_writers, n_bytes_written)
         });
