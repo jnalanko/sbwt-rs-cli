@@ -133,6 +133,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                         n_bytes_written += kmer.serialize(bin_file).unwrap(); // Todo: write all at once
                     }
                 }
+                log::debug!("total {} written to disk", human_bytes::human_bytes(n_bytes_written as f64));
             }
             (bin_writers, n_bytes_written)
         });
