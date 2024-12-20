@@ -55,7 +55,9 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
         k,
     ); // New global cursor
 
+
     // Todo: stream to memory and sort there
+    log::info!("Building all prefixes of source nodes");
     let n_source_nodes = has_predecessor.len() - has_predecessor.count_ones();
     let mut required_dummies = Vec::<(LongKmer::<B>, u8)>::with_capacity(n_source_nodes * k + 1); // Pairs (data, length)
 
