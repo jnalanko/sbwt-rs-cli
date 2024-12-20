@@ -26,6 +26,7 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
         k,
     );
 
+    log::info!("Identifying k-mers without predecessors");
     for (x, _) in global_cursor{
         // x is reversed
         for c in 0..(sigma as u8){
@@ -55,7 +56,8 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
     ); // New global cursor
 
     // Todo: stream to memory and sort there
-    let mut required_dummies = Vec::<(LongKmer::<B>, u8)>::new(); // Pairs (data, length)
+    let n_source_nodes = has_predecessor.len() - has_predecessor.count_ones();
+    let mut required_dummies = Vec::<(LongKmer::<B>, u8)>::with_capacity(n_source_nodes * k + 1); // Pairs (data, length)
 
     while let Some((x, _)) = global_cursor.peek(){
         if !has_predecessor.bit(global_cursor.nondummy_position()){
@@ -69,11 +71,12 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
         global_cursor.next(); // Advance
     }
 
-    // We always assume that the empty k-mer exists. This assumption is reflected in the C-arrya
+    // We always assume that the empty k-mer exists. This assumption is reflected in the C-array
     // later, which adds one "ghost dollar" count to all counts.
     required_dummies.push((LongKmer::<B>::from_ascii(b"").unwrap(), 0));
 
-    required_dummies.par_sort();
+    log::info!("Sorting and deduplicating dummies");
+    required_dummies.par_sort_unstable();
     required_dummies.dedup();
     required_dummies.shrink_to_fit();
     required_dummies
