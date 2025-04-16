@@ -579,11 +579,11 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         output_ranges
     }
 
-    /// Internal function. A wrapper around [SbwtIndex::push_labels_forward] that works the full range over all of the SBWT.
+    /// Push labels forward along the SBWT graph.
     /// The effect is this: if `labels_in` is a list of labels, one for each node in the SBWT in colex order, then the output
     /// is those labels pushed forward along the edges in the SBWT graph. Those nodes that do not have a predecessor
     /// (just the root of the graph) get a dollar.
-    pub(crate) fn push_all_labels_forward(&self, labels_in: &[u8], labels_out: &mut [u8], n_threads: usize) 
+    pub fn push_all_labels_forward(&self, labels_in: &[u8], labels_out: &mut [u8], n_threads: usize) 
     where Self: Sync {
 
         //let mut output_range = vec![b'$'; self.n_sets()];
