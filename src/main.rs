@@ -542,19 +542,19 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 }
 
 // Assumes there is at least one 1-bit
-fn leading_zeros(s: &BitSlice<u8, Lsb0>) -> usize {
+fn leading_zeros(s: &BitSlice) -> usize {
     s.first_one().unwrap()
 }
 
-fn refine_segmentation(s1: BitVec<u8, Lsb0>, s2: BitVec<u8, Lsb0>, chars1: &[u8], chars2: &[u8]) -> (BitVec<u8, Lsb0>, BitVec<u8, Lsb0>) {
+fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8]) -> (BitVec, BitVec) {
     let mut s1_i = 0_usize; // Index in s1
     let mut s2_i = 0_usize; // Index in s2
 
     let mut c1_i = 0_usize; // Index in chars1
     let mut c2_i = 0_usize; // Index in chars2
 
-    let mut out1 = bitvec![u8, Lsb0;];
-    let mut out2 = bitvec![u8, Lsb0;];
+    let mut out1 = bitvec![];
+    let mut out2 = bitvec![];
 
     while s1_i < s1.len() {
         assert!(s2_i < s2.len());
@@ -635,8 +635,8 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     // Empty ranges are allowed.
 
     // Initialize unary concatenations with empty ranges
-    let mut s1 = bitvec![u8, Lsb0; 0; index1.n_sets()];
-    let mut s2 = bitvec![u8, Lsb0; 0; index2.n_sets()];
+    let mut s1 = bitvec![0; index1.n_sets()];
+    let mut s2 = bitvec![0; index2.n_sets()];
     s1.push(true);
     s2.push(true);
 
