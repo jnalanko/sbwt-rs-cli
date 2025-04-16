@@ -646,8 +646,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         }
     }
 
-    /// Internal function: builds the last column of the SBWT matrix.
-    pub(crate) fn build_last_column(&self) -> Vec<u8> {
+    /// Build the last column of the SBWT matrix.
+    pub fn build_last_column(&self) -> Vec<u8> {
         let mut last = Vec::<u8>::with_capacity(self.n_sets());
         last.push(b'$');
         for c_i in 0..self.alphabet().len(){

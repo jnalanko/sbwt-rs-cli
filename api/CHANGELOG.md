@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.9
+
+- Make `build_last_column` public.
+
 ## v0.3.8
 
 - Add disk usage reporting during construction.
