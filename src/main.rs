@@ -546,7 +546,6 @@ fn leading_zeros(s: &BitSlice<u8, Lsb0>) -> usize {
     s.first_one().unwrap()
 }
 
-// Alphabet must include the dollar!
 fn refine_segmentation(s1: BitVec<u8, Lsb0>, s2: BitVec<u8, Lsb0>, chars1: &[u8], chars2: &[u8]) -> (BitVec<u8, Lsb0>, BitVec<u8, Lsb0>) {
     let mut s1_i = 0_usize; // Index in s1
     let mut s2_i = 0_usize; // Index in s2
