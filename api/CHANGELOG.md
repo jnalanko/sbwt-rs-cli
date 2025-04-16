@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.10
+
+- Fix `push_labels_forward` behavior at root: now fills in dollars, as documentation says.
+
 ## v0.3.9
 
 - Make `build_last_column` public.

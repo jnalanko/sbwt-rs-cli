@@ -586,7 +586,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     pub fn push_all_labels_forward(&self, labels_in: &[u8], labels_out: &mut [u8], n_threads: usize) 
     where Self: Sync {
 
-        //let mut output_range = vec![b'$'; self.n_sets()];
+        labels_out[0] = b'$'; // The root has no predecessor so it always gets a dollar.
         let mut remaining_char_output_ranges = self.split_output_range_by_char(labels_out);
 
         let input_piece_len = self.n_sets().div_ceil(n_threads);
