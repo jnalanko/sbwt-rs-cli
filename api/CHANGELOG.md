@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.8
+
+- Make `push_labels_forward` public.
+
 ## v0.3.7
 
 - Parallelise the subroutine `push_labels_forward`. This speeds up the k-mer dump, LCS array construction and DBG construction.

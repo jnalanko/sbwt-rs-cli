@@ -539,6 +539,33 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
 }
 
+fn jaccard_command(matches: &clap::ArgMatches) {
+
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
+    let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+
+    // Read sbwts
+    let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
+    let index1 = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index1_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index1_reader).unwrap()
+    };
+
+    let mut index2_reader = std::io::BufReader::new(std::fs::File::open(sbwt2_path).unwrap());
+    let index2 = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index2_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index2_reader).unwrap()
+    };
+
+    let SbwtIndexVariant::SubsetMatrix(index1) = index1;
+    let SbwtIndexVariant::SubsetMatrix(index2) = index2;
+
+}
+
 fn main() {
 
     let cli = clap::Command::new("sbwt")
@@ -733,6 +760,25 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("jaccard")
+            .arg_required_else_help(true)
+            .about("Compute the Jaccard distance of the k-mer sets in two given sbwt index files.")
+            .arg(clap::Arg::new("sbwt1")
+                .help("The first SBWT index file")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("sbwt2")
+                .help("The second SBWT index file")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         .subcommand(clap::Command::new("dump-kmers")
             .about("Prints all k-mer strings in colex order, one per line.")
             .arg_required_else_help(true)
@@ -832,6 +878,7 @@ fn main() {
         Some(("build-lcs", sub_matches)) => build_lcs_command(sub_matches),
         Some(("lookup", sub_matches)) => lookup_query_command(sub_matches),
         Some(("matching-statistics", sub_matches)) => matching_statistics_command(sub_matches),
+        Some(("jaccard", sub_matches)) => jaccard_command(sub_matches),
         Some(("benchmark", sub_matches)) => benchmark_command(sub_matches),
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
