@@ -658,10 +658,7 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     alphabet.extend_from_slice(index1.alphabet());
 
     for round in 0..k {
-        dbg!(&String::from_utf8_lossy(&chars1));
-        dbg!(&String::from_utf8_lossy(&chars2));
-        dbg!(&s1.to_string());
-        dbg!(&s2.to_string());
+        log::info!("Round {}/{}", round+1, k);
 
         let new_arrays = refine_segmentation(s1, s2, &chars1, &chars2, &alphabet);
         (s1, s2) = new_arrays;
@@ -708,8 +705,9 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     assert_eq!(s1_i, s1.len());
     assert_eq!(s2_i, s2.len());
 
-    // TODO TODO: BUG! DO NOT COUNT DUMMY NODES 
     let jaccard = intersection_size as f64 / union_size as f64;
+    println!("Intersection size: {}", intersection_size);
+    println!("Union size: {}", union_size);
     println!("Jaccard index: {}", jaccard);
 }
 
