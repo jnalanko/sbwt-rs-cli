@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::fs::File;
 use std::io;
 use std::io::stdout;
@@ -546,7 +547,7 @@ fn leading_zeros(s: &BitSlice<u8, Lsb0>) -> usize {
 }
 
 // Alphabet must include the dollar!
-fn refine_segmentation(s1: BitVec<u8, Lsb0>, s2: BitVec<u8, Lsb0>, chars1: &[u8], chars2: &[u8], alphabet: &[u8]) -> (BitVec<u8, Lsb0>, BitVec<u8, Lsb0>) {
+fn refine_segmentation(s1: BitVec<u8, Lsb0>, s2: BitVec<u8, Lsb0>, chars1: &[u8], chars2: &[u8]) -> (BitVec<u8, Lsb0>, BitVec<u8, Lsb0>) {
     let mut s1_i = 0_usize; // Index in s1
     let mut s2_i = 0_usize; // Index in s2
 
@@ -565,32 +566,29 @@ fn refine_segmentation(s1: BitVec<u8, Lsb0>, s2: BitVec<u8, Lsb0>, chars1: &[u8]
         let c1_end = c1_i + len1; // One past the end
         let c2_end = c2_i + len2; // One past the end
 
-        for &c in alphabet {
-            // Count how many times c occurs on each side
-            let mut count1 = 0_usize;
-            let mut count2 = 0_usize;
+        while c1_i < c1_end || c2_i < c2_end {
+            let c1 = if c1_i == c1_end { u8::MAX } else { chars1[c1_i] };
+            let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
+            let c = min(c1,c2);
+
             while c1_i < c1_end && chars1[c1_i] == c {
-                count1 += 1;
                 c1_i += 1;
                 out1.push(false); // Unary bit
             }
 
             while c2_i < c2_end && chars2[c2_i] == c {
-                count2 += 1;
                 c2_i += 1;
                 out2.push(false); // Unary bit
             }
 
-            if count1 > 0 || count2 > 0 {
-                // Terminate unary representations
-                out1.push(true);
-                out2.push(true);
-            }
-            
+            // Terminate unary representations
+            out1.push(true);
+            out2.push(true);
+
         }
 
-        assert_eq!(c1_i, c1_end); // Otherwise alphabet was incomplete?
-        assert_eq!(c2_i, c2_end); // Otherwise alphabet was incomplete?
+        assert_eq!(c1_i, c1_end);
+        assert_eq!(c2_i, c2_end);
 
         s1_i += len1 + 1;
         s2_i += len2 + 1;
@@ -649,14 +647,10 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     let mut temp_char_buf_1 = vec![0u8; chars1.len()];
     let mut temp_char_buf_2 = vec![0u8; chars2.len()];
 
-    assert_eq!(index1.alphabet(), index2.alphabet());
-    let mut alphabet = vec![b'$'];
-    alphabet.extend_from_slice(index1.alphabet());
-
     for round in 0..k {
         log::info!("Round {}/{}", round+1, k);
 
-        let new_arrays = refine_segmentation(s1, s2, &chars1, &chars2, &alphabet);
+        let new_arrays = refine_segmentation(s1, s2, &chars1, &chars2);
         (s1, s2) = new_arrays;
 
         if round != k-1 {
