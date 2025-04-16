@@ -542,11 +542,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
 // Assumes there is at least one 1-bit
 fn leading_zeros(s: &BitSlice<u8, Msb0>) -> usize {
-    let mut x = 0_usize;
-    while s.get(x).unwrap() == false {
-        x += 1;
-    }
-    x
+    s.first_one().unwrap()
 }
 
 // Alphabet must include the dollar!
