@@ -13,9 +13,10 @@ path = "src/main.rs"
 [dependencies]
 clap = "4.4"
 jseqio = "0.1.2" 
-sbwt = {version = "0.3.4", path = "./api"}
+sbwt = {version = "0.3.9", path = "./api"}
 env_logger = "0.10"
 log = "0.4"
 byteorder = "1.5"
 chrono = "0.4"
 serde_json = "1.0"
+bitvec = "1.0.1"
