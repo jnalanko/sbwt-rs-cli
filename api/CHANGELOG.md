@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.11
+
+- Fix SbwtIndex documentation not showing up.
+
 ## v0.3.10
 
 - Fix `push_labels_forward` behavior at root: now fills in dollars, as documentation says.

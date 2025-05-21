@@ -16,6 +16,8 @@ use crate::util;
 use crate::util::ACGT_TO_0123;
 use crate::util::DNA_ALPHABET;
 
+pub const CARGO_API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The SBWT index data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder). For the [SubsetSeq] trait implementation,  we recommend using the bit matrix implementation [SubsetMatrix]. 
 ///
 /// # SBWT index 
@@ -77,8 +79,6 @@ use crate::util::DNA_ALPHABET;
 #[embed_doc_image::embed_doc_image("sbwt_graph", "doc_images/sbwt_graph.svg")] 
 #[embed_doc_image::embed_doc_image("sbwt_sequence", "doc_images/sbwt_figure.drawio.svg")] 
 #[embed_doc_image::embed_doc_image("sbwt_search", "doc_images/sbwt_figure_with_search.drawio.png")] // This is as .png because there is a bug in vertical centering in the svg export of drawio.
-
-pub const CARGO_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
