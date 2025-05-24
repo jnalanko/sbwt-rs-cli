@@ -498,8 +498,8 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: 
 
     log::info!("Dumping unitigs");
     match fileout {
-        Some(ref mut fileout) => dbg.parallel_export_unitigs(fileout),
-        None => dbg.parallel_export_unitigs(stdout),
+        Some(ref mut fileout) => dbg.parallel_export_unitigs(fileout, n_threads),
+        None => dbg.parallel_export_unitigs(stdout, n_threads),
     }
 }
 
