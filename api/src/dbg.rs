@@ -271,113 +271,80 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     // is given the nodes in the unitig in order, and the string label of the unitig as &[u8].
     // The starting point of cyclic unitigs may vary nondeterministically between calls because
     // of parallelism.
-    pub fn iter_unitigs_with_callback<F: Fn(&[Node], &[u8]) + Send + Sync + 'static>(&self, callback: F, n_threads: usize){
+    pub fn iter_unitigs_with_callback<F: Fn(&[Node], &[u8]) + Send + Sync>(&self, callback: F, n_threads: usize){
 
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
         thread_pool.install(|| {
+            rayon::scope(|s| {
+                s.spawn(|_| {
+                    let start_time = std::time::Instant::now();
 
-            let start_time = std::time::Instant::now();
+                    let unitig_id = 0_usize;
+                    let visited = bitvec![0; self.sbwt.n_sets()];
 
-            let unitig_id = 0_usize;
-            let visited = bitvec![0; self.sbwt.n_sets()];
+                    let shared_data = Arc::new(Mutex::new((visited, unitig_id)));
 
-            let shared_data = Arc::new(Mutex::new((visited, unitig_id)));
+                    log::info!("Iterating acyclic unitigs");
+                    self.node_iterator().filter(|&v| self.is_first_kmer_of_unitig(v)).par_bridge().for_each(|v| {
+                        let mut out_labels_buf = Vec::<u8>::new();
+                        let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
+                        callback(&nodes, &unitig_string);
 
-            log::info!("Iterating acyclic unitigs");
-            self.node_iterator().filter(|&v| self.is_first_kmer_of_unitig(v)).par_bridge().for_each(|v| {
-                let mut out_labels_buf = Vec::<u8>::new();
-                let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
-                callback(&nodes, &unitig_string);
+                        // Mark the nodes as visited
+                        let (visited, unitig_id) = &mut *shared_data.lock().unwrap();
+                        for u in nodes {
+                            assert!(!visited[u.id]);
+                            visited.set(u.id, true);
+                        }
 
-                // Mark the nodes as visited
-                let (visited, unitig_id) = &mut *shared_data.lock().unwrap();
-                for u in nodes {
-                    assert!(!visited[u.id]);
-                    visited.set(u.id, true);
-                }
+                        *unitig_id += 1;
+                    });
 
-                *unitig_id += 1;
+                    log::info!("Iterating cyclic unitigs");
+
+                    let mut out_labels_buf = Vec::<u8>::new();
+                    let (visited, unitig_id) = &mut *shared_data.lock().unwrap();
+
+                    // Only disjoint cyclic unitigs remain
+                    for v in self.node_iterator(){
+                        if visited[v.id] {
+                            continue;
+                        }
+
+                        out_labels_buf.clear();
+                        let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
+                        callback(&nodes, &unitig_string);
+                        for u in nodes {
+                            assert!(!visited[u.id]);
+                            visited.set(u.id, true);
+                        }
+
+                        *unitig_id += 1;
+
+                    }
+
+                    let end_time = std::time::Instant::now();
+                    log::info!("Iterated all {} unitigs in {} seconds", unitig_id, (end_time - start_time).as_secs_f64());
+                });
             });
-
-            log::info!("Iterating cyclic unitigs");
-
-            let mut out_labels_buf = Vec::<u8>::new();
-            let (visited, unitig_id) = &mut *shared_data.lock().unwrap();
-
-            // Only disjoint cyclic unitigs remain
-            for v in self.node_iterator(){
-                if visited[v.id] {
-                    continue;
-                }
-
-                out_labels_buf.clear();
-                let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
-                callback(&nodes, &unitig_string);
-                for u in nodes {
-                    assert!(!visited[u.id]);
-                    visited.set(u.id, true);
-                }
-
-                *unitig_id += 1;
-
-            }
-
-            let end_time = std::time::Instant::now();
-            log::info!("Wrote all {} unitigs in {} seconds", unitig_id, (end_time - start_time).as_secs_f64());
         });
     }
 
     /// Writes the unitigs of the graph to the given writer in FASTA format.
     /// Uses as many threads as are available with the Rayon initialization.
-    pub fn parallel_export_unitigs<W: Write + Send + Sync>(&self, fasta_out: W){
-        let start_time = std::time::Instant::now();
-
+    pub fn parallel_export_unitigs<W: Write + Send + Sync>(&self, fasta_out: W, n_threads: usize){
         let unitig_id = 0_usize;
-        let visited = bitvec![0; self.sbwt.n_sets()];
+        let shared_data = Arc::new(Mutex::new((fasta_out, unitig_id)));
 
-        let shared_data = Arc::new(Mutex::new((visited, fasta_out, unitig_id)));
-
-        log::info!("Listing acyclic unitigs");
-        self.node_iterator().filter(|&v| self.is_first_kmer_of_unitig(v)).par_bridge().for_each(|v| {
-            let mut out_labels_buf = Vec::<u8>::new();
-            let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
-
-            let (visited, fasta_out, unitig_id) = &mut *shared_data.lock().unwrap();
-            for u in nodes {
-                assert!(!visited[u.id]);
-                visited.set(u.id, true);
-            }
-
-            write!(fasta_out, ">{}\n{}\n", unitig_id, String::from_utf8_lossy(&unitig_string)).unwrap();
+        let write_unitig_callback = move |_ : &[Node], unitig_string: &[u8]| {
+            let (fasta_out, unitig_id) = &mut *shared_data.lock().unwrap();
+            write!(fasta_out, ">{}\n{}\n", unitig_id, String::from_utf8_lossy(unitig_string)).unwrap();
             *unitig_id += 1;
-        });
+        };
 
-        log::info!("Listing cyclic unitigs");
+        self.iter_unitigs_with_callback(write_unitig_callback, n_threads);
 
-        let mut out_labels_buf = Vec::<u8>::new();
-        let (visited, fasta_out, unitig_id) = &mut *shared_data.lock().unwrap();
-
-        // Only disjoint cyclic unitigs remain
-        for v in self.node_iterator(){
-            if visited[v.id] {
-                continue;
-            }
-
-            out_labels_buf.clear();
-            let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
-            for u in nodes {
-                assert!(!visited[u.id]);
-                visited.set(u.id, true);
-            }
-
-            write!(fasta_out, ">{}\n{}\n", unitig_id, String::from_utf8_lossy(&unitig_string)).unwrap();
-            *unitig_id += 1;
-
-        }
-
-        let end_time = std::time::Instant::now();
-        log::info!("Wrote all {} unitigs in {} seconds", unitig_id, (end_time - start_time).as_secs_f64());
     }
 
     fn is_first_kmer_of_unitig(&self, v: Node) -> bool {
@@ -444,7 +411,7 @@ mod tests {
 
         let mut output = Vec::<u8>::new();
         let out_cursor = std::io::Cursor::new(&mut output);
-        dbg.parallel_export_unitigs(out_cursor);
+        dbg.parallel_export_unitigs(out_cursor, 3);
 
         let mut unitigs: Vec<Vec<u8>> = vec![];
         for line in output.lines(){
@@ -597,7 +564,7 @@ mod tests {
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut unitig_ascii_out = Vec::<u8>::new();
-        dbg.parallel_export_unitigs(std::io::Cursor::new(&mut unitig_ascii_out));
+        dbg.parallel_export_unitigs(std::io::Cursor::new(&mut unitig_ascii_out), 3);
         let unitigs: Vec<Vec<u8>> = unitig_ascii_out.lines().map(|s| s.unwrap().as_bytes().to_owned()).filter(|s| s[0] != b'>').collect();
 
         let mut n_kmers = 0_usize;
