@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.0
+
+- Added `iter_unitigs_with_callback`. This can break existing code because now `parallel_export_unitigs` also takes the
+  number of threads as an input parameter, whereas previously it used all available threads.
+
 ## v0.3.11
 
 - Fix SbwtIndex documentation not showing up.
