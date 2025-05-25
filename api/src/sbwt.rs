@@ -717,7 +717,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
         assert_eq!(k, index2.k());
 
         // We invert the SBWTs column by column and maintain ranges
-        // in both SBWTs that are so far qual. The ranges are in increasing
+        // in both SBWTs that are so far equal. The ranges are in increasing
         // order and the partition the SBWTs, to it's enough to just store their
         // sizes in order. The sizes are stored in concatenated unary representations.
         // Empty ranges are allowed.
