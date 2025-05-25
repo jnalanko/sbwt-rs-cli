@@ -1,7 +1,11 @@
 //! The [SbwtIndex] data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder).
 
+use std::cmp::min;
 use std::io::Read;
 use std::io::Write;
+use bitvec::slice::BitSlice;
+use bitvec::vec::BitVec;
+use bitvec::prelude::*;
 use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
@@ -695,6 +699,152 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         marks
     }
 
+}
+
+pub struct MergeSegmentation {
+    pub s1: BitVec,
+    pub s2: BitVec,
+    pub union_size: usize,
+    pub intersection_size: usize,
+}
+
+// Functions that a SubsetSeq with Send and Sync 
+impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
+
+    pub fn compute_merge_segmentation(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, n_threads: usize) -> MergeSegmentation {
+
+        let k = index1.k();
+        assert_eq!(k, index2.k());
+
+        // We invert the SBWTs column by column and maintain ranges
+        // in both SBWTs that are so far qual. The ranges are in increasing
+        // order and the partition the SBWTs, to it's enough to just store their
+        // sizes in order. The sizes are stored in concatenated unary representations.
+        // Empty ranges are allowed.
+
+        // Initialize unary concatenations with empty ranges
+        let mut s1 = bitvec![0; index1.n_sets()];
+        let mut s2 = bitvec![0; index2.n_sets()];
+        s1.push(true);
+        s2.push(true);
+
+        let mut chars1 = index1.build_last_column();
+        let mut chars2 = index2.build_last_column();
+
+        let mut temp_char_buf_1 = vec![0u8; chars1.len()];
+        let mut temp_char_buf_2 = vec![0u8; chars2.len()];
+
+        for round in 0..k {
+            log::info!("Round {}/{}", round+1, k);
+
+            let new_arrays = refine_segmentation(s1, s2, &chars1, &chars2);
+            (s1, s2) = new_arrays;
+
+            if round != k-1 {
+                index1.push_all_labels_forward(&chars1, &mut temp_char_buf_1, n_threads);
+                chars1.copy_from_slice(&temp_char_buf_1);
+
+                index2.push_all_labels_forward(&chars2, &mut temp_char_buf_2, n_threads);
+                chars2.copy_from_slice(&temp_char_buf_2);
+            }
+        }
+
+        let mut intersection_size = 0_usize;
+        let mut union_size = 0_usize;
+        let mut s1_i = 0_usize; // Index in s1
+        let mut s2_i = 0_usize; // Index in s2
+        let mut c1_i = 0_usize; // Index in chars1
+        let mut c2_i = 0_usize; // Index in chars2
+
+        while s1_i < s1.len() {
+            assert!(s2_i < s2.len());
+
+            let len1 = leading_zeros(&s1[s1_i..]);
+            let len2 = leading_zeros(&s2[s2_i..]);
+            assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
+            assert!(len2 <= 1); // Same as above
+            assert!(len1 + len2 > 0); // Should not be empty interval pairs
+
+            let is_dummy = (len1 > 0 && chars1[c1_i] == b'$') || (len2 > 0 && chars2[c2_i] == b'$');
+            if !is_dummy {
+                if len1 > 0 && len2 > 0 {
+                    intersection_size += 1;
+                }
+                union_size += 1;
+            }
+
+            s1_i += len1 + 1; // Length of the unary number we just parsed
+            s2_i += len2 + 1; // Same as above
+
+            c1_i += len1;
+            c2_i += len2;
+        }
+        assert_eq!(s1_i, s1.len());
+        assert_eq!(s2_i, s2.len());
+
+        MergeSegmentation { s1, s2, union_size, intersection_size }
+    }
+
+}
+
+// Assumes there is at least one 1-bit
+fn leading_zeros(s: &BitSlice) -> usize {
+    s.first_one().unwrap()
+}
+
+// Utility function for SBWT merging
+fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8]) -> (BitVec, BitVec) {
+    let mut s1_i = 0_usize; // Index in s1
+    let mut s2_i = 0_usize; // Index in s2
+
+    let mut c1_i = 0_usize; // Index in chars1
+    let mut c2_i = 0_usize; // Index in chars2
+
+    let mut out1 = bitvec::bitvec![];
+    let mut out2 = bitvec::bitvec![];
+
+    while s1_i < s1.len() {
+        assert!(s2_i < s2.len());
+
+        let len1 = leading_zeros(&s1[s1_i..]);
+        let len2 = leading_zeros(&s2[s2_i..]);
+
+        let c1_end = c1_i + len1; // One past the end
+        let c2_end = c2_i + len2; // One past the end
+
+        while c1_i < c1_end || c2_i < c2_end {
+            let c1 = if c1_i == c1_end { u8::MAX } else { chars1[c1_i] };
+            let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
+            let c = min(c1,c2);
+
+            while c1_i < c1_end && chars1[c1_i] == c {
+                c1_i += 1;
+                out1.push(false); // Unary bit
+            }
+
+            while c2_i < c2_end && chars2[c2_i] == c {
+                c2_i += 1;
+                out2.push(false); // Unary bit
+            }
+
+            // Terminate unary representations
+            out1.push(true);
+            out2.push(true);
+
+        }
+
+        assert_eq!(c1_i, c1_end);
+        assert_eq!(c2_i, c2_end);
+
+        s1_i += len1 + 1;
+        s2_i += len2 + 1;
+
+    }
+
+    assert_eq!(s1_i, s1.len());
+    assert_eq!(s2_i, s2.len());
+
+    (out1, out2)
 }
 
 /// A table storing the SBWT intervals of all 4^p possible p-mers.
