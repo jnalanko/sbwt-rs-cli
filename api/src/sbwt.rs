@@ -708,7 +708,7 @@ pub struct MergeSegmentation {
     pub intersection_size: usize,
 }
 
-// Functions that a SubsetSeq with Send and Sync 
+// Functions that require a SubsetSeq with Send and Sync 
 impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
 
     pub fn compute_merge_segmentation(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, n_threads: usize) -> MergeSegmentation {
