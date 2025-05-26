@@ -716,53 +716,6 @@ pub struct MergeInterleaving {
 }
 
 impl MergeInterleaving {
-    pub fn intersection_size(&self) -> usize {
-        assert_eq!(self.s1.len(), self.s2.len());
-        let mut ans = 0_usize;
-        for i in 0..self.s1.len() {
-            // Do not count dummy nodes
-            ans += (!self.is_dummy[i] && self.s1[i] && self.s2[i]) as usize;
-        }
-        ans
-    }
-
-    pub fn union_size(&self) -> usize {
-        assert_eq!(self.s1.len(), self.s2.len());
-        let mut ans = 0_usize;
-        for i in 0..self.s1.len() {
-            // Do not count dummy nodes
-            ans += (!self.is_dummy[i] && (self.s1[i] || self.s2[i])) as usize;
-        }
-        ans
-    }
-}
-
-
-impl MergeInterleaving {
-
-    // Helper for compute_merge_segmentation. Takes a unary concatenation of binary numbers 0^b 1, like:
-    // 101011011101 (= 0,1,1,0,1,0,0,1)
-    // And produces a bit vector encoding the bits:
-    // 01101001
-    fn compress_in_place(s1: &mut bitvec::vec::BitVec) {
-
-            let mut s1_i = 0_usize; // Index in s1
-
-            let mut new_idx = 0_usize;
-            while s1_i < s1.len() {
-                let len1 = leading_zeros(&s1[s1_i..]);
-                assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
-
-                s1_i += len1 + 1; // Length of the unary number we just parsed
-
-                s1.set(new_idx, len1 != 0);
-                new_idx += 1;
-            }
-            assert_eq!(s1_i, s1.len());
-            s1.resize(new_idx, false);
-            s1.shrink_to_fit();
-
-    }
 
     pub fn new<SS: SubsetSeq + Send + Sync>(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, n_threads: usize) -> MergeInterleaving {
 
@@ -824,6 +777,50 @@ impl MergeInterleaving {
 
 
         MergeInterleaving { s1, s2, is_dummy }
+    }
+
+    pub fn intersection_size(&self) -> usize {
+        assert_eq!(self.s1.len(), self.s2.len());
+        let mut ans = 0_usize;
+        for i in 0..self.s1.len() {
+            // Do not count dummy nodes
+            ans += (!self.is_dummy[i] && self.s1[i] && self.s2[i]) as usize;
+        }
+        ans
+    }
+
+    pub fn union_size(&self) -> usize {
+        assert_eq!(self.s1.len(), self.s2.len());
+        let mut ans = 0_usize;
+        for i in 0..self.s1.len() {
+            // Do not count dummy nodes
+            ans += (!self.is_dummy[i] && (self.s1[i] || self.s2[i])) as usize;
+        }
+        ans
+    }
+
+    // Helper for construction. Takes a unary concatenation of binary numbers 0^b 1, like:
+    // 101011011101 (= 0,1,1,0,1,0,0,1)
+    // And produces a bit vector encoding the bits:
+    // 01101001
+    fn compress_in_place(s1: &mut bitvec::vec::BitVec) {
+
+            let mut s1_i = 0_usize; // Index in s1
+
+            let mut new_idx = 0_usize;
+            while s1_i < s1.len() {
+                let len1 = leading_zeros(&s1[s1_i..]);
+                assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
+
+                s1_i += len1 + 1; // Length of the unary number we just parsed
+
+                s1.set(new_idx, len1 != 0);
+                new_idx += 1;
+            }
+            assert_eq!(s1_i, s1.len());
+            s1.resize(new_idx, false);
+            s1.shrink_to_fit();
+
     }
 
 }
