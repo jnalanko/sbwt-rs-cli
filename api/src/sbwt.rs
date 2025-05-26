@@ -852,6 +852,8 @@ impl MergeInterleaving {
             c2_idx += s2[colex] as usize;
         }
 
+        log::info!("Number of dummies: {}", is_dummy.count_ones());
+
 
         MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits}
     }
