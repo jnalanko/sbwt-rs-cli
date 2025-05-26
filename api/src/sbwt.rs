@@ -3,6 +3,7 @@
 use std::cmp::min;
 use std::io::Read;
 use std::io::Write;
+use std::ops::Range;
 use bitvec::slice::BitSlice;
 use bitvec::vec::BitVec;
 use bitvec::prelude::*;
@@ -909,23 +910,24 @@ impl MergeInterleaving {
         s.first_one().unwrap()
     }
 
-    // Helper function for construction.
-    // On the last round also returns the leader bit vector, which marks
-    // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
-    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
-        let mut s1_i = 0_usize; // Index in s1
-        let mut s2_i = 0_usize; // Index in s2
 
-        let mut c1_i = 0_usize; // Index in chars1
-        let mut c2_i = 0_usize; // Index in chars2
+    // Helper of a helper function
+    fn refine_piece(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, compute_leaders: bool) 
+    -> (BitVec, BitVec, Option<BitVec>) {
 
         let mut out1 = bitvec::bitvec![];
         let mut out2 = bitvec::bitvec![];
 
         let mut leader_bits = bitvec::bitvec![]; // Last round only
 
-        while s1_i < s1.len() {
-            assert!(s2_i < s2.len());
+        // c1_i and c2_i are current indices in chars1 and chars2 respectively
+        // s1_i and s2_i are current indices in s1 and s2 respectively
+        let mut s1_i = 0_usize;
+        let mut s2_i = 0_usize;
+
+        while s1_i < s1_range.end {
+
+            assert!(s2_i < s2_range.end);
 
             let len1 = Self::leading_zeros(&s1[s1_i..]);
             let len2 = Self::leading_zeros(&s2[s2_i..]);
@@ -953,12 +955,11 @@ impl MergeInterleaving {
                 out1.push(true);
                 out2.push(true);
 
-                if last_round {
+                if compute_leaders {
                     leader_bits.push(is_leader);
                 }
 
                 is_leader = false;
-
             }
 
             assert_eq!(c1_i, c1_end);
@@ -966,13 +967,26 @@ impl MergeInterleaving {
 
             s1_i += len1 + 1;
             s2_i += len2 + 1;
-
         }
 
-        assert_eq!(s1_i, s1.len());
-        assert_eq!(s2_i, s2.len());
+        assert_eq!(s1_i, s1_range.end);
+        assert_eq!(s2_i, s2_range.end);
 
-        (out1, out2, if last_round { Some(leader_bits) } else { None })
+        (out1, out2, if compute_leaders { Some(leader_bits) } else { None })
+    }
+
+    // Helper function for construction.
+    // Input pieces are pairs (start in chars1, start in chars2, range in s1, range in s2)
+    // Input piece are for parallelism: one piece to work on for each thread.
+    // Returns the new segmentation.
+    // On the last round also returns the leader bit vector, which marks
+    // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
+    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], /*input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>,*/ last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
+
+        let s1_range = 0..s1.len();
+        let s2_range = 0..s2.len();
+        Self::refine_piece(s1, s2, chars1, chars2, 0, 0, s1_range, s2_range, last_round)
+
     }
 
 }
