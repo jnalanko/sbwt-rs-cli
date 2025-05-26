@@ -1,4 +1,3 @@
-use std::cmp::min;
 use std::fs::File;
 use std::io;
 use std::io::stdout;
@@ -11,7 +10,6 @@ use sbwt::benchmark;
 
 use jseqio::reader::*;
 use sbwt::SbwtIndex;
-use bitvec::prelude::*;
 
 struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
@@ -568,9 +566,11 @@ fn jaccard_command(matches: &clap::ArgMatches) {
 
     let segm = SbwtIndex::compute_merge_segmentation(&index1, &index2, n_threads);
 
-    let jaccard = segm.intersection_size as f64 / segm.union_size as f64;
-    println!("Intersection size: {}", segm.intersection_size);
-    println!("Union size: {}", segm.union_size);
+    let intersection = segm.intersection_size();
+    let union = segm.union_size();
+    let jaccard = intersection as f64 / union as f64;
+    println!("Intersection size: {}", intersection);
+    println!("Union size: {}", union);
     println!("Jaccard index: {}", jaccard);
 }
 

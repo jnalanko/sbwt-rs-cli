@@ -704,8 +704,54 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 pub struct MergeSegmentation {
     pub s1: BitVec,
     pub s2: BitVec,
-    pub union_size: usize,
-    pub intersection_size: usize,
+    pub is_dummy1: BitVec,
+    pub is_dummy2: BitVec,
+}
+
+impl MergeSegmentation {
+    pub fn intersection_size(&self) -> usize {
+        assert_eq!(self.s1.len(), self.s2.len());
+        let mut ans = 0_usize;
+        for i in 0..self.s1.len() {
+            // Do not count dummy nodes
+            ans += (!self.is_dummy1[i] && !self.is_dummy2[i] && self.s1[i] && self.s2[i]) as usize;
+        }
+        ans
+    }
+
+    pub fn union_size(&self) -> usize {
+        assert_eq!(self.s1.len(), self.s2.len());
+        let mut ans = 0_usize;
+        for i in 0..self.s1.len() {
+            // Do not count dummy nodes
+            ans += ((!self.is_dummy1[i] && self.s1[i]) || (!self.is_dummy2[i] && self.s2[i])) as usize;
+        }
+        ans
+    }
+}
+
+// Helper for compute_merge_segmentation. Takes a unary concatenation of binary numbers 0^b 1, like:
+// 101011011101 (= 0,1,1,0,1,0,0,1)
+// And produces a bit vector encoding the bits:
+// 01101001
+fn merge_segmentation_compress_in_place(s1: &mut bitvec::vec::BitVec) {
+
+        let mut s1_i = 0_usize; // Index in s1
+
+        let mut new_idx = 0_usize;
+        while s1_i < s1.len() {
+            let len1 = leading_zeros(&s1[s1_i..]);
+            assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
+
+            s1_i += len1 + 1; // Length of the unary number we just parsed
+
+            s1.set(new_idx, len1 != 0);
+            new_idx += 1;
+        }
+        assert_eq!(s1_i, s1.len());
+        s1.resize(new_idx, false);
+        s1.shrink_to_fit();
+
 }
 
 // Functions that require a SubsetSeq with Send and Sync 
@@ -749,40 +795,14 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
             }
         }
 
-        let mut intersection_size = 0_usize;
-        let mut union_size = 0_usize;
-        let mut s1_i = 0_usize; // Index in s1
-        let mut s2_i = 0_usize; // Index in s2
-        let mut c1_i = 0_usize; // Index in chars1
-        let mut c2_i = 0_usize; // Index in chars2
+        merge_segmentation_compress_in_place(&mut s1);
+        merge_segmentation_compress_in_place(&mut s2);
+        assert_eq!(s1.len(), s2.len());
 
-        while s1_i < s1.len() {
-            assert!(s2_i < s2.len());
+        let is_dummy1: bitvec::vec::BitVec = chars1.into_iter().map(|c| c == b'$').collect();
+        let is_dummy2: bitvec::vec::BitVec = chars2.into_iter().map(|c| c == b'$').collect();
 
-            let len1 = leading_zeros(&s1[s1_i..]);
-            let len2 = leading_zeros(&s2[s2_i..]);
-            assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
-            assert!(len2 <= 1); // Same as above
-            assert!(len1 + len2 > 0); // Should not be empty interval pairs
-
-            let is_dummy = (len1 > 0 && chars1[c1_i] == b'$') || (len2 > 0 && chars2[c2_i] == b'$');
-            if !is_dummy {
-                if len1 > 0 && len2 > 0 {
-                    intersection_size += 1;
-                }
-                union_size += 1;
-            }
-
-            s1_i += len1 + 1; // Length of the unary number we just parsed
-            s2_i += len2 + 1; // Same as above
-
-            c1_i += len1;
-            c2_i += len2;
-        }
-        assert_eq!(s1_i, s1.len());
-        assert_eq!(s2_i, s2.len());
-
-        MergeSegmentation { s1, s2, union_size, intersection_size }
+        MergeSegmentation { s1, s2, is_dummy1, is_dummy2 }
     }
 
 }
