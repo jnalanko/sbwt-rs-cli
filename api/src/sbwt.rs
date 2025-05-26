@@ -700,11 +700,15 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         marks
     }
 
-    pub fn merge(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving) -> Self {
+    pub fn merge(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize) -> Self {
         let sigma = DNA_ALPHABET.len(); 
         
+        assert!(index1.k() == index2.k());
+        let k = index1.k();
+
         assert!(interleaving.s1.len() == interleaving.s2.len());
         assert!(interleaving.s1.len() == interleaving.is_dummy.len());
+        assert!(interleaving.s1.len() == interleaving.is_leader.len());
         let merged_length = interleaving.s1.len();
 
         let mut new_rows = Vec::<simple_sds_sbwt::raw_vector::RawVector>::new();
@@ -731,9 +735,24 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         assert_eq!(s1_colex, index1.n_sets());
         assert_eq!(s2_colex, index2.n_sets());
 
-        todo!(); // Prune edges
+        let n_kmers = merged_length - interleaving.is_dummy.count_ones();
 
-        todo!();
+        // Create the C array
+        #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
+        let C: Vec<usize> = crate::util::get_C_array(&new_rows);
+
+        log::info!("Building the subset rank structure");
+        let mut subsetseq = SS::new_from_bit_vectors(new_rows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
+        subsetseq.build_rank();
+        let n_sets = subsetseq.len();
+        let mut index = SbwtIndex::<SS>::from_components(
+            subsetseq, n_kmers, k, C,
+            PrefixLookupTable::new_empty(n_sets));
+
+        let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
+        index.set_lookup_table(lut);
+
+        index
     }
 
 }
