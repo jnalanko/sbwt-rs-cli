@@ -724,8 +724,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
                 current_leader = merged_colex;
             }
             for c in 0..sigma {
-                let s1_bit = interleaving.s1[s1_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
-                let s2_bit = interleaving.s2[s2_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
+                let s1_bit = interleaving.s1[merged_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
+                let s2_bit = interleaving.s2[merged_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
                 new_rows[c].set_bit(current_leader, s1_bit | s2_bit);
 
                 s1_colex += interleaving.s1[s1_colex] as usize;
