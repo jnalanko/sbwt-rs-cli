@@ -726,7 +726,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             for c in 0..sigma {
                 let s1_bit = interleaving.s1[merged_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
                 let s2_bit = interleaving.s2[merged_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
-                new_rows[c].set_bit(current_leader, s1_bit | s2_bit);
+                let cur_bit = new_rows[c].bit(current_leader);
+                new_rows[c].set_bit(current_leader, cur_bit | s1_bit | s2_bit);
             }
             s1_colex += interleaving.s1[merged_colex] as usize;
             s2_colex += interleaving.s2[merged_colex] as usize;
@@ -743,9 +744,10 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         // or both of the input SBWTs. That edge is copied to the suffix group leader of its suffix
         // group in the merged SBWT. The leader has the same (k-1)-suffix as the k-mer which had the outgoing
         // edge to v, so the edge will point to v. There can not be two or more incoming edges because those would have to
-        // come from the same suffix group, but each suffix group has each outgoing label at most one (at the leader).
+        // come from the same suffix group, but each suffix group has each outgoing label at most once (at the leader).
 
         let n_kmers = merged_length - interleaving.is_dummy.count_ones();
+        log::info!("Number of distinct k-mers: {}", n_kmers);
 
         // Create the C array
         #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
