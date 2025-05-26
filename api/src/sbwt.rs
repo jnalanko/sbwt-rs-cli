@@ -829,6 +829,9 @@ impl MergeInterleaving {
             }
         }
 
+        let leader_bits = leader_bits.unwrap(); // Compute in the last round
+        log::info!("Number of suffix groups: {}", leader_bits.count_ones());
+
         Self::compress_in_place(&mut s1);
         Self::compress_in_place(&mut s2);
 
@@ -850,7 +853,7 @@ impl MergeInterleaving {
         }
 
 
-        MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits.unwrap() }
+        MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits}
     }
 
     pub fn intersection_size(&self) -> usize {
