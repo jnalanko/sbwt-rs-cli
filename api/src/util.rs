@@ -6,6 +6,7 @@ use simple_sds_sbwt::ops::Select;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
+use simple_sds_sbwt::raw_vector::AccessRaw;
 
 // Returns the number of bytes written
 pub(crate) fn write_bytes<W: std::io::Write>(out: &mut W, bytes: &[u8]) -> std::io::Result<usize>{
@@ -42,6 +43,33 @@ pub const ACGT_TO_0123: [u8; 256] = [255, 255, 255, 255, 255, 255, 255, 255, 255
 
 #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
 pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
+    let sigma = rawrows.len();
+    assert!(sigma > 0);
+    let n = rawrows[0].len();
+
+    let mut C: Vec<usize> = vec![0; sigma];
+    for i in 0..n {
+        for c in 0..(sigma as u8) {
+            if rawrows[c as usize].bit(i){
+                for d in (c + 1)..(sigma as u8) {
+                    C[d as usize] += 1;
+                }
+            }
+        }
+    }
+
+    // Plus one for the ghost dollar
+    #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
+    for c in 0..sigma {
+        C[c] += 1;
+    }
+
+    C
+}
+
+// Todo: number of threads as input
+#[allow(non_snake_case, dead_code)] // C-array is an established convention in BWT indexes
+pub(crate) fn get_C_array_parallel(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
     let sigma = rawrows.len();
     assert!(sigma > 0);
 
