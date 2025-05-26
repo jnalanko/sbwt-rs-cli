@@ -548,7 +548,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     let cpp_format = matches.get_flag("load-cpp-format");
 
     // Open output file (open early to fail early if there is a problem)
-    let mut out = BufWriter::new(File::open(out_path).unwrap());
+    let mut out = BufWriter::new(File::create(out_path).unwrap());
 
     // Read sbwts
     let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
