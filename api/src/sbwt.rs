@@ -824,10 +824,10 @@ impl MergeInterleaving {
 
             if round != k-1 {
                 index1.push_all_labels_forward(&chars1, &mut temp_char_buf_1, n_threads);
-                chars1.copy_from_slice(&temp_char_buf_1);
+                std::mem::swap(&mut chars1, &mut temp_char_buf_1);
 
                 index2.push_all_labels_forward(&chars2, &mut temp_char_buf_2, n_threads);
-                chars2.copy_from_slice(&temp_char_buf_2);
+                std::mem::swap(&mut chars2, &mut temp_char_buf_2);
             }
         }
 
