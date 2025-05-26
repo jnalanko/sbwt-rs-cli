@@ -814,8 +814,8 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
         let mut c1_idx = 0_usize;
         let mut c2_idx = 0_usize;
         for colex in 0..merged_len {
-            let d1 = c1_idx < chars1.len() && chars1[c1_idx] == b'$';
-            let d2 = c2_idx < chars2.len() && chars2[c2_idx] == b'$';
+            let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
+            let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
             is_dummy.set(colex, d1 || d2); 
 
             c1_idx += s1[colex] as usize;
