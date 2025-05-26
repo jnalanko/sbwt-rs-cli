@@ -828,7 +828,7 @@ impl MergeInterleaving {
         s.first_one().unwrap()
     }
 
-    // Utility function for construction
+    // Helper function for construction
     fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8]) -> (BitVec, BitVec) {
         let mut s1_i = 0_usize; // Index in s1
         let mut s2_i = 0_usize; // Index in s2
