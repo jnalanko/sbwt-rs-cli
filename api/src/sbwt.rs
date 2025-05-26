@@ -746,6 +746,12 @@ pub struct MergeInterleaving {
     // Has one bit per colex position in the merged SBWT, marking
     // the dummy nodes.
     pub is_dummy: BitVec, 
+    
+    // Has one bit per colex position in the merged SBWT, marking
+    // the positions whose k-mer has a different (k-1)-length suffix
+    // than the previous k-mer in colex order. 
+    // Edge case: is_leader[0] = 1.
+    pub is_leader: BitVec,
 }
 
 impl MergeInterleaving {
@@ -760,6 +766,8 @@ impl MergeInterleaving {
         // order and the partition the SBWTs, to it's enough to just store their
         // sizes in order. The sizes are stored in concatenated unary representations.
         // Empty ranges are allowed.
+
+        let mut leader_bits = None;
 
         // Initialize unary concatenations with empty ranges
         let mut s1 = bitvec![0; index1.n_sets()];
@@ -776,8 +784,8 @@ impl MergeInterleaving {
         for round in 0..k {
             log::info!("Round {}/{}", round+1, k);
 
-            let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2);
-            (s1, s2) = new_arrays;
+            let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, round == k-1);
+            (s1, s2, leader_bits) = new_arrays;
 
             if round != k-1 {
                 index1.push_all_labels_forward(&chars1, &mut temp_char_buf_1, n_threads);
@@ -809,7 +817,7 @@ impl MergeInterleaving {
         }
 
 
-        MergeInterleaving { s1, s2, is_dummy }
+        MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits.unwrap() }
     }
 
     pub fn intersection_size(&self) -> usize {
@@ -861,8 +869,10 @@ impl MergeInterleaving {
         s.first_one().unwrap()
     }
 
-    // Helper function for construction
-    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8]) -> (BitVec, BitVec) {
+    // Helper function for construction.
+    // On the last round also returns the leader bit vector, which marks
+    // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
+    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
         let mut s1_i = 0_usize; // Index in s1
         let mut s2_i = 0_usize; // Index in s2
 
@@ -871,6 +881,8 @@ impl MergeInterleaving {
 
         let mut out1 = bitvec::bitvec![];
         let mut out2 = bitvec::bitvec![];
+
+        let mut leader_bits = bitvec::bitvec![]; // Last round only
 
         while s1_i < s1.len() {
             assert!(s2_i < s2.len());
@@ -881,6 +893,7 @@ impl MergeInterleaving {
             let c1_end = c1_i + len1; // One past the end
             let c2_end = c2_i + len2; // One past the end
 
+            let mut is_leader = true;
             while c1_i < c1_end || c2_i < c2_end {
                 let c1 = if c1_i == c1_end { u8::MAX } else { chars1[c1_i] };
                 let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
@@ -900,6 +913,12 @@ impl MergeInterleaving {
                 out1.push(true);
                 out2.push(true);
 
+                if last_round {
+                    leader_bits.push(is_leader);
+                }
+
+                is_leader = false;
+
             }
 
             assert_eq!(c1_i, c1_end);
@@ -913,7 +932,7 @@ impl MergeInterleaving {
         assert_eq!(s1_i, s1.len());
         assert_eq!(s2_i, s2.len());
 
-        (out1, out2)
+        (out1, out2, if last_round { Some(leader_bits) } else { None })
     }
 
 }
