@@ -564,10 +564,10 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     let SbwtIndexVariant::SubsetMatrix(index1) = index1;
     let SbwtIndexVariant::SubsetMatrix(index2) = index2;
 
-    let segm = SbwtIndex::compute_merge_segmentation(&index1, &index2, n_threads);
+    let interl = SbwtIndex::compute_merge_interleaving(&index1, &index2, n_threads);
 
-    let intersection = segm.intersection_size();
-    let union = segm.union_size();
+    let intersection = interl.intersection_size();
+    let union = interl.union_size();
     let jaccard = intersection as f64 / union as f64;
     println!("Intersection size: {}", intersection);
     println!("Union size: {}", union);

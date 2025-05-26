@@ -701,7 +701,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
 }
 
-pub struct MergeSegmentation {
+pub struct MergeInterleaving {
     // Has one bit per colex position in the merged SBWT
     // s1[i] is 1 iff this k-mer is in the first SBWT
     pub s1: BitVec, 
@@ -715,7 +715,7 @@ pub struct MergeSegmentation {
     pub is_dummy: BitVec, 
 }
 
-impl MergeSegmentation {
+impl MergeInterleaving {
     pub fn intersection_size(&self) -> usize {
         assert_eq!(self.s1.len(), self.s2.len());
         let mut ans = 0_usize;
@@ -764,7 +764,7 @@ fn merge_segmentation_compress_in_place(s1: &mut bitvec::vec::BitVec) {
 // Functions that require a SubsetSeq with Send and Sync 
 impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
 
-    pub fn compute_merge_segmentation(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, n_threads: usize) -> MergeSegmentation {
+    pub fn compute_merge_interleaving(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, n_threads: usize) -> MergeInterleaving {
 
         let k = index1.k();
         assert_eq!(k, index2.k());
@@ -823,7 +823,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
         }
 
 
-        MergeSegmentation { s1, s2, is_dummy }
+        MergeInterleaving { s1, s2, is_dummy }
     }
 
 }
