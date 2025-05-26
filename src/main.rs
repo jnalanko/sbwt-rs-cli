@@ -564,7 +564,7 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     let SbwtIndexVariant::SubsetMatrix(index1) = index1;
     let SbwtIndexVariant::SubsetMatrix(index2) = index2;
 
-    let interl = SbwtIndex::compute_merge_interleaving(&index1, &index2, n_threads);
+    let interl = MergeInterleaving::new(&index1, &index2, n_threads);
 
     let intersection = interl.intersection_size();
     let union = interl.union_size();
