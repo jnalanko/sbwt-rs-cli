@@ -702,10 +702,17 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 }
 
 pub struct MergeSegmentation {
-    pub s1: BitVec,
+    // Has one bit per colex position in the merged SBWT
+    // s1[i] is 1 iff this k-mer is in the first SBWT
+    pub s1: BitVec, 
+
+    // Has one bit per colex position in the merged SBWT
+    // s2[i] is 1 iff this k-mer is in the second SBWT
     pub s2: BitVec,
-    pub is_dummy1: BitVec,
-    pub is_dummy2: BitVec,
+
+    // Has one bit per colex position in the merged SBWT, marking
+    // the dummy nodes.
+    pub is_dummy: BitVec, 
 }
 
 impl MergeSegmentation {
@@ -714,7 +721,7 @@ impl MergeSegmentation {
         let mut ans = 0_usize;
         for i in 0..self.s1.len() {
             // Do not count dummy nodes
-            ans += (!self.is_dummy1[i] && !self.is_dummy2[i] && self.s1[i] && self.s2[i]) as usize;
+            ans += (!self.is_dummy[i] && self.s1[i] && self.s2[i]) as usize;
         }
         ans
     }
@@ -724,7 +731,7 @@ impl MergeSegmentation {
         let mut ans = 0_usize;
         for i in 0..self.s1.len() {
             // Do not count dummy nodes
-            ans += ((!self.is_dummy1[i] && self.s1[i]) || (!self.is_dummy2[i] && self.s2[i])) as usize;
+            ans += (!self.is_dummy[i] && (self.s1[i] || self.s2[i])) as usize;
         }
         ans
     }
@@ -797,12 +804,26 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
 
         merge_segmentation_compress_in_place(&mut s1);
         merge_segmentation_compress_in_place(&mut s2);
+
         assert_eq!(s1.len(), s2.len());
+        let merged_len = s1.len();
 
-        let is_dummy1: bitvec::vec::BitVec = chars1.into_iter().map(|c| c == b'$').collect();
-        let is_dummy2: bitvec::vec::BitVec = chars2.into_iter().map(|c| c == b'$').collect();
+        // Identify dummies in the merged SBWT
+        let mut is_dummy = bitvec::vec::BitVec::new();
+        is_dummy.resize(merged_len, false);
+        let mut c1_idx = 0_usize;
+        let mut c2_idx = 0_usize;
+        for colex in 0..merged_len {
+            let d1 = c1_idx < chars1.len() && chars1[c1_idx] == b'$';
+            let d2 = c2_idx < chars2.len() && chars2[c2_idx] == b'$';
+            is_dummy.set(colex, d1 || d2); 
 
-        MergeSegmentation { s1, s2, is_dummy1, is_dummy2 }
+            c1_idx += s1[colex] as usize;
+            c2_idx += s2[colex] as usize;
+        }
+
+
+        MergeSegmentation { s1, s2, is_dummy }
     }
 
 }
