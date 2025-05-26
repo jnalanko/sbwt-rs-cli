@@ -714,11 +714,15 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         let mut s1_colex = 0_usize;
         let mut s2_colex = 0_usize;
+        let mut current_leader = 0_usize;
         for merged_colex in 0..merged_length {
+            if interleaving.is_leader[merged_colex] {
+                current_leader = merged_colex;
+            }
             for c in 0..sigma {
                 let s1_bit = interleaving.s1[s1_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
                 let s2_bit = interleaving.s2[s2_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
-                new_rows[c].set_bit(merged_colex, s1_bit | s2_bit);
+                new_rows[c].set_bit(current_leader, s1_bit | s2_bit);
 
                 s1_colex += interleaving.s1[s1_colex] as usize;
                 s2_colex += interleaving.s2[s2_colex] as usize;
