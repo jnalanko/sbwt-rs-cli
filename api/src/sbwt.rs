@@ -743,7 +743,7 @@ impl MergeInterleaving {
         for round in 0..k {
             log::info!("Round {}/{}", round+1, k);
 
-            let new_arrays = refine_segmentation(s1, s2, &chars1, &chars2);
+            let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2);
             (s1, s2) = new_arrays;
 
             if round != k-1 {
@@ -809,7 +809,7 @@ impl MergeInterleaving {
 
             let mut new_idx = 0_usize;
             while s1_i < s1.len() {
-                let len1 = leading_zeros(&s1[s1_i..]);
+                let len1 = Self::leading_zeros(&s1[s1_i..]);
                 assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
 
                 s1_i += len1 + 1; // Length of the unary number we just parsed
@@ -823,66 +823,66 @@ impl MergeInterleaving {
 
     }
 
-}
+    // Assumes there is at least one 1-bit
+    fn leading_zeros(s: &BitSlice) -> usize {
+        s.first_one().unwrap()
+    }
 
-// Assumes there is at least one 1-bit
-fn leading_zeros(s: &BitSlice) -> usize {
-    s.first_one().unwrap()
-}
+    // Utility function for construction
+    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8]) -> (BitVec, BitVec) {
+        let mut s1_i = 0_usize; // Index in s1
+        let mut s2_i = 0_usize; // Index in s2
 
-// Utility function for SBWT merging
-fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8]) -> (BitVec, BitVec) {
-    let mut s1_i = 0_usize; // Index in s1
-    let mut s2_i = 0_usize; // Index in s2
+        let mut c1_i = 0_usize; // Index in chars1
+        let mut c2_i = 0_usize; // Index in chars2
 
-    let mut c1_i = 0_usize; // Index in chars1
-    let mut c2_i = 0_usize; // Index in chars2
+        let mut out1 = bitvec::bitvec![];
+        let mut out2 = bitvec::bitvec![];
 
-    let mut out1 = bitvec::bitvec![];
-    let mut out2 = bitvec::bitvec![];
+        while s1_i < s1.len() {
+            assert!(s2_i < s2.len());
 
-    while s1_i < s1.len() {
-        assert!(s2_i < s2.len());
+            let len1 = Self::leading_zeros(&s1[s1_i..]);
+            let len2 = Self::leading_zeros(&s2[s2_i..]);
 
-        let len1 = leading_zeros(&s1[s1_i..]);
-        let len2 = leading_zeros(&s2[s2_i..]);
+            let c1_end = c1_i + len1; // One past the end
+            let c2_end = c2_i + len2; // One past the end
 
-        let c1_end = c1_i + len1; // One past the end
-        let c2_end = c2_i + len2; // One past the end
+            while c1_i < c1_end || c2_i < c2_end {
+                let c1 = if c1_i == c1_end { u8::MAX } else { chars1[c1_i] };
+                let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
+                let c = min(c1,c2);
 
-        while c1_i < c1_end || c2_i < c2_end {
-            let c1 = if c1_i == c1_end { u8::MAX } else { chars1[c1_i] };
-            let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
-            let c = min(c1,c2);
+                while c1_i < c1_end && chars1[c1_i] == c {
+                    c1_i += 1;
+                    out1.push(false); // Unary bit
+                }
 
-            while c1_i < c1_end && chars1[c1_i] == c {
-                c1_i += 1;
-                out1.push(false); // Unary bit
+                while c2_i < c2_end && chars2[c2_i] == c {
+                    c2_i += 1;
+                    out2.push(false); // Unary bit
+                }
+
+                // Terminate unary representations
+                out1.push(true);
+                out2.push(true);
+
             }
 
-            while c2_i < c2_end && chars2[c2_i] == c {
-                c2_i += 1;
-                out2.push(false); // Unary bit
-            }
+            assert_eq!(c1_i, c1_end);
+            assert_eq!(c2_i, c2_end);
 
-            // Terminate unary representations
-            out1.push(true);
-            out2.push(true);
+            s1_i += len1 + 1;
+            s2_i += len2 + 1;
 
         }
 
-        assert_eq!(c1_i, c1_end);
-        assert_eq!(c2_i, c2_end);
+        assert_eq!(s1_i, s1.len());
+        assert_eq!(s2_i, s2.len());
 
-        s1_i += len1 + 1;
-        s2_i += len2 + 1;
-
+        (out1, out2)
     }
 
-    assert_eq!(s1_i, s1.len());
-    assert_eq!(s2_i, s2.len());
-
-    (out1, out2)
 }
 
 /// A table storing the SBWT intervals of all 4^p possible p-mers.
