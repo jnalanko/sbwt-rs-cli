@@ -734,6 +734,17 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         assert_eq!(s1_colex, index1.n_sets());
         assert_eq!(s2_colex, index2.n_sets());
 
+        // At this point, there should be exactly merged_length - 1 bits set in new_rows.
+        //
+        // Proof:
+        //
+        // There will exactly one incoming edge to each node except the root (that's the -1). This holds in the
+        // input SBWTs. Consider a non-root node v of the merged SBWT. It will have an incoming edge in one
+        // or both of the input SBWTs. That edge is copied to the suffix group leader of its suffix
+        // group in the merged SBWT. The leader has the same (k-1)-suffix as the k-mer which had the outgoing
+        // edge to v, so the edge will point to v. There can not be two or more incoming edges because those would have to
+        // come from the same suffix group, but each suffix group has each outgoing label at most one (at the leader).
+
         let n_kmers = merged_length - interleaving.is_dummy.count_ones();
 
         // Create the C array
