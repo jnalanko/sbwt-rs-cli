@@ -12,6 +12,7 @@ use byteorder::LittleEndian;
 use num::traits::ToBytes;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
+use simple_sds_sbwt::raw_vector::AccessRaw;
 
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
@@ -697,6 +698,38 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         }
 
         marks
+    }
+
+    pub fn merge(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving) -> Self {
+        let sigma = DNA_ALPHABET.len(); 
+        
+        assert!(interleaving.s1.len() == interleaving.s2.len());
+        assert!(interleaving.s1.len() == interleaving.is_dummy.len());
+        let merged_length = interleaving.s1.len();
+
+        let mut new_rows = Vec::<simple_sds_sbwt::raw_vector::RawVector>::new();
+        for _ in 0..sigma {
+            new_rows.push(simple_sds_sbwt::raw_vector::RawVector::with_len(merged_length, false));
+        }
+
+        let mut s1_colex = 0_usize;
+        let mut s2_colex = 0_usize;
+        for merged_colex in 0..merged_length {
+            for c in 0..sigma {
+                let s1_bit = interleaving.s1[s1_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
+                let s2_bit = interleaving.s2[s2_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
+                new_rows[c].set_bit(merged_colex, s1_bit | s2_bit);
+
+                s1_colex += interleaving.s1[s1_colex] as usize;
+                s2_colex += interleaving.s2[s2_colex] as usize;
+            }
+        }
+        assert_eq!(s1_colex, index1.n_sets());
+        assert_eq!(s2_colex, index2.n_sets());
+
+        todo!(); // Prune edges
+
+        todo!();
     }
 
 }
