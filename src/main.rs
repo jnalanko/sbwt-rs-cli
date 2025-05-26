@@ -565,7 +565,7 @@ fn merge_command(matches: &clap::ArgMatches) {
         load_sbwt_index_variant(&mut index2_reader).unwrap()
     };
 
-    // TODO: this needs to be update once there is support for more variants
+    // TODO: this needs to be updated once there is support for more variants
     let SbwtIndexVariant::SubsetMatrix(index1) = index1;
     let SbwtIndexVariant::SubsetMatrix(index2) = index2;
 
@@ -960,6 +960,7 @@ fn main() {
         Some(("lookup", sub_matches)) => lookup_query_command(sub_matches),
         Some(("matching-statistics", sub_matches)) => matching_statistics_command(sub_matches),
         Some(("jaccard", sub_matches)) => jaccard_command(sub_matches),
+        Some(("merge", sub_matches)) => merge_command(sub_matches),
         Some(("benchmark", sub_matches)) => benchmark_command(sub_matches),
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
