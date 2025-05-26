@@ -31,7 +31,7 @@ fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&s
         let concat = sbwt.reconstruct_padded_spectrum(n_threads);
         assert!(concat.len() % sbwt.k() == 0);
 
-        log::info!("Dumping to stdout");
+        log::info!("Writing k-mers to output");
         let n_padded_kmers = concat.len() / sbwt.k();
         for i in 0..n_padded_kmers {
             let kmer = &concat[i*sbwt.k()..(i+1)*sbwt.k()];
@@ -52,7 +52,7 @@ fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&s
         log::info!("Building select support");
         sbwt.build_select();
 
-        log::info!("Dumping k-mers to stdout");
+        log::info!("Dumping k-mers");
         let mut buf = vec![0u8; sbwt.k() + 1];
         for i in 0..sbwt.n_sets() {
             buf.clear();
