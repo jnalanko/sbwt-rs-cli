@@ -473,8 +473,17 @@ mod tests {
         let s = bitvec![0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
         let pieces = MergeInterleaving::split_to_pieces(&s, 3);
         let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 3, 4);
-        dbg!(&pieces);
-        dbg!(&pieces_par);
+        assert_eq!(pieces, pieces_par);
+
+        let s = bitvec![];
+        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 3, 4);
+        assert_eq!(pieces, pieces_par);
+
+        //              0  1  2  3  4  5  6  7  8  9  10 11
+        let s = bitvec![0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
+        let pieces = MergeInterleaving::split_to_pieces(&s, 20);
+        let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 3, 4);
         assert_eq!(pieces, pieces_par);
     }
 
