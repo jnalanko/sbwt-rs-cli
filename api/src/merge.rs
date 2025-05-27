@@ -56,7 +56,8 @@ impl MergeInterleaving {
         for round in 0..k {
             log::info!("Round {}/{}", round+1, k);
 
-            let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, round == k-1);
+            let pieces = vec![(0,0,0..s1.len(),0..s2.len())];
+            let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, pieces, round == k-1);
             (s1, s2, leader_bits) = new_arrays;
 
             if round != k-1 {
@@ -148,7 +149,7 @@ impl MergeInterleaving {
 
 
     // Helper of a helper function
-    fn refine_piece(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, compute_leaders: bool) 
+    fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, compute_leaders: bool) 
     -> (BitVec, BitVec, Option<BitVec>) {
 
         let mut out1 = bitvec::bitvec![];
@@ -217,11 +218,23 @@ impl MergeInterleaving {
     // Returns the new segmentation.
     // On the last round also returns the leader bit vector, which marks
     // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
-    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], /*input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>,*/ last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
+    fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
 
-        let s1_range = 0..s1.len();
-        let s2_range = 0..s2.len();
-        Self::refine_piece(s1, s2, chars1, chars2, 0, 0, s1_range, s2_range, last_round)
+        let mut new_s1 = bitvec![];
+        let mut new_s2 = bitvec![];
+        let mut new_leader_bits = if last_round {Some(bitvec![])} else {None};
+
+        for piece in input_pieces {
+            let (c1_i, c2_1, s1_range, s2_range) = piece;
+            let (s1_new_piece, s2_new_piece, leader_bits_piece) = Self::refine_piece(&s1, &s2, chars1, chars2, c1_i, c2_1, s1_range, s2_range, last_round);
+            new_s1.extend_from_bitslice(&s1_new_piece);
+            new_s2.extend_from_bitslice(&s2_new_piece);
+            if let Some(leader_bits_piece) = leader_bits_piece {
+                new_leader_bits.as_mut().unwrap().extend_from_bitslice(&leader_bits_piece);
+            }
+        }
+
+        (new_s1, new_s2, new_leader_bits)
 
     }
 
