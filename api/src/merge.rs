@@ -59,8 +59,7 @@ impl MergeInterleaving {
         // the one-bit with zero-based rank N*i - 1. That is, if N = 10, then the fifth
         // block starts at the one-bit with rank 49 (= the 50th 1-bit)
         for (block_idx, block) in blocks.iter().enumerate() {
-            //eprintln!("{} {} {:?}", block_idx, n_ones, starts);
-            while n_ones + block_popcounts[block_idx] >= starts.len() * ones_per_piece {
+            while starts.len() < n_pieces && n_ones + block_popcounts[block_idx] >= starts.len() * ones_per_piece {
                 // the 1-bit just before the start the next piece is in this block.
                 // Find where it is
                 let mut n_ones_precise = n_ones;
