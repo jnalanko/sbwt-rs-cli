@@ -291,7 +291,6 @@ impl MergeInterleaving {
                 c1_i += r1;
                 c2_i += r2;
 
-
                 if compute_leaders {
                     leader_bits.push(is_leader);
                 }
