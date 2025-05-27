@@ -279,18 +279,28 @@ impl MergeInterleaving {
     // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
     // This function runs in parallel, so a rayon thread pool must be initialized.
     fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
-        input_pieces.par_iter().map(|piece| {
+        let output_pieces: Vec<(BitVec, BitVec, Option<BitVec>)> = input_pieces.par_iter().map(|piece| {
             let (c1_i, c2_1, s1_range, s2_range) = piece;
             Self::refine_piece(&s1, &s2, chars1, chars2, *c1_i, *c2_1, s1_range.clone(), s2_range.clone(), last_round)
-        }).reduce(|| (bitvec![], bitvec![], Some(bitvec![])), |mut acc, x| {
-            // Concatenate pieces
-            acc.0.extend_from_bitslice(&x.0);
-            acc.1.extend_from_bitslice(&x.1);
-            if last_round {
-                acc.2.as_mut().unwrap().extend_from_bitslice(&x.2.unwrap());
+        }).collect();
+
+        // Free memory
+        drop(s1);
+        drop(s2);
+
+        // Concatenate pieces
+        let mut new_s1 = bitvec![];
+        let mut new_s2 = bitvec![];
+        let mut new_leader_bits = if last_round { Some(bitvec![]) } else { None };
+        for (s1_piece, s2_piece, leader_piece) in output_pieces {
+            new_s1.extend_from_bitslice(&s1_piece);
+            new_s2.extend_from_bitslice(&s2_piece);
+            if let Some(v) = new_leader_bits.as_mut() {
+                v.extend_from_bitslice(&leader_piece.unwrap());
             }
-            acc
-        })
+        }
+
+        (new_s1, new_s2, new_leader_bits)
     }
 
 }
