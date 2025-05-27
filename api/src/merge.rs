@@ -289,9 +289,15 @@ impl MergeInterleaving {
         drop(s2);
 
         // Concatenate pieces
+        let new_s1_len = output_pieces.iter().fold(0_usize, |acc, v| acc + v.0.len());
+        let new_s2_len = output_pieces.iter().fold(0_usize, |acc, v| acc + v.1.len());
         let mut new_s1 = bitvec![];
         let mut new_s2 = bitvec![];
-        let mut new_leader_bits = if last_round { Some(bitvec![]) } else { None };
+        new_s1.reserve_exact(new_s1_len);
+        new_s2.reserve_exact(new_s2_len);
+
+        let mut new_leader_bits = if last_round { Some(bitvec![]) } else { None }; // Todo: reserve up front
+
         for (s1_piece, s2_piece, leader_piece) in output_pieces {
             new_s1.extend_from_bitslice(&s1_piece);
             new_s2.extend_from_bitslice(&s2_piece);
