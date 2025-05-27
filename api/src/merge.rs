@@ -235,6 +235,17 @@ impl MergeInterleaving {
         }
     }
 
+    #[inline]
+    fn zero_extend(v: &mut BitVec, howmany: usize) {
+        if howmany >= 32 { // Faster extension in bulk (up to 64 bits at a time)
+            v.resize(v.len() + howmany, false);
+        } else {
+            for _ in 0..howmany {
+                v.push(false)
+            }
+        }
+    }
+
 
     // Helper of a helper function
     fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, compute_leaders: bool) 
@@ -269,19 +280,17 @@ impl MergeInterleaving {
                 let r1 = Self::run_length_in_sorted_seq(&chars1[c1_i..c1_end], c);
                 let r2 = Self::run_length_in_sorted_seq(&chars2[c2_i..c2_end], c);
 
-                c1_i += r1;
-                for _ in 0..r1 {
-                    out1.push(false); // Unary bit
-                }
-
-                c2_i += r2;
-                for _ in 0..r2 {
-                    out2.push(false); // Unary bit
-                }
-
+                // Write r1 and r2 in unary
+                Self::zero_extend(&mut out1, r1);
+                Self::zero_extend(&mut out2, r2);
                 // Terminate unary representations
                 out1.push(true);
                 out2.push(true);
+
+                // Advance indexes in chars
+                c1_i += r1;
+                c2_i += r2;
+
 
                 if compute_leaders {
                     leader_bits.push(is_leader);
