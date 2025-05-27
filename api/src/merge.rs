@@ -100,7 +100,14 @@ impl MergeInterleaving {
         for round in 0..k {
             log::info!("Round {}/{}", round+1, k);
 
-            let pieces = vec![(0,0,0..s1.len(),0..s2.len())];
+            // Split work into pieces for different threads
+            let p1 = Self::split_to_pieces(&s1, n_threads);
+            let p2 = Self::split_to_pieces(&s2, n_threads);
+            assert_eq!(p1.len(), n_threads);
+            assert_eq!(p2.len(), n_threads);
+            // Zip pairs of tuples into 4-tuples
+            let pieces = (0..n_threads).map(|i| (p1[i].0, p2[i].0, p1[i].1.clone(), p2[i].1.clone())).collect();
+
             let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, pieces, round == k-1);
             (s1, s2, leader_bits) = new_arrays;
 
@@ -203,8 +210,8 @@ impl MergeInterleaving {
 
         // c1_i and c2_i are current indices in chars1 and chars2 respectively
         // s1_i and s2_i are current indices in s1 and s2 respectively
-        let mut s1_i = 0_usize;
-        let mut s2_i = 0_usize;
+        let mut s1_i = s1_range.start;
+        let mut s2_i = s2_range.start;
 
         while s1_i < s1_range.end {
 
