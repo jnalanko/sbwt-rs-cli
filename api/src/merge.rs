@@ -57,9 +57,9 @@ impl MergeInterleaving {
             let mut n_ones = 0_usize;
             let mut n_zeros = 0_usize;
 
-            // Let N be the number of ones in a block. The i-th block starts just after
+            // Let N be the number of ones in a piece. The i-th block piece just after
             // the one-bit with zero-based rank N*i - 1. That is, if N = 10, then the fifth
-            // block starts at the one-bit with rank 49 (= the 50th 1-bit)
+            // piece starts at the one-bit with rank 49 (= the 50th 1-bit)
             for (block_idx, block) in blocks.iter().enumerate() {
                 while starts.len() < n_pieces && n_ones + block_popcounts[block_idx] >= starts.len() * ones_per_piece {
                     // The check for starts.len() < n_pieces is to avoid creating an empty piece after
