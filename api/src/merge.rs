@@ -59,6 +59,7 @@ impl MergeInterleaving {
         // the one-bit with zero-based rank N*i - 1. That is, if N = 10, then the fifth
         // block starts at the one-bit with rank 49 (= the 50th 1-bit)
         for (block_idx, block) in blocks.iter().enumerate() {
+            //eprintln!("{} {} {:?}", block_idx, n_ones, starts);
             while n_ones + block_popcounts[block_idx] >= starts.len() * ones_per_piece {
                 // the 1-bit just before the start the next piece is in this block.
                 // Find where it is
@@ -76,16 +77,23 @@ impl MergeInterleaving {
                     }
                 }
                 assert_eq!(n_ones_precise, target);
-                starts.push(i + 1);
+                starts.push(n_ones + n_zeros + i + 1);
                 n_zeros_before_piece.push(n_zeros_precise);
             }
             n_ones += block_popcounts[block_idx];
             n_zeros += block.len() - block_popcounts[block_idx];
         }
+        assert_eq!(starts.len(), n_zeros_before_piece.len());
+        assert!(starts.len() > 0);
+        while starts.len() < n_pieces {
+            // Add empty pieces to the end
+            starts.push(s.len());
+            n_zeros_before_piece.push(s.len() - total_popcount);
+        }
 
+        dbg!(&starts, &n_zeros_before_piece);
         let mut pieces: Vec<(usize, Range<usize>)> = vec![];
         assert_eq!(starts.len(), n_pieces);
-        assert_eq!(starts.len(), n_zeros_before_piece.len());
         starts.push(s.len()); // End sentinel for the end of the last range
         for i in 0..n_pieces {
             pieces.push((n_zeros_before_piece[i], starts[i]..starts[i+1]));
@@ -170,8 +178,8 @@ impl MergeInterleaving {
 
                 // Split work into pieces for different threads
                 log::info!("Splitting work");
-                let p1 = Self::split_to_pieces(&s1, n_threads);
-                let p2 = Self::split_to_pieces(&s2, n_threads);
+                let p1 = Self::split_to_pieces_par(&s1, n_threads, n_threads);
+                let p2 = Self::split_to_pieces_par(&s2, n_threads, n_threads);
                 assert_eq!(p1.len(), n_threads);
                 assert_eq!(p2.len(), n_threads);
                 // Zip pairs of tuples into 4-tuples
