@@ -421,7 +421,6 @@ mod tests {
 
     #[test]
     fn split_to_pieces() {
-
         // 7 one-bits -> ceil(7/3) = 3 per piece
         //              e              e              e     e
         let s = bitvec![0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
@@ -458,6 +457,18 @@ mod tests {
         for i in 7..pieces.len(){
             assert_eq!(pieces[i], (5, 12..12));
         }
+    }
+
+    #[test]
+    fn split_to_pieces_par() {
+        // 7 one-bits -> ceil(7/3) = 3 per piece
+        //              e              e              e     e
+        let s = bitvec![0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
+        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 3, 4);
+        dbg!(&pieces);
+        dbg!(&pieces_par);
+        assert_eq!(pieces, pieces_par);
     }
 
 }
