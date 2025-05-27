@@ -131,13 +131,13 @@ mod bitpacked_kmer_sorting;
 #[cfg(feature = "bpks-mem")]
 mod bitpacked_kmer_sorting_mem;
 
-
 mod tempfile;
 mod util;
 mod kmer;
 
 pub mod dbg;
 pub mod benchmark;
+pub mod merge;
 
 mod sdsl_compatibility;
 

@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use sbwt::dbg::Dbg;
 use sbwt::*;
 use sbwt::benchmark;
+use sbwt::merge::MergeInterleaving;
 
 use jseqio::reader::*;
-use sbwt::SbwtIndex;
 
 struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
