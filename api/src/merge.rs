@@ -35,70 +35,75 @@ impl MergeInterleaving {
     fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(usize, Range<usize>)> {
         const BLOCK_SIZE: usize = 1024;
 
-        // Strategy: compute block popcounts in parallel, then locate the blocks where the
-        // pieces start, and do bit-by-bit counting to find the precise start points of pieces.
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+        thread_pool.install(||{
+            // Strategy: compute block popcounts in parallel, then locate the blocks where the
+            // pieces start, and do bit-by-bit counting to find the precise start points of pieces.
 
-        assert!(n_pieces > 0);
-        if s.len() > 0 {
-            // The last bit should always be 1
-            assert!(s.last().unwrap() == true);
-        }
-
-        let blocks = s.chunks(BLOCK_SIZE).collect::<Vec::<&BitSlice>>();
-        let block_popcounts: Vec<usize> = blocks.par_iter().map(|block| block.count_ones()).collect();
-        let total_popcount: usize = block_popcounts.iter().sum();
-        let ones_per_piece = total_popcount.div_ceil(n_pieces); // Last piece may have fewer
-
-        let mut starts : Vec<usize> = vec![0]; // Init with the start of the first piece
-        let mut n_zeros_before_piece: Vec<usize> = vec![0]; // Init with #zeros before the first piece
-
-        let mut n_ones = 0_usize;
-        let mut n_zeros = 0_usize;
-
-        // Let N be the number of ones in a block. The i-th block starts just after
-        // the one-bit with zero-based rank N*i - 1. That is, if N = 10, then the fifth
-        // block starts at the one-bit with rank 49 (= the 50th 1-bit)
-        for (block_idx, block) in blocks.iter().enumerate() {
-            while starts.len() < n_pieces && n_ones + block_popcounts[block_idx] >= starts.len() * ones_per_piece {
-                // the 1-bit just before the start the next piece is in this block.
-                // Find where it is
-                let mut n_ones_precise = n_ones;
-                let mut n_zeros_precise = n_zeros;
-                let target = starts.len() * ones_per_piece;
-                let mut i = 0_usize;
-                loop {
-                    n_ones_precise += block[i] as usize;
-                    n_zeros_precise += 1 - (block[i] as usize);
-                    if n_ones_precise == target {
-                        break;
-                    } else {
-                        i += 1;
-                    }
-                }
-                assert_eq!(n_ones_precise, target);
-                starts.push(n_ones + n_zeros + i + 1);
-                n_zeros_before_piece.push(n_zeros_precise);
+            assert!(n_pieces > 0);
+            if s.len() > 0 {
+                // The last bit should always be 1
+                assert!(s.last().unwrap() == true);
             }
-            n_ones += block_popcounts[block_idx];
-            n_zeros += block.len() - block_popcounts[block_idx];
-        }
-        assert_eq!(starts.len(), n_zeros_before_piece.len());
-        assert!(starts.len() > 0);
-        while starts.len() < n_pieces {
-            // Add empty pieces to the end
-            starts.push(s.len());
-            n_zeros_before_piece.push(s.len() - total_popcount);
-        }
 
-        dbg!(&starts, &n_zeros_before_piece);
-        let mut pieces: Vec<(usize, Range<usize>)> = vec![];
-        assert_eq!(starts.len(), n_pieces);
-        starts.push(s.len()); // End sentinel for the end of the last range
-        for i in 0..n_pieces {
-            pieces.push((n_zeros_before_piece[i], starts[i]..starts[i+1]));
-        }
+            let blocks = s.chunks(BLOCK_SIZE).collect::<Vec::<&BitSlice>>();
+            let block_popcounts: Vec<usize> = blocks.par_iter().map(|block| block.count_ones()).collect();
+            let total_popcount: usize = block_popcounts.iter().sum();
+            let ones_per_piece = total_popcount.div_ceil(n_pieces); // Last piece may have fewer
 
-        pieces
+            let mut starts : Vec<usize> = vec![0]; // Init with the start of the first piece
+            let mut n_zeros_before_piece: Vec<usize> = vec![0]; // Init with #zeros before the first piece
+
+            let mut n_ones = 0_usize;
+            let mut n_zeros = 0_usize;
+
+            // Let N be the number of ones in a block. The i-th block starts just after
+            // the one-bit with zero-based rank N*i - 1. That is, if N = 10, then the fifth
+            // block starts at the one-bit with rank 49 (= the 50th 1-bit)
+            for (block_idx, block) in blocks.iter().enumerate() {
+                while starts.len() < n_pieces && n_ones + block_popcounts[block_idx] >= starts.len() * ones_per_piece {
+                    // The check for starts.len() < n_pieces is to avoid creating an empty piece after
+                    // the last one in case the total popcount is divisible by n_pieces.
+
+                    // the 1-bit just before the start the next piece is in this block.
+                    // Find where it is
+                    let mut n_ones_precise = n_ones;
+                    let mut n_zeros_precise = n_zeros;
+                    let target = starts.len() * ones_per_piece;
+                    let mut i = 0_usize;
+                    loop {
+                        n_ones_precise += block[i] as usize;
+                        n_zeros_precise += 1 - (block[i] as usize);
+                        if n_ones_precise == target {
+                            break;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    assert_eq!(n_ones_precise, target);
+                    starts.push(n_ones + n_zeros + i + 1);
+                    n_zeros_before_piece.push(n_zeros_precise);
+                }
+                n_ones += block_popcounts[block_idx];
+                n_zeros += block.len() - block_popcounts[block_idx];
+            }
+            assert_eq!(starts.len(), n_zeros_before_piece.len());
+            assert!(starts.len() > 0);
+            while starts.len() < n_pieces {
+                // Add empty pieces to the end
+                starts.push(s.len());
+                n_zeros_before_piece.push(s.len() - total_popcount);
+            }
+
+            let mut pieces: Vec<(usize, Range<usize>)> = vec![];
+            assert_eq!(starts.len(), n_pieces);
+            starts.push(s.len()); // End sentinel for the end of the last range
+            for i in 0..n_pieces {
+                pieces.push((n_zeros_before_piece[i], starts[i]..starts[i+1]));
+            }
+
+            pieces
+        })
     }
 
     // Returns a segmentation s[l_1..r_1), s[l_2..r_2], ... such that
