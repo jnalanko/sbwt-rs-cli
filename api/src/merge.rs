@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use bitvec::vec::BitVec;
 use bitvec::prelude::*;
+use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use crate::subsetseq::*;
@@ -29,6 +30,70 @@ pub struct MergeInterleaving {
 }
 
 impl MergeInterleaving {
+
+    // Parallel version of split_to_pieces
+    fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(usize, Range<usize>)> {
+        const BLOCK_SIZE: usize = 1024;
+
+        // Strategy: compute block popcounts in parallel, then locate the blocks where the
+        // pieces start, and do bit-by-bit counting to find the precise start points of pieces.
+
+        assert!(n_pieces > 0);
+        if s.len() > 0 {
+            // The last bit should always be 1
+            assert!(s.last().unwrap() == true);
+        }
+
+        let blocks = s.chunks(BLOCK_SIZE).collect::<Vec::<&BitSlice>>();
+        let block_popcounts: Vec<usize> = blocks.par_iter().map(|block| block.count_ones()).collect();
+        let total_popcount: usize = block_popcounts.iter().sum();
+        let ones_per_piece = total_popcount.div_ceil(n_pieces); // Last piece may have fewer
+
+        let mut starts : Vec<usize> = vec![0]; // Init with the start of the first piece
+        let mut n_zeros_before_piece: Vec<usize> = vec![0]; // Init with #zeros before the first piece
+
+        let mut n_ones = 0_usize;
+        let mut n_zeros = 0_usize;
+
+        // Let N be the number of ones in a block. The i-th block starts just after
+        // the one-bit with zero-based rank N*i - 1. That is, if N = 10, then the fifth
+        // block starts at the one-bit with rank 49 (= the 50th 1-bit)
+        for (block_idx, block) in blocks.iter().enumerate() {
+            while n_ones + block_popcounts[block_idx] <= starts.len() * ones_per_piece {
+                // the 1-bit just before the start the next piece is in this block.
+                // Find where it is
+                let mut n_ones_precise = n_ones;
+                let mut n_zeros_precise = n_zeros;
+                let target = starts.len() * ones_per_piece;
+                let mut i = 0_usize;
+                loop {
+                    n_ones_precise += block[i] as usize;
+                    n_zeros_precise += 1 - (block[i] as usize);
+                    if n_ones_precise == target {
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                assert_eq!(n_ones_precise, target);
+                starts.push(i + 1);
+                n_zeros_before_piece.push(n_zeros_precise);
+                todo!(); // First block is a special case
+            }
+            n_ones += block_popcounts[block_idx];
+            n_zeros += block.len() - block_popcounts[block_idx];
+        }
+
+        let mut pieces: Vec<(usize, Range<usize>)> = vec![];
+        assert_eq!(starts.len(), n_pieces);
+        assert_eq!(starts.len(), n_zeros_before_piece.len());
+        starts.push(s.len()); // End sentinel for the end of the last range
+        for i in 0..n_pieces {
+            pieces.push((n_zeros_before_piece[i], starts[i]..starts[i+1]));
+        }
+
+        pieces
+    }
 
     // Returns a segmentation s[l_1..r_1), s[l_2..r_2], ... such that
     // each segment ends in a 1-bit and has an approximately equal number of 1-bits.
@@ -295,9 +360,7 @@ impl MergeInterleaving {
         let mut new_s2 = bitvec![];
         new_s1.reserve_exact(new_s1_len);
         new_s2.reserve_exact(new_s2_len);
-
         let mut new_leader_bits = if last_round { Some(bitvec![]) } else { None }; // Todo: reserve up front
-
         for (s1_piece, s2_piece, leader_piece) in output_pieces {
             new_s1.extend_from_bitslice(&s1_piece);
             new_s2.extend_from_bitslice(&s2_piece);
