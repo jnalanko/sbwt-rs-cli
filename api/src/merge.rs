@@ -3,6 +3,8 @@ use std::ops::Range;
 
 use bitvec::vec::BitVec;
 use bitvec::prelude::*;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use crate::subsetseq::*;
 use crate::sbwt::*;
 
@@ -83,70 +85,76 @@ impl MergeInterleaving {
         // sizes in order. The sizes are stored in concatenated unary representations.
         // Empty ranges are allowed.
 
-        let mut leader_bits = None;
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+        thread_pool.install(||{
+            let mut leader_bits = None;
 
-        // Initialize unary concatenations with empty ranges
-        let mut s1 = bitvec![0; index1.n_sets()];
-        let mut s2 = bitvec![0; index2.n_sets()];
-        s1.push(true);
-        s2.push(true);
+            // Initialize unary concatenations with empty ranges
+            let mut s1 = bitvec![0; index1.n_sets()];
+            let mut s2 = bitvec![0; index2.n_sets()];
+            s1.push(true);
+            s2.push(true);
 
-        let mut chars1 = index1.build_last_column();
-        let mut chars2 = index2.build_last_column();
+            let mut chars1 = index1.build_last_column();
+            let mut chars2 = index2.build_last_column();
 
-        let mut temp_char_buf_1 = vec![0u8; chars1.len()];
-        let mut temp_char_buf_2 = vec![0u8; chars2.len()];
+            let mut temp_char_buf_1 = vec![0u8; chars1.len()];
+            let mut temp_char_buf_2 = vec![0u8; chars2.len()];
 
-        for round in 0..k {
-            log::info!("Round {}/{}", round+1, k);
+            for round in 0..k {
+                log::info!("Round {}/{}", round+1, k);
 
-            // Split work into pieces for different threads
-            let p1 = Self::split_to_pieces(&s1, n_threads);
-            let p2 = Self::split_to_pieces(&s2, n_threads);
-            assert_eq!(p1.len(), n_threads);
-            assert_eq!(p2.len(), n_threads);
-            // Zip pairs of tuples into 4-tuples
-            let pieces = (0..n_threads).map(|i| (p1[i].0, p2[i].0, p1[i].1.clone(), p2[i].1.clone())).collect();
+                // Split work into pieces for different threads
+                log::info!("Splitting work");
+                let p1 = Self::split_to_pieces(&s1, n_threads);
+                let p2 = Self::split_to_pieces(&s2, n_threads);
+                assert_eq!(p1.len(), n_threads);
+                assert_eq!(p2.len(), n_threads);
+                // Zip pairs of tuples into 4-tuples
+                let pieces = (0..n_threads).map(|i| (p1[i].0, p2[i].0, p1[i].1.clone(), p2[i].1.clone())).collect();
 
-            let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, pieces, round == k-1);
-            (s1, s2, leader_bits) = new_arrays;
+                log::info!("Refining segmentation");
+                let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, pieces, round == k-1);
+                (s1, s2, leader_bits) = new_arrays;
 
-            if round != k-1 {
-                index1.push_all_labels_forward(&chars1, &mut temp_char_buf_1, n_threads);
-                std::mem::swap(&mut chars1, &mut temp_char_buf_1);
+                if round != k-1 {
+                    log::info!("Pushing labels forward in the SBWT graph");
+                    index1.push_all_labels_forward(&chars1, &mut temp_char_buf_1, n_threads);
+                    std::mem::swap(&mut chars1, &mut temp_char_buf_1);
 
-                index2.push_all_labels_forward(&chars2, &mut temp_char_buf_2, n_threads);
-                std::mem::swap(&mut chars2, &mut temp_char_buf_2);
+                    index2.push_all_labels_forward(&chars2, &mut temp_char_buf_2, n_threads);
+                    std::mem::swap(&mut chars2, &mut temp_char_buf_2);
+                }
             }
-        }
 
-        let leader_bits = leader_bits.unwrap(); // Compute in the last round
-        log::info!("Number of suffix groups: {}", leader_bits.count_ones());
+            let leader_bits = leader_bits.unwrap(); // Compute in the last round
+            log::info!("Number of suffix groups: {}", leader_bits.count_ones());
 
-        Self::compress_in_place(&mut s1);
-        Self::compress_in_place(&mut s2);
+            Self::compress_in_place(&mut s1);
+            Self::compress_in_place(&mut s2);
 
-        assert_eq!(s1.len(), s2.len());
-        let merged_len = s1.len();
+            assert_eq!(s1.len(), s2.len());
+            let merged_len = s1.len();
 
-        // Identify dummies in the merged SBWT
-        let mut is_dummy = bitvec::vec::BitVec::new();
-        is_dummy.resize(merged_len, false);
-        let mut c1_idx = 0_usize;
-        let mut c2_idx = 0_usize;
-        for colex in 0..merged_len {
-            let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
-            let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
-            is_dummy.set(colex, d1 || d2); 
+            // Identify dummies in the merged SBWT
+            let mut is_dummy = bitvec::vec::BitVec::new();
+            is_dummy.resize(merged_len, false);
+            let mut c1_idx = 0_usize;
+            let mut c2_idx = 0_usize;
+            for colex in 0..merged_len {
+                let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
+                let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
+                is_dummy.set(colex, d1 || d2); 
 
-            c1_idx += s1[colex] as usize;
-            c2_idx += s2[colex] as usize;
-        }
+                c1_idx += s1[colex] as usize;
+                c2_idx += s2[colex] as usize;
+            }
 
-        log::info!("Number of dummies: {}", is_dummy.count_ones());
+            log::info!("Number of dummies: {}", is_dummy.count_ones());
 
 
-        MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits}
+            MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits}
+        })
     }
 
     pub fn intersection_size(&self) -> usize {
@@ -269,24 +277,20 @@ impl MergeInterleaving {
     // Returns the new segmentation.
     // On the last round also returns the leader bit vector, which marks
     // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
+    // This function runs in parallel, so a rayon thread pool must be initialized.
     fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
-
-        let mut new_s1 = bitvec![];
-        let mut new_s2 = bitvec![];
-        let mut new_leader_bits = if last_round {Some(bitvec![])} else {None};
-
-        for piece in input_pieces {
+        input_pieces.par_iter().map(|piece| {
             let (c1_i, c2_1, s1_range, s2_range) = piece;
-            let (s1_new_piece, s2_new_piece, leader_bits_piece) = Self::refine_piece(&s1, &s2, chars1, chars2, c1_i, c2_1, s1_range, s2_range, last_round);
-            new_s1.extend_from_bitslice(&s1_new_piece);
-            new_s2.extend_from_bitslice(&s2_new_piece);
-            if let Some(leader_bits_piece) = leader_bits_piece {
-                new_leader_bits.as_mut().unwrap().extend_from_bitslice(&leader_bits_piece);
+            Self::refine_piece(&s1, &s2, chars1, chars2, *c1_i, *c2_1, s1_range.clone(), s2_range.clone(), last_round)
+        }).reduce(|| (bitvec![], bitvec![], Some(bitvec![])), |mut acc, x| {
+            // Concatenate pieces
+            acc.0.extend_from_bitslice(&x.0);
+            acc.1.extend_from_bitslice(&x.1);
+            if last_round {
+                acc.2.as_mut().unwrap().extend_from_bitslice(&x.2.unwrap());
             }
-        }
-
-        (new_s1, new_s2, new_leader_bits)
-
+            acc
+        })
     }
 
 }
