@@ -206,6 +206,35 @@ impl MergeInterleaving {
         s.first_one().unwrap()
     }
 
+    // Assumes that seq is a string with some number of c in the beginning (possibly none)
+    // followed by a tail of non-c characters which are all larger than c.
+    // Returns the number of c in the beginning.
+    // Falls back to binary search for long sequences
+    #[inline]
+    fn run_length_in_sorted_seq(seq: &[u8], c: u8) -> usize {
+        if seq.len() == 0 {
+            return 0;
+        }
+        if seq.len() > 200 {
+            // Binary search the first element that is larger than c
+            let end = seq.binary_search_by(|&x| {
+                if x > c {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }).unwrap_err(); // Is always Err because we never return Ordering::Equal
+            end
+        } else {
+            // Linear scan
+            let mut i = 0;
+            while i < seq.len() && seq[i] == c {
+                i += 1;
+            }
+            i
+        }
+    }
+
 
     // Helper of a helper function
     fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, compute_leaders: bool) 
@@ -237,13 +266,16 @@ impl MergeInterleaving {
                 let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
                 let c = min(c1,c2);
 
-                while c1_i < c1_end && chars1[c1_i] == c {
-                    c1_i += 1;
+                let r1 = Self::run_length_in_sorted_seq(&chars1[c1_i..c1_end], c);
+                let r2 = Self::run_length_in_sorted_seq(&chars2[c2_i..c2_end], c);
+
+                c1_i += r1;
+                for _ in 0..r1 {
                     out1.push(false); // Unary bit
                 }
 
-                while c2_i < c2_end && chars2[c2_i] == c {
-                    c2_i += 1;
+                c2_i += r2;
+                for _ in 0..r2 {
                     out2.push(false); // Unary bit
                 }
 
