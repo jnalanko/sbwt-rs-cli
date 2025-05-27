@@ -32,6 +32,7 @@ impl MergeInterleaving {
     // each segment ends in a 1-bit and has an approximately equal number of 1-bits.
     // Also returns the number of 0-bits before each segment.
     fn split_to_pieces(s: &BitSlice, n_pieces: usize) -> Vec<(usize, Range<usize>)> {
+        assert!(n_pieces > 0);
         if s.len() > 0 {
             // The last bit should always be 1
             assert!(s.last().unwrap() == true);
@@ -290,17 +291,43 @@ mod tests {
 
     #[test]
     fn split_to_pieces() {
-        use super::MergeInterleaving;
 
         // 7 one-bits -> ceil(7/3) = 3 per piece
         //              e              e              e     e
         let s = bitvec![0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
         let pieces = MergeInterleaving::split_to_pieces(&s, 3);
-        dbg!(&pieces);
         assert_eq!(pieces.len(), 3);
         assert_eq!(pieces[0], (0, 0..5));
         assert_eq!(pieces[1], (2, 5..10));
         assert_eq!(pieces[2], (4, 10..12));
+    }
+
+    #[test]
+    fn split_to_pieces_empty() {
+        let s = bitvec![];
+        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        assert_eq!(pieces.len(), 3);
+        assert_eq!(pieces[0], (0, 0..0));
+        assert_eq!(pieces[1], (0, 0..0));
+        assert_eq!(pieces[2], (0, 0..0));
+    }
+
+    #[test]
+    fn split_to_pieces_run_out_of_pieces() {
+        //              0  1  2  3  4  5  6  7  8  9  10 11
+        let s = bitvec![0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
+        let pieces = MergeInterleaving::split_to_pieces(&s, 20);
+        assert_eq!(pieces.len(), 20);
+        assert_eq!(pieces[0], (0, 0..2));
+        assert_eq!(pieces[1], (1, 2..3));
+        assert_eq!(pieces[2], (1, 3..5));
+        assert_eq!(pieces[3], (2, 5..8));
+        assert_eq!(pieces[4], (4, 8..9));
+        assert_eq!(pieces[5], (4, 9..10));
+        assert_eq!(pieces[6], (4, 10..12));
+        for i in 7..pieces.len(){
+            assert_eq!(pieces[i], (5, 12..12));
+        }
     }
 
 }
