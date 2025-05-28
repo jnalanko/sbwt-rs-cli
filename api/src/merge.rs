@@ -520,6 +520,8 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
         out.copy_from_bitslice(exclusive_input_bitslices[i]);
     }
 
+   BitVec::<u64, Lsb0>::from_vec(output_data) // Reinterpret as BitVec
+
 }
 
 #[cfg(test)]
