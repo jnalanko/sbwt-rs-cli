@@ -211,9 +211,6 @@ impl MergeInterleaving {
             let leader_bits = leader_bits.unwrap(); // Compute in the last round
             log::debug!("Number of suffix groups: {}", leader_bits.count_ones());
 
-            Self::compress_in_place(&mut s1);
-            Self::compress_in_place(&mut s2);
-
             assert_eq!(s1.len(), s2.len());
             let merged_len = s1.len();
 
@@ -329,7 +326,7 @@ impl MergeInterleaving {
 
 
     // Helper of a helper function
-    fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, compute_leaders: bool) 
+    fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, last_round: bool) 
     -> (BitVec, BitVec, Option<BitVec>) {
 
         let mut out1 = bitvec::bitvec![u64, Lsb0;];
@@ -361,18 +358,25 @@ impl MergeInterleaving {
                 let r1 = Self::run_length_in_sorted_seq(&chars1[c1_i..c1_end], c);
                 let r2 = Self::run_length_in_sorted_seq(&chars2[c2_i..c2_end], c);
 
-                // Write r1 and r2 in unary
-                Self::zero_extend(&mut out1, r1);
-                Self::zero_extend(&mut out2, r2);
-                // Terminate unary representations
-                out1.push(true);
-                out2.push(true);
+                if last_round {
+                    // We know that r1 and r2 are at most 1 -> no need to have a full unary code.
+                    // Let's not assert this here because this is a tight inner loop.
+                    out1.push(r1 > 0);
+                    out2.push(r2 > 0);
+                } else {
+                    // Write r1 and r2 in unary
+                    Self::zero_extend(&mut out1, r1);
+                    Self::zero_extend(&mut out2, r2);
+                    // Terminate unary representations
+                    out1.push(true);
+                    out2.push(true);
+                }
 
                 // Advance indexes in chars
                 c1_i += r1;
                 c2_i += r2;
 
-                if compute_leaders {
+                if last_round {
                     leader_bits.push(is_leader);
                 }
 
@@ -389,14 +393,16 @@ impl MergeInterleaving {
         assert_eq!(s1_i, s1_range.end);
         assert_eq!(s2_i, s2_range.end);
 
-        (out1, out2, if compute_leaders { Some(leader_bits) } else { None })
+        (out1, out2, if last_round { Some(leader_bits) } else { None })
     }
 
     // Helper function for construction.
     // Input pieces are pairs (start in chars1, start in chars2, range in s1, range in s2)
     // Input piece are for parallelism: one piece to work on for each thread.
-    // Returns the new segmentation.
-    // On the last round also returns the leader bit vector, which marks
+    // Returns the new segmentation in concatenate unary form.
+    // One the last round the output is different: now the two output bit vectors would have
+    // only 0 and 1 encoded in unary ("1" and "01"). Instead we write just the bits 0 and 1.
+    // On the also round the function also returns the leader bit vector, which marks
     // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
     // This function runs in parallel, so a rayon thread pool must be initialized.
     fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
