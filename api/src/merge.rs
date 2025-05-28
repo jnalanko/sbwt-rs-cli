@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use bitvec::vec::BitVec;
 use bitvec::prelude::*;
+use rayon::iter::split;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
@@ -425,7 +426,13 @@ impl MergeInterleaving {
 
         (new_s1, new_s2, new_leader_bits)
     }
+}
 
+fn split_to_mut_regions(v: &mut Vec<u64>, regions: Vec<Range<usize>>) -> Vec<&mut[u64]> {
+
+    let (debug1, debug2) = v.split_at_mut(123);
+    let (debug3, _) = debug2.split_at_mut(123);
+    vec![debug1, debug3]
 }
 
 fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Lsb0> {
@@ -433,12 +440,18 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
     let n_words = total_length.div_ceil(64);
     let mut output_data = vec![0_u64; n_words];
 
+    let mut exclusive_input_bitslices = Vec::<&BitSlice::<u64, Lsb0>>::new(); // One per nonempty input bitvec
+    let mut exclusive_output_word_ranges = Vec::<Range<usize>>::new(); // One per nonempty input bitvec
+
     // Figure out which words will be potentially shared between input slices in the concatenation,
-    // and set those bits
-    let mut last_word_indices = Vec::<usize>::new();
+    // and set those bits. Push the exclusive input and output regions to vecs.
     let mut bits_so_far = 0_usize;
     for s in bitvecs.iter() {
         dbg!(&s);
+        if s.is_empty() {
+            continue // Nothing to concatenate
+        }
+
         // Copy the part that falls in the first output word
         let first_word = bits_so_far / 64; // The first word that will be written to
         let first_word_bit_offset = bits_so_far % 64; // Index of the first bit that is written in the first word
@@ -450,41 +463,34 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
         // Copy the part that falls in the last output word (can be the same
         // as the first output word but that's okay).
         bits_so_far += s.len();
-        if s.len() > 0 {
-            let last_bit = bits_so_far - 1; // >= 0 because s.len() > 0
-            let last_word = last_bit / 64;
-            let last_word_bit_offset = last_bit % 64; // Index of the last bit that is written in the last word
-            let n_bits_written_to_last_word = min(s.len(), last_word_bit_offset + 1);
-            let last_out_word = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[last_word]);
-            let last_out_slice = &mut last_out_word[(1 + last_word_bit_offset - n_bits_written_to_last_word)..=last_word_bit_offset];
-            let last_in_slice = &s[(s.len() - n_bits_written_to_last_word)..];
-            last_out_slice.copy_from_bitslice(last_in_slice);
+        let last_bit = bits_so_far - 1; // >= 0 because s.len() > 0
+        let last_word = last_bit / 64;
+        let last_word_bit_offset = last_bit % 64; // Index of the last bit that is written in the last word
+        let n_bits_written_to_last_word = min(s.len(), last_word_bit_offset + 1);
+        let last_out_word = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[last_word]);
+        let last_out_slice = &mut last_out_word[(1 + last_word_bit_offset - n_bits_written_to_last_word)..=last_word_bit_offset];
+        let last_in_slice = &s[(s.len() - n_bits_written_to_last_word)..];
+        last_out_slice.copy_from_bitslice(last_in_slice);
 
-            last_word_indices.push(last_word);
+
+        let first_exclusive_word = (first_word + 1) as isize;
+        let last_exclusive_word = (last_word - 1) as isize;
+
+        if first_exclusive_word <= last_exclusive_word {
+            // Nonempty range of exclusive words
+            exclusive_input_bitslices.push(&s[n_bits_written_to_first_word..(s.len()-n_bits_written_to_last_word)]);
+            exclusive_output_word_ranges.push(first_word..last_word+1);
         }
 
     }
 
-    // Tuples of input bitslice, output u64 wordslice, bit index of first output bit
-    let mut exclusive_output_regions = Vec::<(&BitSlice::<u64, Lsb0>, &mut[u64], usize)>::new();
-
-    // Split output data into independent regions. Let w0, w1, w2... be the last
-    // word indices. Split into [0..w0), (w0..w1), (w1..w2)..
-    let mut remaining_output_slice = output_data.as_mut_slice();
-    let mut slice_start_bit_in_concat = 0;
-    for input_slice in bitvecs.iter() {
-        let first_word = slice_start_bit_in_concat / 64;
-
-        slice_start_bit_in_concat += input_slice.len();
-    }
-
-    // TODO: build exclusive_output_regions here
+    let exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
 
     // Copy non-overlapping parts in parallel
-    for (in_bitslice, out_wordslice, first_out_bit_idx) in exclusive_output_regions {
+    /*for (in_bitslice, out_wordslice, first_out_bit_idx) in exclusive_output_regions {
         let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
         out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
-    }
+    }*/
 
     todo!();
 
