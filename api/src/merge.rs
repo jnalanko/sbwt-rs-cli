@@ -446,15 +446,21 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
 
 
         // Copy the part that falls in the last output word (can be the same
-        // as the first output word but that's okay.
+        // as the first output word but that's okay).
         bits_so_far += s.len();
-        let last_word = bits_so_far / 64;
-        let last_word_bit_offset = bits_so_far % 64;
-        let last_out = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[last_word]);
-        last_out[last_word_bit_offset..].copy_from_bitslice(&s[0..(64-last_word_bit_offset)]);
-        todo!(); // ^ this is wrong
+        if s.len() > 0 {
+            let last_bit = bits_so_far - 1; // >= 0 because s.len() > 0
+            let last_word = last_bit / 64;
+            let last_word_bit_offset = last_bit % 64; // Index of the last bit that is written in the last word
+            let n_bits_written_to_last_word = min(s.len(), last_word_bit_offset + 1);
+            let last_out_word = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[last_word]);
+            let last_out_slice = &mut last_out_word[(1 + last_word_bit_offset - n_bits_written_to_last_word)..=last_word_bit_offset];
+            let last_in_slice = &s[(s.len() - n_bits_written_to_last_word)..];
+            last_out_slice.copy_from_bitslice(last_in_slice);
 
-        last_word_indices.push(last_word);
+            last_word_indices.push(last_word);
+        }
+
     }
 
     // Split output data into independent regions. Let w0, w1, w2... be the last
