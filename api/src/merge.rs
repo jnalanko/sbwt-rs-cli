@@ -407,9 +407,9 @@ impl MergeInterleaving {
         drop(s2);
 
         // Concatenate pieces
-        log::info!("Concatenating pieces");
         let new_s1_len = output_pieces.iter().fold(0_usize, |acc, v| acc + v.0.len());
         let new_s2_len = output_pieces.iter().fold(0_usize, |acc, v| acc + v.1.len());
+        log::info!("Concatenating pieces (total length {})", new_s1_len + new_s2_len);
         let mut new_s1 = bitvec![];
         let mut new_s2 = bitvec![];
         new_s1.reserve_exact(new_s1_len);
