@@ -6,6 +6,7 @@ use bitvec::prelude::*;
 use rayon::iter::split;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelBridge;
 use rayon::iter::ParallelIterator;
 use crate::subsetseq::*;
 use crate::sbwt::*;
@@ -515,12 +516,12 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
 
     let mut exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
 
-    // Copy non-overlapping parts in parallel (todo: parallelism)
+    // Copy non-overlapping parts in parallel
     assert_eq!(exclusive_input_bitslices.len(), exclusive_output_word_ranges.len());
-    for i in 0..exclusive_input_bitslices.len() {
-        let out = BitSlice::<u64, Lsb0>::from_slice_mut(exclusive_output_word_ranges[i]);
+    exclusive_output_word_ranges.into_iter().enumerate().par_bridge().for_each(|(i, out_word_range)| {
+        let out = BitSlice::<u64, Lsb0>::from_slice_mut(out_word_range);
         out.copy_from_bitslice(exclusive_input_bitslices[i]);
-    }
+    });
 
    let mut concat = BitVec::<u64, Lsb0>::from_vec(output_data); // Reinterpret as BitVec
    concat.truncate(total_length); // Get rid of the tail in the last word
