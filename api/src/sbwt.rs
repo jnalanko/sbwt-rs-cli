@@ -1,15 +1,23 @@
 //! The [SbwtIndex] data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder).
 
+use std::cmp::min;
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
+use std::ops::Range;
+use bitvec::order::Lsb0;
 use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
+use rand::AsByteSliceMut;
 use rayon::iter::IntoParallelIterator;
+use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use simple_sds_sbwt::raw_vector::AccessRaw;
+use simple_sds_sbwt::serialize::Serialize;
 
+use crate::merge;
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
@@ -697,7 +705,13 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         marks
     }
 
-    pub fn merge(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize) -> Self {
+
+}
+
+// Impl block for things that require Send + Sync
+impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
+
+    pub fn merge(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize, n_threads: usize) -> Self {
         let sigma = DNA_ALPHABET.len(); 
         
         assert!(index1.k() == index2.k());
@@ -708,62 +722,121 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         assert!(interleaving.s1.len() == interleaving.is_leader.len());
         let merged_length = interleaving.s1.len();
 
-        let mut new_rows = Vec::<simple_sds_sbwt::raw_vector::RawVector>::new();
-        for _ in 0..sigma {
-            new_rows.push(simple_sds_sbwt::raw_vector::RawVector::with_len(merged_length, false));
-        }
+        //let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+        //thread_pool.install(|| // Todo: need to have SS: Sync + Send
+        { // Todo: enable the thread pool above
 
-        let mut s1_colex = 0_usize;
-        let mut s2_colex = 0_usize;
-        let mut current_leader = 0_usize;
-        for merged_colex in 0..merged_length {
-            if interleaving.is_leader[merged_colex] {
-                current_leader = merged_colex;
+            let piece_len = merged_length.div_ceil(n_threads);
+            let mut merged_piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_length)).collect();
+
+            // Adjust the ranges so that they start with a leader
+            for piece_idx in 1..merged_piece_ranges.len() {
+                let pair = &mut merged_piece_ranges[piece_idx-1..=piece_idx]; // Borrow a pair of elements
+                while pair[1].len() > 0 && !interleaving.is_leader[pair[1].start] {
+                    pair[1].start += 1;
+                    pair[0].end += 1;
+                }
             }
+
+            let s1_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| interleaving.s1[range.clone()].count_ones()).collect();
+            let s2_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| interleaving.s2[range.clone()].count_ones()).collect();
+
+            // Run the merge for each piece
+            let pieces_vecvec: Vec::<Vec::<bitvec::vec::BitVec::<u64, Lsb0>>> = (0..n_threads).into_par_iter().map(|thread_idx| {
+                let colex_range = &merged_piece_ranges[thread_idx];
+                let mut new_rows = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
+                for _ in 0..sigma {
+                    let mut row = bitvec::vec::BitVec::<u64, Lsb0>::new();
+                    row.resize(merged_length, false);
+                    new_rows.push(row);
+                }
+
+                let mut s1_colex: usize = s1_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
+                let mut s2_colex: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
+
+                assert!(interleaving.is_leader[colex_range.start]);
+                let mut current_leader = colex_range.start;
+                for merged_colex in colex_range.clone() {
+                    if interleaving.is_leader[merged_colex] {
+                        current_leader = merged_colex;
+                    }
+                    for c in 0..sigma {
+                        let s1_bit = interleaving.s1[merged_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
+                        let s2_bit = interleaving.s2[merged_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
+                        let cur_bit = new_rows[c][current_leader];
+                        new_rows[c].set(current_leader, cur_bit | s1_bit | s2_bit);
+                    }
+                    s1_colex += interleaving.s1[merged_colex] as usize;
+                    s2_colex += interleaving.s2[merged_colex] as usize;
+                }
+
+                assert_eq!(s1_colex, s1_piece_popcounts[..=thread_idx].iter().sum());
+                assert_eq!(s2_colex, s2_piece_popcounts[..=thread_idx].iter().sum());
+
+                new_rows
+            }).collect();
+
+            // Collect pieces for each char ("transpose the Vec<Vec<...>>")
+            let mut char_to_piece_list = Vec::<Vec::<bitvec::vec::BitVec::<u64, Lsb0>>>::new();
             for c in 0..sigma {
-                let s1_bit = interleaving.s1[merged_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
-                let s2_bit = interleaving.s2[merged_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
-                let cur_bit = new_rows[c].bit(current_leader);
-                new_rows[c].set_bit(current_leader, cur_bit | s1_bit | s2_bit);
+                char_to_piece_list.push(vec![]); // Init new piece list for this char
             }
-            s1_colex += interleaving.s1[merged_colex] as usize;
-            s2_colex += interleaving.s2[merged_colex] as usize;
+            for char_vecs_for_piece in pieces_vecvec {
+                for (c, vec) in char_vecs_for_piece.into_iter().enumerate() {
+                    char_to_piece_list[c].push(vec);
+                }
+            }
+            // Concatenate pieces for each char
+            let rows: Vec::<bitvec::vec::BitVec::<u64, Lsb0>> = char_to_piece_list.into_iter().map(|vecs| util::parallel_bitvec_concat(vecs)).collect();
+
+            // Load into simple_sds_sbwt vectors
+            let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_iter().map(|mut row| {
+                // Let's use the deserialization function in simple_sds_sbwt for a raw bitvector.
+                // It requires the following header:
+                let mut header = [0u64, 0u64]; // bits, words
+                header[0] = merged_length as u64; // Assumes little-endian byte order
+                header[1] = merged_length.div_ceil(64) as u64;
+
+                let header_bytes = header.as_byte_slice_mut();
+                let raw_data = row.as_raw_mut_slice().as_byte_slice_mut();
+                let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
+
+                simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
+            }).collect();
+
+            // At this point, there should be exactly merged_length - 1 bits set in new_rows.
+            //
+            // Proof:
+            //
+            // There will exactly one incoming edge to each node except the root (that's the -1). This holds in the
+            // input SBWTs. Consider a non-root node v of the merged SBWT. It will have an incoming edge in one
+            // or both of the input SBWTs. That edge is copied to the suffix group leader of its suffix
+            // group in the merged SBWT. The leader has the same (k-1)-suffix as the k-mer which had the outgoing
+            // edge to v, so the edge will point to v. There can not be two or more incoming edges because those would have to
+            // come from the same suffix group, but each suffix group has each outgoing label at most once (at the leader).
+
+            let n_kmers = merged_length - interleaving.is_dummy.count_ones();
+            log::info!("Number of distinct k-mers: {}", n_kmers);
+
+            // Create the C array
+            #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
+            let C: Vec<usize> = crate::util::get_C_array(&new_rows);
+
+            log::info!("Building the subset rank structure");
+            let mut subsetseq = SS::new_from_bit_vectors(new_rows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
+            subsetseq.build_rank();
+            let n_sets = subsetseq.len();
+            let mut index = SbwtIndex::<SS>::from_components(
+                subsetseq, n_kmers, k, C,
+                PrefixLookupTable::new_empty(n_sets));
+
+            let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
+            index.set_lookup_table(lut);
+
+            index
         }
-        assert_eq!(s1_colex, index1.n_sets());
-        assert_eq!(s2_colex, index2.n_sets());
-
-        // At this point, there should be exactly merged_length - 1 bits set in new_rows.
-        //
-        // Proof:
-        //
-        // There will exactly one incoming edge to each node except the root (that's the -1). This holds in the
-        // input SBWTs. Consider a non-root node v of the merged SBWT. It will have an incoming edge in one
-        // or both of the input SBWTs. That edge is copied to the suffix group leader of its suffix
-        // group in the merged SBWT. The leader has the same (k-1)-suffix as the k-mer which had the outgoing
-        // edge to v, so the edge will point to v. There can not be two or more incoming edges because those would have to
-        // come from the same suffix group, but each suffix group has each outgoing label at most once (at the leader).
-
-        let n_kmers = merged_length - interleaving.is_dummy.count_ones();
-        log::info!("Number of distinct k-mers: {}", n_kmers);
-
-        // Create the C array
-        #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
-        let C: Vec<usize> = crate::util::get_C_array(&new_rows);
-
-        log::info!("Building the subset rank structure");
-        let mut subsetseq = SS::new_from_bit_vectors(new_rows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
-        subsetseq.build_rank();
-        let n_sets = subsetseq.len();
-        let mut index = SbwtIndex::<SS>::from_components(
-            subsetseq, n_kmers, k, C,
-            PrefixLookupTable::new_empty(n_sets));
-
-        let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
-        index.set_lookup_table(lut);
-
-        index
+        //) // Thread pool
     }
-
 }
 
 /// A table storing the SBWT intervals of all 4^p possible p-mers.

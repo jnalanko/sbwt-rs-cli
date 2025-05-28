@@ -208,7 +208,7 @@ impl MergeInterleaving {
                 }
             }
 
-            let leader_bits = leader_bits.unwrap(); // Compute in the last round
+            let leader_bits = leader_bits.unwrap(); // Computed in the last round
             log::debug!("Number of suffix groups: {}", leader_bits.count_ones());
 
             assert_eq!(s1.len(), s2.len());
@@ -425,106 +425,7 @@ impl MergeInterleaving {
     }
 }
 
-/// Returns a mutable slice for every region in `regions`.
-///
-/// ## Preconditions  (guaranteed by the caller)
-/// * All ranges are inside `0..v.len()`.
-/// * The ranges are sorted by `start` and do **not** overlap.
-pub fn split_to_mut_regions(
-    v: &mut Vec<u64>,
-    regions: Vec<Range<usize>>,
-) -> Vec<&mut [u64]> {
-    let mut result = Vec::with_capacity(regions.len());
-    let mut tail: &mut [u64] = v.as_mut_slice();
-    let mut consumed = 0; // absolute index we have reached in `v`
 
-    for r in regions {
-        // translate the absolute `start` to an index inside `tail`
-        let rel_start = r.start - consumed;
-        let len       = r.end   - r.start;
-
-        // First split off everything before the wanted region …
-        let (_, after_start)    = tail.split_at_mut(rel_start);
-        // ... then split that remainder into the desired region and the rest.
-        let (region, after_end) = after_start.split_at_mut(len);
-
-        result.push(region); // keep the region
-        tail = after_end; // keep working with the suffix
-        consumed = r.end; // advance the absolute cursor
-    }
-
-    result
-}
-
-
-// This function runs in parallel, so a rayon thread pool must be initialized.
-fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
-    if bitvecs.len() == 1 {
-        return bitvecs.into_iter().next().unwrap(); // Nothing to do
-    }
-    let total_length = bitvecs.iter().fold(0_usize, |acc, s| acc + s.len());
-    let n_words = total_length.div_ceil(64);
-    let mut output_data = vec![0_u64; n_words];
-
-    let mut exclusive_input_bitslices = Vec::<&BitSlice>::new(); // One per nonempty input bitvec
-    let mut exclusive_output_word_ranges = Vec::<Range<usize>>::new(); // One per nonempty input bitvec
-
-    // Figure out which words will be potentially shared between input slices in the concatenation,
-    // and set those bits. Push the exclusive input and output regions to vecs.
-    let mut bits_so_far = 0_usize;
-    for s in bitvecs.iter() {
-        if s.is_empty() {
-            continue // Nothing to concatenate
-        }
-
-        // Copy the part that falls in the first output word
-        let first_word = bits_so_far / 64; // The first word that will be written to
-        let first_word_bit_offset = bits_so_far % 64; // Index of the first bit that is written in the first word
-        let n_bits_written_to_first_word = min(s.len(), 64 - first_word_bit_offset);
-        let first_out = BitSlice::from_element_mut(&mut output_data[first_word]);
-        let first_out_slice = &mut first_out[first_word_bit_offset..first_word_bit_offset + n_bits_written_to_first_word];
-        first_out_slice.copy_from_bitslice(&s[0..n_bits_written_to_first_word]);
-
-        // Copy the part that falls in the last output word (can be the same
-        // as the first output word but that's okay).
-        bits_so_far += s.len();
-        let last_bit = bits_so_far - 1; // >= 0 because s.len() > 0
-        let last_word = last_bit / 64;
-        let last_word_bit_offset = last_bit % 64; // Index of the last bit that is written in the last word
-        let n_bits_written_to_last_word = min(s.len(), last_word_bit_offset + 1);
-        let last_out_word = BitSlice::from_element_mut(&mut output_data[last_word]);
-        let last_out_slice = &mut last_out_word[(1 + last_word_bit_offset - n_bits_written_to_last_word)..=last_word_bit_offset];
-        let last_in_slice = &s[(s.len() - n_bits_written_to_last_word)..];
-        last_out_slice.copy_from_bitslice(last_in_slice);
-
-
-        let first_exclusive_word = (first_word + 1) as isize;
-        let last_exclusive_word = (last_word - 1) as isize;
-
-        //dbg!(&s.len(), last_bit, first_word, last_word+1, first_exclusive_word, last_exclusive_word);
-
-        if first_exclusive_word <= last_exclusive_word {
-            // Nonempty range of exclusive words
-            exclusive_input_bitslices.push(&s[n_bits_written_to_first_word..(s.len()-n_bits_written_to_last_word)]);
-            exclusive_output_word_ranges.push(first_exclusive_word as usize .. last_exclusive_word as usize +1);
-        }
-
-    }
-
-    let exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
-
-    // Copy non-overlapping parts in parallel
-    assert_eq!(exclusive_input_bitslices.len(), exclusive_output_word_ranges.len());
-    exclusive_output_word_ranges.into_iter().enumerate().par_bridge().for_each(|(i, out_word_range)| {
-        let out = BitSlice::from_slice_mut(out_word_range);
-        out.copy_from_bitslice(exclusive_input_bitslices[i]);
-    });
-
-   let mut concat = BitVec::from_vec(output_data); // Reinterpret as BitVec
-   concat.truncate(total_length); // Get rid of the tail in the last word
-   concat
-
-}
 
 #[cfg(test)]
 mod tests {
@@ -601,40 +502,6 @@ mod tests {
         let pieces = MergeInterleaving::split_to_pieces(&s, 20);
         let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 20, 4);
         assert_eq!(pieces, pieces_par);
-    }
-
-    #[test]
-    fn parallel_concatenation() {
-        // Generate 1001 pseudorandom bit vectors with lengths between 0 and 256 bits
-        let seed = 42;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        let mut bitvecs: Vec<BitVec> = Vec::new();
-        for i in 0..1000 {
-            let len = rng.gen_range(0, 256);
-            if i == 500 {
-                // Add an empty bit vector
-                bitvecs.push(BitVec::new());
-            }
-            let mut bits = BitVec::with_capacity(len);
-            for _ in 0..len {
-                bits.push(rng.gen_bool(0.5));
-            }
-            bitvecs.push(bits);
-        }
-
-        let true_concat = bitvecs.iter().fold(BitVec::new(), |mut acc, v| {
-            acc.extend_from_bitslice(v);
-            acc
-        });
-
-        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(3).build().unwrap();
-        let our_concat = thread_pool.install(|| {
-            parallel_bitvec_concat(bitvecs)
-        });
-
-        assert_eq!(true_concat.len(), our_concat.len());
-        assert_eq!(true_concat, our_concat);
-
     }
 
 }
