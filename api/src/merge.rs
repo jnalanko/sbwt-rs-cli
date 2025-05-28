@@ -395,16 +395,19 @@ impl MergeInterleaving {
     // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
     // This function runs in parallel, so a rayon thread pool must be initialized.
     fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
+        log::info!("Refining pieces in parallel");
         let output_pieces: Vec<(BitVec, BitVec, Option<BitVec>)> = input_pieces.par_iter().map(|piece| {
             let (c1_i, c2_1, s1_range, s2_range) = piece;
             Self::refine_piece(&s1, &s2, chars1, chars2, *c1_i, *c2_1, s1_range.clone(), s2_range.clone(), last_round)
         }).collect();
 
+        log::info!("Freeing memory");
         // Free memory
         drop(s1);
         drop(s2);
 
         // Concatenate pieces
+        log::info!("Concatenating pieces");
         let new_s1_len = output_pieces.iter().fold(0_usize, |acc, v| acc + v.0.len());
         let new_s2_len = output_pieces.iter().fold(0_usize, |acc, v| acc + v.1.len());
         let mut new_s1 = bitvec![];
