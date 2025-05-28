@@ -255,30 +255,6 @@ impl MergeInterleaving {
         ans
     }
 
-    // Helper for construction. Takes a unary concatenation of binary numbers 0^b 1, like:
-    // 101011011101 (= 0,1,1,0,1,0,0,1)
-    // And produces a bit vector encoding the bits:
-    // 01101001
-    fn compress_in_place(s1: &mut BitVec) {
-
-            let mut s1_i = 0_usize; // Index in s1
-
-            let mut new_idx = 0_usize;
-            while s1_i < s1.len() {
-                let len1 = Self::leading_zeros(&s1[s1_i..]);
-                assert!(len1 <= 1); // This is the colex range of a k-mer, so it should be empty or singleton
-
-                s1_i += len1 + 1; // Length of the unary number we just parsed
-
-                s1.set(new_idx, len1 != 0);
-                new_idx += 1;
-            }
-            assert_eq!(s1_i, s1.len());
-            s1.resize(new_idx, false);
-            s1.shrink_to_fit();
-
-    }
-
     // Assumes there is at least one 1-bit
     fn leading_zeros(s: &BitSlice) -> usize {
         s.first_one().unwrap()
