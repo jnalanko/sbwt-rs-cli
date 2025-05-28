@@ -446,7 +446,6 @@ pub fn split_to_mut_regions(
 
     for r in regions {
         // translate the absolute `start` to an index inside `tail`
-        dbg!(&r, &consumed);
         let rel_start = r.start - consumed;
         let len       = r.end   - r.start;
 
