@@ -445,6 +445,7 @@ pub fn split_to_mut_regions(
 
     for r in regions {
         // translate the absolute `start` to an index inside `tail`
+        dbg!(&r, &consumed);
         let rel_start = r.start - consumed;
         let len       = r.end   - r.start;
 
@@ -474,7 +475,6 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
     // and set those bits. Push the exclusive input and output regions to vecs.
     let mut bits_so_far = 0_usize;
     for s in bitvecs.iter() {
-        dbg!(&s);
         if s.is_empty() {
             continue // Nothing to concatenate
         }
@@ -503,10 +503,12 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
         let first_exclusive_word = (first_word + 1) as isize;
         let last_exclusive_word = (last_word - 1) as isize;
 
+        //dbg!(&s.len(), last_bit, first_word, last_word+1, first_exclusive_word, last_exclusive_word);
+
         if first_exclusive_word <= last_exclusive_word {
             // Nonempty range of exclusive words
             exclusive_input_bitslices.push(&s[n_bits_written_to_first_word..(s.len()-n_bits_written_to_last_word)]);
-            exclusive_output_word_ranges.push(first_word..last_word+1);
+            exclusive_output_word_ranges.push(first_exclusive_word as usize .. last_exclusive_word as usize +1);
         }
 
     }
