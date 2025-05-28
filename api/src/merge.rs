@@ -428,10 +428,54 @@ impl MergeInterleaving {
 
 }
 
+fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Lsb0> {
+    let total_length = slices.iter().fold(0_usize, |acc, s| acc + s.len());
+    let n_words = total_length.div_ceil(64);
+    let mut output_data = vec![0_u64; n_words];
+
+    // Figure out which words will be potentially shared between input slices in the concatenation
+    let mut last_word_indices = Vec::<usize>::new();
+    let mut bits_so_far = 0_usize;
+    for s in slices.iter() {
+        bits_so_far += s.len();
+        last_word_indices.push(bits_so_far / 64);
+    }
+
+    // Split output data into independent regions. Let w0, w1, w2... be the last
+    // word indices. Split into [0..w0), (w0..w1), (w1..w2)..
+    let mut remaining_output_slice = output_data.as_mut_slice();
+
+    // Tuples of input bitslice, output u64 slice slice, bit index of first output bit
+    let mut exclusive_output_regions = Vec::<(&BitSlice::<u64, Lsb0>, &mut[u64], usize)>::new();
+
+    // TODO: build exclusive_output_regions here
+
+    for (in_bitslice, out_wordslice, first_out_bit_idx) in exclusive_output_regions {
+        let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
+        assert_eq!(in_bitslice.len(), out_bitslice.len() - first_out_bit_idx);
+        out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
+    }
+
+
+    // Todo: fill in boundary words
+
+    todo!();
+
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::*;
+
+    /*
+    #[test]
+    fn quick(){
+        let v: Vec<usize> = vec![];
+        let s = &v[1..1];
+        eprintln!("{:?}", s);
+    }
+    */
 
     #[test]
     fn split_to_pieces() {
