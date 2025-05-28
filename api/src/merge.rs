@@ -215,21 +215,34 @@ impl MergeInterleaving {
             let merged_len = s1.len();
 
             // Identify dummies in the merged SBWT
-            let mut is_dummy = bitvec::vec::BitVec::new();
-            is_dummy.resize(merged_len, false);
-            let mut c1_idx = 0_usize;
-            let mut c2_idx = 0_usize;
-            for colex in 0..merged_len {
-                let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
-                let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
-                is_dummy.set(colex, d1 || d2); 
 
-                c1_idx += s1[colex] as usize;
-                c2_idx += s2[colex] as usize;
-            }
+            log::debug!("Marking dummy nodes");
+            let piece_len = merged_len.div_ceil(n_threads);
+            let piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_len)).collect();
+            let s1_piece_popcounts: Vec<usize> = piece_ranges.par_iter().map(|range| s1[range.clone()].count_ones()).collect();
+            let s2_piece_popcounts: Vec<usize> = piece_ranges.par_iter().map(|range| s2[range.clone()].count_ones()).collect();
+            let is_dummy_pieces = (0..n_threads).into_par_iter().map(|thread_idx| {
+                let mut is_dummy_piece = BitVec::with_capacity(piece_len);
+                let input_global_start = thread_idx*piece_len;
+                let input_global_end = (thread_idx+1)*piece_len;
+                let mut c1_idx: usize = s1_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
+                let mut c2_idx: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
+                for colex in input_global_start..input_global_end {
+                    let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
+                    let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
+
+                    let rel_colex = colex - input_global_start;
+                    is_dummy_piece.set(rel_colex, d1 || d2); 
+
+                    c1_idx += s1[colex] as usize;
+                    c2_idx += s2[colex] as usize;
+                }
+                is_dummy_piece 
+            }).collect();
+
+            let is_dummy = parallel_bitvec_concat(is_dummy_pieces);
 
             log::info!("Number of dummies: {}", is_dummy.count_ones());
-
 
             MergeInterleaving { s1, s2, is_dummy, is_leader: leader_bits}
         })
