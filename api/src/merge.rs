@@ -428,6 +428,7 @@ impl MergeInterleaving {
     }
 }
 
+// Assumes regions come in increasing order
 fn split_to_mut_regions(v: &mut Vec<u64>, regions: Vec<Range<usize>>) -> Vec<&mut[u64]> {
 
     let (debug1, debug2) = v.split_at_mut(123);
@@ -484,13 +485,14 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
 
     }
 
-    let exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
+    let mut exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
 
-    // Copy non-overlapping parts in parallel
-    /*for (in_bitslice, out_wordslice, first_out_bit_idx) in exclusive_output_regions {
-        let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
-        out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
-    }*/
+    // Copy non-overlapping parts in parallel (todo: parallelism)
+    assert_eq!(exclusive_input_bitslices.len(), exclusive_output_word_ranges.len());
+    for i in 0..exclusive_input_bitslices.len() {
+        let out = BitSlice::<u64, Lsb0>::from_slice_mut(exclusive_output_word_ranges[i]);
+        out.copy_from_bitslice(exclusive_input_bitslices[i]);
+    }
 
     todo!();
 
