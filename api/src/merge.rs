@@ -428,8 +428,8 @@ impl MergeInterleaving {
 
 }
 
-fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Lsb0> {
-    let total_length = slices.iter().fold(0_usize, |acc, s| acc + s.len());
+fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Lsb0> {
+    let total_length = bitvecs.iter().fold(0_usize, |acc, s| acc + s.len());
     let n_words = total_length.div_ceil(64);
     let mut output_data = vec![0_u64; n_words];
 
@@ -437,7 +437,7 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
     // and set those bits
     let mut last_word_indices = Vec::<usize>::new();
     let mut bits_so_far = 0_usize;
-    for s in slices.iter() {
+    for s in bitvecs.iter() {
         // Copy the part that falls in the first output word
         let first_word = bits_so_far / 64;
         let first_word_bit_offset = bits_so_far % 64;
@@ -470,7 +470,7 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
     // word indices. Split into [0..w0), (w0..w1), (w1..w2)..
     let mut remaining_output_slice = output_data.as_mut_slice();
     let mut slice_start_bit_in_concat = 0;
-    for input_slice in slices.iter() {
+    for input_slice in bitvecs.iter() {
         let first_word = slice_start_bit_in_concat / 64;
 
         slice_start_bit_in_concat += input_slice.len();
@@ -490,6 +490,8 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
 
 #[cfg(test)]
 mod tests {
+
+    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -561,6 +563,37 @@ mod tests {
         let pieces = MergeInterleaving::split_to_pieces(&s, 20);
         let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 20, 4);
         assert_eq!(pieces, pieces_par);
+    }
+
+    #[test]
+    fn parallel_concatenation() {
+        // Generate 1001 pseudorandom bit vectors with lengths between 0 and 256 bits
+        let seed = 42;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut bitvecs: Vec<BitVec<u64, Lsb0>> = Vec::new();
+        for i in 0..1000 {
+            let len = rng.gen_range(0, 256);
+            if i == 500 {
+                // Add an empty bit vector
+                bitvecs.push(BitVec::<u64, Lsb0>::new());
+            }
+            let mut bits = BitVec::<u64, Lsb0>::with_capacity(len);
+            for _ in 0..len {
+                bits.push(rng.gen_bool(0.5));
+            }
+            bitvecs.push(bits);
+        }
+
+        let true_concat = bitvecs.iter().fold(BitVec::<u64, Lsb0>::new(), |mut acc, v| {
+            acc.extend_from_bitslice(v);
+            acc
+        });
+
+        let our_concat = parallel_bitslice_concat(bitvecs);
+
+        assert_eq!(true_concat.len(), our_concat.len());
+        assert_eq!(true_concat, our_concat);
+
     }
 
 }
