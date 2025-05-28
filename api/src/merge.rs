@@ -186,7 +186,7 @@ impl MergeInterleaving {
                 log::info!("Round {}/{}", round+1, k);
 
                 // Split work into pieces for different threads
-                log::info!("Splitting work");
+                log::debug!("Splitting work");
                 let p1 = Self::split_to_pieces_par(&s1, n_threads, n_threads);
                 let p2 = Self::split_to_pieces_par(&s2, n_threads, n_threads);
                 assert_eq!(p1.len(), n_threads);
@@ -194,12 +194,12 @@ impl MergeInterleaving {
                 // Zip pairs of tuples into 4-tuples
                 let pieces = (0..n_threads).map(|i| (p1[i].0, p2[i].0, p1[i].1.clone(), p2[i].1.clone())).collect();
 
-                log::info!("Refining segmentation");
+                log::debug!("Refining segmentation");
                 let new_arrays = Self::refine_segmentation(s1, s2, &chars1, &chars2, pieces, round == k-1);
                 (s1, s2, leader_bits) = new_arrays;
 
                 if round != k-1 {
-                    log::info!("Pushing labels forward in the SBWT graph");
+                    log::debug!("Pushing labels forward in the SBWT graph");
                     index1.push_all_labels_forward(&chars1, &mut temp_char_buf_1, n_threads);
                     std::mem::swap(&mut chars1, &mut temp_char_buf_1);
 
@@ -209,7 +209,7 @@ impl MergeInterleaving {
             }
 
             let leader_bits = leader_bits.unwrap(); // Compute in the last round
-            log::info!("Number of suffix groups: {}", leader_bits.count_ones());
+            log::debug!("Number of suffix groups: {}", leader_bits.count_ones());
 
             Self::compress_in_place(&mut s1);
             Self::compress_in_place(&mut s2);
@@ -400,13 +400,11 @@ impl MergeInterleaving {
     // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
     // This function runs in parallel, so a rayon thread pool must be initialized.
     fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
-        log::info!("Refining pieces in parallel");
         let output_pieces: Vec<(BitVec, BitVec, Option<BitVec>)> = input_pieces.par_iter().map(|piece| {
             let (c1_i, c2_1, s1_range, s2_range) = piece;
             Self::refine_piece(&s1, &s2, chars1, chars2, *c1_i, *c2_1, s1_range.clone(), s2_range.clone(), last_round)
         }).collect();
 
-        log::info!("Freeing memory");
         // Free memory
         drop(s1);
         drop(s2);
@@ -422,7 +420,7 @@ impl MergeInterleaving {
                 leader_pieces.as_mut().unwrap().push(c.unwrap());
             }
         }
-        log::info!("Concatenating pieces");
+        log::debug!("Concatenating pieces");
         let new_s1 = parallel_bitvec_concat(new_s1_pieces);
         let new_s2 = parallel_bitvec_concat(new_s2_pieces);
         let new_leader_bits = leader_pieces.map(parallel_bitvec_concat);
