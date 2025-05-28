@@ -433,12 +433,27 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
     let n_words = total_length.div_ceil(64);
     let mut output_data = vec![0_u64; n_words];
 
-    // Figure out which words will be potentially shared between input slices in the concatenation
+    // Figure out which words will be potentially shared between input slices in the concatenation,
+    // and set those bits
     let mut last_word_indices = Vec::<usize>::new();
     let mut bits_so_far = 0_usize;
     for s in slices.iter() {
+        // Copy the part that falls in the first output word
+        let first_word = bits_so_far / 64;
+        let first_word_bit_offset = bits_so_far % 64;
+        let first_out = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[first_word]);
+        first_out[first_word_bit_offset..].copy_from_bitslice(&s[0..(64-first_word_bit_offset)]);
+
+
+        // Copy the part that falls in the last output word (can be the same
+        // as the first output word but that's okay.
         bits_so_far += s.len();
-        last_word_indices.push(bits_so_far / 64);
+        let last_word = bits_so_far / 64;
+        let last_word_bit_offset = bits_so_far % 64;
+        let last_out = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[last_word]);
+        last_out[last_word_bit_offset..].copy_from_bitslice(&s[0..(64-last_word_bit_offset)]);
+
+        last_word_indices.push(last_word);
     }
 
     // Split output data into independent regions. Let w0, w1, w2... be the last
@@ -455,9 +470,6 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
         assert_eq!(in_bitslice.len(), out_bitslice.len() - first_out_bit_idx);
         out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
     }
-
-
-    // Todo: fill in boundary words
 
     todo!();
 
