@@ -428,13 +428,39 @@ impl MergeInterleaving {
     }
 }
 
-// Assumes regions come in increasing order
-fn split_to_mut_regions(v: &mut Vec<u64>, regions: Vec<Range<usize>>) -> Vec<&mut[u64]> {
+//use std::ops::Range;
 
-    let (debug1, debug2) = v.split_at_mut(123);
-    let (debug3, _) = debug2.split_at_mut(123);
-    vec![debug1, debug3]
+/// Returns a mutable slice for every region in `regions`.
+///
+/// ## Preconditions  (guaranteed by the caller)
+/// * All ranges are inside `0..v.len()`.
+/// * The ranges are sorted by `start` and do **not** overlap.
+pub fn split_to_mut_regions(
+    v: &mut Vec<u64>,
+    regions: Vec<Range<usize>>,
+) -> Vec<&mut [u64]> {
+    let mut result = Vec::with_capacity(regions.len());
+    let mut tail: &mut [u64] = v.as_mut_slice();
+    let mut consumed = 0; // absolute index we have reached in `v`
+
+    for r in regions {
+        // translate the absolute `start` to an index inside `tail`
+        let rel_start = r.start - consumed;
+        let len       = r.end   - r.start;
+
+        // First split off everything before the wanted region …
+        let (_, after_start)    = tail.split_at_mut(rel_start);
+        // ... then split that remainder into the desired region and the rest.
+        let (region, after_end) = after_start.split_at_mut(len);
+
+        result.push(region); // keep the region
+        tail = after_end; // keep working with the suffix
+        consumed = r.end; // advance the absolute cursor
+    }
+
+    result
 }
+
 
 fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Lsb0> {
     let total_length = bitvecs.iter().fold(0_usize, |acc, s| acc + s.len());
@@ -493,8 +519,6 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
         let out = BitSlice::<u64, Lsb0>::from_slice_mut(exclusive_output_word_ranges[i]);
         out.copy_from_bitslice(exclusive_input_bitslices[i]);
     }
-
-    todo!();
 
 }
 
