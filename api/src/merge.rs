@@ -438,12 +438,14 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
     let mut last_word_indices = Vec::<usize>::new();
     let mut bits_so_far = 0_usize;
     for s in bitvecs.iter() {
+        dbg!(&s);
         // Copy the part that falls in the first output word
-        let first_word = bits_so_far / 64;
-        let first_word_bit_offset = bits_so_far % 64;
+        let first_word = bits_so_far / 64; // The first word that will be written to
+        let first_word_bit_offset = bits_so_far % 64; // Index of the first bit that is written in the first word
+        let n_bits_written_to_first_word = min(s.len(), 64 - first_word_bit_offset);
         let first_out = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[first_word]);
-        first_out[first_word_bit_offset..].copy_from_bitslice(&s[0..(64-first_word_bit_offset)]);
-
+        let first_out_slice = &mut first_out[first_word_bit_offset..first_word_bit_offset + n_bits_written_to_first_word];
+        first_out_slice.copy_from_bitslice(&s[0..n_bits_written_to_first_word]);
 
         // Copy the part that falls in the last output word (can be the same
         // as the first output word but that's okay).
