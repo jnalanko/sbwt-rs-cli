@@ -831,7 +831,6 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
 
             let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
             index.set_lookup_table(lut);
-            println!("Here");
 
             index
         })
