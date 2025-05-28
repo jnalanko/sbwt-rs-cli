@@ -452,6 +452,7 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
         let last_word_bit_offset = bits_so_far % 64;
         let last_out = BitSlice::<u64, Lsb0>::from_element_mut(&mut output_data[last_word]);
         last_out[last_word_bit_offset..].copy_from_bitslice(&s[0..(64-last_word_bit_offset)]);
+        todo!(); // ^ this is wrong
 
         last_word_indices.push(last_word);
     }
