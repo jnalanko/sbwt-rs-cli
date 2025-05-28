@@ -472,10 +472,10 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
 
     // TODO: build exclusive_output_regions here
 
+    // Copy non-overlapping parts in parallel
     for (in_bitslice, out_wordslice, first_out_bit_idx) in exclusive_output_regions {
-        let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
-        assert_eq!(in_bitslice.len(), out_bitslice.len() - first_out_bit_idx);
-        out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
+        //let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
+        //out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
     }
 
     todo!();
