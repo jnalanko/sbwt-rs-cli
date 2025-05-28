@@ -218,25 +218,27 @@ impl MergeInterleaving {
 
             log::debug!("Marking dummy nodes");
             let piece_len = merged_len.div_ceil(n_threads);
-            let piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_len)).collect();
-            let s1_piece_popcounts: Vec<usize> = piece_ranges.par_iter().map(|range| s1[range.clone()].count_ones()).collect();
-            let s2_piece_popcounts: Vec<usize> = piece_ranges.par_iter().map(|range| s2[range.clone()].count_ones()).collect();
+            let merged_piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_len)).collect();
+            let s1_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| s1[range.clone()].count_ones()).collect();
+            let s2_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| s2[range.clone()].count_ones()).collect();
             let is_dummy_pieces = (0..n_threads).into_par_iter().map(|thread_idx| {
-                let mut is_dummy_piece = BitVec::with_capacity(piece_len);
-                let char_range = &piece_ranges[thread_idx];
+                let colex_range = &merged_piece_ranges[thread_idx];
+                let mut is_dummy_bits = bitvec![u64, Lsb0 ;];
+                is_dummy_bits.resize(colex_range.len(), false);
+
                 let mut c1_idx: usize = s1_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
                 let mut c2_idx: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
-                for colex in char_range.clone() {
+                for colex in colex_range.clone() {
                     let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
                     let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
 
-                    let rel_colex = colex - char_range.start;
-                    is_dummy_piece.set(rel_colex, d1 || d2); 
+                    let rel_colex = colex - colex_range.start;
+                    is_dummy_bits.set(rel_colex, d1 || d2); 
 
                     c1_idx += s1[colex] as usize;
                     c2_idx += s2[colex] as usize;
                 }
-                is_dummy_piece 
+                is_dummy_bits 
             }).collect();
 
             let is_dummy = parallel_bitvec_concat(is_dummy_pieces);
