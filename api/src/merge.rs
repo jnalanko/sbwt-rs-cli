@@ -463,19 +463,25 @@ fn parallel_bitslice_concat(slices: &[&BitSlice::<u64, Lsb0>]) -> BitVec<u64, Ls
 
     }
 
+    // Tuples of input bitslice, output u64 wordslice, bit index of first output bit
+    let mut exclusive_output_regions = Vec::<(&BitSlice::<u64, Lsb0>, &mut[u64], usize)>::new();
+
     // Split output data into independent regions. Let w0, w1, w2... be the last
     // word indices. Split into [0..w0), (w0..w1), (w1..w2)..
     let mut remaining_output_slice = output_data.as_mut_slice();
+    let mut slice_start_bit_in_concat = 0;
+    for input_slice in slices.iter() {
+        let first_word = slice_start_bit_in_concat / 64;
 
-    // Tuples of input bitslice, output u64 slice slice, bit index of first output bit
-    let mut exclusive_output_regions = Vec::<(&BitSlice::<u64, Lsb0>, &mut[u64], usize)>::new();
+        slice_start_bit_in_concat += input_slice.len();
+    }
 
     // TODO: build exclusive_output_regions here
 
     // Copy non-overlapping parts in parallel
     for (in_bitslice, out_wordslice, first_out_bit_idx) in exclusive_output_regions {
-        //let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
-        //out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
+        let out_bitslice = BitSlice::<u64, Lsb0>::from_slice_mut(out_wordslice);
+        out_bitslice[first_out_bit_idx..].copy_from_bitslice(in_bitslice);
     }
 
     todo!();
