@@ -722,9 +722,8 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
         assert!(interleaving.s1.len() == interleaving.is_leader.len());
         let merged_length = interleaving.s1.len();
 
-        //let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
-        //thread_pool.install(|| // Todo: need to have SS: Sync + Send
-        { // Todo: enable the thread pool above
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+        thread_pool.install(||{
 
             let piece_len = merged_length.div_ceil(n_threads);
             let mut merged_piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_length)).collect();
@@ -832,10 +831,10 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
 
             let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
             index.set_lookup_table(lut);
+            println!("Here");
 
             index
-        }
-        //) // Thread pool
+        })
     }
 }
 
