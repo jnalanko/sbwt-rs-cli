@@ -465,6 +465,9 @@ pub fn split_to_mut_regions(
 
 // This function runs in parallel, so a rayon thread pool must be initialized.
 fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
+    if bitvecs.len() == 1 {
+        return bitvecs.into_iter().next().unwrap(); // Nothing to do
+    }
     let total_length = bitvecs.iter().fold(0_usize, |acc, s| acc + s.len());
     let n_words = total_length.div_ceil(64);
     let mut output_data = vec![0_u64; n_words];
