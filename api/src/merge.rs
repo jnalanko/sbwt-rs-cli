@@ -514,7 +514,7 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
 
     }
 
-    let mut exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
+    let exclusive_output_word_ranges = split_to_mut_regions(&mut output_data, exclusive_output_word_ranges);
 
     // Copy non-overlapping parts in parallel
     assert_eq!(exclusive_input_bitslices.len(), exclusive_output_word_ranges.len());
