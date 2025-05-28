@@ -223,15 +223,14 @@ impl MergeInterleaving {
             let s2_piece_popcounts: Vec<usize> = piece_ranges.par_iter().map(|range| s2[range.clone()].count_ones()).collect();
             let is_dummy_pieces = (0..n_threads).into_par_iter().map(|thread_idx| {
                 let mut is_dummy_piece = BitVec::with_capacity(piece_len);
-                let input_global_start = thread_idx*piece_len;
-                let input_global_end = (thread_idx+1)*piece_len;
+                let char_range = &piece_ranges[thread_idx];
                 let mut c1_idx: usize = s1_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
                 let mut c2_idx: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
-                for colex in input_global_start..input_global_end {
+                for colex in char_range.clone() {
                     let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
                     let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
 
-                    let rel_colex = colex - input_global_start;
+                    let rel_colex = colex - char_range.start;
                     is_dummy_piece.set(rel_colex, d1 || d2); 
 
                     c1_idx += s1[colex] as usize;
