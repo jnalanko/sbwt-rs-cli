@@ -580,7 +580,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     log::info!("Computing the merge interleaving");
     let interl = MergeInterleaving::new(&index1, &index2, n_threads);
     log::info!("Executing the merge interleaving");
-    let merged = SbwtIndex::<SubsetMatrix>::merge(index1, index2, interl, lut_len);
+    let merged = SbwtIndex::<SubsetMatrix>::merge(index1, index2, interl, lut_len, n_threads);
     log::info!("Serializing to {}", out_path.display());
     sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
     log::info!("Finished");

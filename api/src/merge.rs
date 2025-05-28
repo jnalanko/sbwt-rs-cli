@@ -241,7 +241,7 @@ impl MergeInterleaving {
                 is_dummy_bits 
             }).collect();
 
-            let is_dummy = parallel_bitvec_concat(is_dummy_pieces);
+            let is_dummy = crate::util::parallel_bitvec_concat(is_dummy_pieces);
 
             log::info!("Number of dummies: {}", is_dummy.count_ones());
 
@@ -417,9 +417,9 @@ impl MergeInterleaving {
             }
         }
         log::debug!("Concatenating pieces");
-        let new_s1 = parallel_bitvec_concat(new_s1_pieces);
-        let new_s2 = parallel_bitvec_concat(new_s2_pieces);
-        let new_leader_bits = leader_pieces.map(parallel_bitvec_concat);
+        let new_s1 = crate::util::parallel_bitvec_concat(new_s1_pieces);
+        let new_s2 = crate::util::parallel_bitvec_concat(new_s2_pieces);
+        let new_leader_bits = leader_pieces.map(crate::util::parallel_bitvec_concat);
 
         (new_s1, new_s2, new_leader_bits)
     }
