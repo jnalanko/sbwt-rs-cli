@@ -522,7 +522,9 @@ fn parallel_bitslice_concat(bitvecs: Vec<BitVec::<u64, Lsb0>>) -> BitVec<u64, Ls
         out.copy_from_bitslice(exclusive_input_bitslices[i]);
     }
 
-   BitVec::<u64, Lsb0>::from_vec(output_data) // Reinterpret as BitVec
+   let mut concat = BitVec::<u64, Lsb0>::from_vec(output_data); // Reinterpret as BitVec
+   concat.truncate(total_length); // Get rid of the tail in the last word
+   concat
 
 }
 
