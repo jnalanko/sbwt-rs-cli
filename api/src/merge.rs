@@ -194,7 +194,10 @@ fn zero_extend(v: &mut BitVec, howmany: usize) {
 }
 
 
-// Helper of a helper function
+// Helper of a helper function.
+// Yeah I know it's got a lot of arguments but it's an internal helper and collecting the arguments
+// into bigger structs would not really make it much clearer and would just increase the number of lines of code. 
+#[allow(clippy::too_many_arguments)] 
 fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, last_round: bool) 
 -> (BitVec, BitVec, Option<BitVec>) {
 
