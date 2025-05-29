@@ -14,10 +14,8 @@ use rand::AsByteSliceMut;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use simple_sds_sbwt::raw_vector::AccessRaw;
 use simple_sds_sbwt::serialize::Serialize;
 
-use crate::merge;
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
@@ -731,7 +729,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
             // Adjust the ranges so that they start with a leader
             for piece_idx in 1..merged_piece_ranges.len() {
                 let pair = &mut merged_piece_ranges[piece_idx-1..=piece_idx]; // Borrow a pair of elements
-                while pair[1].len() > 0 && !interleaving.is_leader[pair[1].start] {
+                while !pair[1].is_empty() && !interleaving.is_leader[pair[1].start] {
                     pair[1].start += 1;
                     pair[0].end += 1;
                 }
@@ -789,7 +787,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
                 }
             }
             // Concatenate pieces for each char
-            let rows: Vec::<bitvec::vec::BitVec::<u64, Lsb0>> = char_to_piece_list.into_iter().map(|vecs| util::parallel_bitvec_concat(vecs)).collect();
+            let rows: Vec::<bitvec::vec::BitVec::<u64, Lsb0>> = char_to_piece_list.into_iter().map(util::parallel_bitvec_concat).collect();
 
             // Load into simple_sds_sbwt vectors
             let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_iter().map(|mut row| {

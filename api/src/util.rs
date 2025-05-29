@@ -81,11 +81,11 @@ pub(crate) fn get_C_array_parallel(rawrows: &[simple_sds_sbwt::raw_vector::RawVe
     assert!(sigma > 0);
 
     let mut C: Vec<usize> = rawrows.par_iter().enumerate().map(|(c, rawrow)| {
-        let bv = BitVector::from(rawrow.clone());
+        let bv = BitVector::from(rawrow.clone()); // TODO: no clone!
         let mut C: Vec<usize> = vec![0; sigma];
         bv.one_iter().for_each(|_| {
             for d in (c + 1)..(sigma) {
-                C[d as usize] += 1;
+                C[d] += 1;
             }
         });
         C
@@ -129,7 +129,7 @@ impl<'a> SliceSeqStream<'a> {
     }
 }
 
-impl<'a> crate::SeqStream for SliceSeqStream<'a> {
+impl crate::SeqStream for SliceSeqStream<'_> {
     fn stream_next(&mut self) -> Option<&[u8]> {
         if self.cur_slice_idx == self.slices.len() {
             None
@@ -154,7 +154,7 @@ impl<'a> VecSeqStream<'a> {
     }
 }
 
-impl<'a> crate::SeqStream for VecSeqStream<'a> {
+impl crate::SeqStream for VecSeqStream<'_> {
     fn stream_next(&mut self) -> Option<&[u8]> {
         if self.cur_seq_idx == self.seqs.len() {
             None
