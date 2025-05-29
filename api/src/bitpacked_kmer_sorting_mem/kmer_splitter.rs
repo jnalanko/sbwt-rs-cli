@@ -134,7 +134,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                         // Move this local bin buffer to a shared buffer
                                         let shared_bin = &mut shared_bin_buffers[bin_id].lock().unwrap();
                                         shared_bin.extend(&this_thread_bin_buffers[bin_id]);
-                                        this_thread_bin_buffers.clear();
+                                        this_thread_bin_buffers[bin_id].clear();
                                         if shared_bin.len() >= shared_bin_buf_capacity {
                                             // Flush shared bin to the collector thread
                                             if dedup_batches {
