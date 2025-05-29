@@ -75,7 +75,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     assert!(k >= bin_prefix_len);
     let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
-    let per_thread_bin_buf_size = 10_000_usize;
+    let per_thread_bin_buf_size = 20_000_usize;
 
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
     for _ in 0..n_bins {
@@ -112,6 +112,8 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             }
             
             parser_out.send(buf).unwrap();
+
+            log:info!("Producer thread: all work pushed to work queue, exiting");
             drop(parser_out);
         });
 
