@@ -744,11 +744,11 @@ mod tests {
 
         let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         sbwt.build_select();
-        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut output = Vec::<u8>::new();
         let out_cursor = std::io::Cursor::new(&mut output);
-        dbg.parallel_export_unitigs(out_cursor);
+        dbg.parallel_export_unitigs(out_cursor, 3);
 
         let mut unitigs: Vec<Vec<u8>> = vec![];
         for line in output.lines(){
@@ -773,8 +773,8 @@ mod tests {
         sbwt.build_select();
 
         let lcs = lcs.unwrap();
-        let dbg = Dbg::new(&sbwt, Some(&lcs));
-        let dbg_without_lcs = Dbg::new(&sbwt, None);
+        let dbg = Dbg::new(&sbwt, Some(&lcs), 3);
+        let dbg_without_lcs = Dbg::new(&sbwt, None, 3);
 
         let true_dummy_marks = bitvec![1,1,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0];
         assert_eq!(dbg.dummy_marks, true_dummy_marks);
@@ -900,10 +900,10 @@ mod tests {
         seqs[2].extend(x2); // Make cyclic
 
         let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
-        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut unitig_ascii_out = Vec::<u8>::new();
-        dbg.parallel_export_unitigs(std::io::Cursor::new(&mut unitig_ascii_out));
+        dbg.parallel_export_unitigs(std::io::Cursor::new(&mut unitig_ascii_out), 3);
         let unitigs: Vec<Vec<u8>> = unitig_ascii_out.lines().map(|s| s.unwrap().as_bytes().to_owned()).filter(|s| s[0] != b'>').collect();
 
         let mut n_kmers = 0_usize;
@@ -974,7 +974,7 @@ mod tests {
         seqs.dedup();
 
         let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
-        let dbg = Dbg::new(&sbwt, lcs.as_ref());
+        let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
 
         { // Check that node iterator iterates all k-mers (tests node_iterator, get_kmer)

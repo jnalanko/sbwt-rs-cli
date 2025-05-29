@@ -394,7 +394,7 @@ mod tests {
 
         let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         let lcs = lcs.unwrap();
-        let from_sbwt = LcsArray::from_sbwt(&sbwt);
+        let from_sbwt = LcsArray::from_sbwt(&sbwt, 3);
 
         let true_lcs = [0,0,1,3,2,2,1,1,1,0,0,2,2,1,3,3,0,2];
         for i in 0..lcs.len() {
