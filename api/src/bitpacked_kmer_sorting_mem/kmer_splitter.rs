@@ -134,18 +134,23 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                     this_thread_bin_buffers[bin_id].push(kmer);
                                     if this_thread_bin_buffers[bin_id].len() >= per_thread_bin_buf_size {
                                         // Move this local bin buffer to a shared buffer
-                                        let shared_bin = &mut shared_bin_buffers[bin_id].lock().unwrap();
+                                        let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
                                         shared_bin.extend(&this_thread_bin_buffers[bin_id]);
                                         this_thread_bin_buffers[bin_id].clear();
                                         if shared_bin.len() >= shared_bin_buf_capacity {
                                             // Flush shared bin to the collector thread
                                             if dedup_batches {
                                                 log::debug!("Sorting batch of {} kmers", shared_bin.len());
-                                                shared_bin.sort_unstable();
-                                                shared_bin.dedup();
+                                                let mut shared_bin_copy = shared_bin.clone();
+                                                shared_bin.clear();
+                                                drop(shared_bin); // Release the mutex and process to sort
+                                                shared_bin_copy.sort_unstable();
+                                                shared_bin_copy.dedup();
+                                                sender_clone.send(shared_bin_copy).unwrap();
+                                            } else {
+                                                sender_clone.send(shared_bin.clone()).unwrap();
+                                                shared_bin.clear();
                                             }
-                                            sender_clone.send(shared_bin.clone()).unwrap();
-                                            shared_bin.clear();
                                         }
                                     }
                                 }
