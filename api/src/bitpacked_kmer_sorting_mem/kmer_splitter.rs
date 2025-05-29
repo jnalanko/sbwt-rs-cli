@@ -72,7 +72,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     assert!(k >= bin_prefix_len);
     let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
-    let encoder_bin_buf_size = 10_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
+    let encoder_bin_buf_size = 1_000_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
 
     log::info!("Bitpacking and binning k-mers");
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
@@ -119,6 +119,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                     bin_buffers[bin_id].push(kmer);
                                     if bin_buffers[bin_id].len() == encoder_bin_buf_size{
                                         if dedup_batches{
+                                            log::debug!("Sorting {} kmers", bin_buffers[bin_id].len());
                                             bin_buffers[bin_id].sort_unstable();
                                             bin_buffers[bin_id].dedup();
                                         }
