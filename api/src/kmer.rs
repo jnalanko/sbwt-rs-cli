@@ -76,7 +76,7 @@ impl<const B: usize> LongKmer<B>{
         for block in 0..B{
             let b1 = block + chars / 32; // Which block the first char lands on
             let o1 = (chars % 32) * 2; // Which bit within block the first char lands on
-            let b2 = block + (31 + chars) / 32; // Which block the last char lands on
+            let b2 = block + chars.div_ceil(32); // Which block the last char lands on
             if b1 < B {
                 new_data[b1] |= self.data[block] >> o1;
             }

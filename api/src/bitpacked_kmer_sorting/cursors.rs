@@ -24,6 +24,7 @@ impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
     pub fn read_from_dummy_reader(dummy_reader: &mut R) -> Option<(LongKmer::<B>, u8)>{
         let kmer = match LongKmer::<B>::load(dummy_reader){
             Ok(kmer_opt) => {
+                #[allow(clippy::question_mark)] // More space to write comments on the cases
                 match kmer_opt{
                     Some(kmer) => kmer,
                     None => return None, // End of stream

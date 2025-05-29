@@ -22,6 +22,7 @@ impl<SS: SeqStream + Send> crate::SeqStream for SeqStreamWithRevComp<SS>{
         self.parity = !self.parity;
 
         if self.parity {
+            #[allow(clippy::question_mark)] // More space to write comments on the cases
             let new = match self.inner.stream_next() {
                 None => return None, // End of stream
                 Some(r) => r // Will return this at the end of the function

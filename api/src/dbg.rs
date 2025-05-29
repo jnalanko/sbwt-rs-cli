@@ -32,7 +32,7 @@ pub struct NodeIterator<'a> {
     dummy_marks: &'a bitvec::vec::BitVec,
 }
 
-impl<'a> Iterator for NodeIterator<'a> {
+impl Iterator for NodeIterator<'_> {
     type Item = Node;
     fn next(&mut self) -> Option<Self::Item> {
         while self.colex < self.dummy_marks.len() && self.dummy_marks[self.colex] {
