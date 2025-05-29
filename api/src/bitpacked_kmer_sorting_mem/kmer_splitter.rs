@@ -113,7 +113,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             
             parser_out.send(buf).unwrap();
 
-            log:info!("Producer thread: all work pushed to work queue, exiting");
+            log::info!("Producer thread: all work pushed to work queue, exiting");
             drop(parser_out);
         });
 
