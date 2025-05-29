@@ -143,7 +143,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                                 log::debug!("Sorting batch of {} kmers", shared_bin.len());
                                                 let mut shared_bin_copy = shared_bin.clone();
                                                 shared_bin.clear();
-                                                drop(shared_bin); // Release the mutex and process to sort
+                                                drop(shared_bin); // Release the mutex and proceed to sort
                                                 shared_bin_copy.sort_unstable();
                                                 shared_bin_copy.dedup();
                                                 sender_clone.send(shared_bin_copy).unwrap();
