@@ -108,6 +108,7 @@ fn build_command(matches: &clap::ArgMatches){
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let dedup_batches = matches.get_flag("dedup-batches");
+    let in_memory = matches.get_flag("in-memory");
     let add_revcomp = matches.get_flag("add-revcomp");
     let precalc_length = *matches.get_one::<usize>("prefix-precalc-length").unwrap();
     let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
@@ -123,8 +124,13 @@ fn build_command(matches: &clap::ArgMatches){
  
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
-    let algorithm = BitPackedKmerSorting::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
-    let (sbwt, lcs) = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algorithm).build_lcs(build_lcs).precalc_length(precalc_length).run(reader);
+    let (sbwt, lcs) = if in_memory {
+        let algo = BitPackedKmerSortingMem::new().dedup_batches(dedup_batches);
+        SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).run(reader)
+    } else {
+        let algo = BitPackedKmerSorting::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
+        SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).run(reader)
+    };
     let end_time = std::time::Instant::now();
     log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
 
@@ -664,6 +670,12 @@ fn main() {
                 .default_value(".")
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
+            .arg(clap::Arg::new("in-memory")
+                .help("Sort k-mers in memory. Faster, but requires a lot of memory.")
+                .long("in-memory")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("mem-gb") // Can not cap memory with in-memory construction
+            )
             .arg(clap::Arg::new("build-lcs")
                 .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
                 .short('l')
@@ -677,7 +689,7 @@ fn main() {
                 .value_parser(clap::value_parser!(usize))
             )
             .arg(clap::Arg::new("mem-gb")
-                .help("An approximate memory budget in GB. The actual memory usage may be higher.")
+                .help("An approximate memory budget in GB for disk-based construction. The actual memory usage may be higher.")
                 .short('m')
                 .long("mem-gb")
                 .required(false)
