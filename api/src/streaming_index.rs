@@ -192,7 +192,7 @@ impl LcsArray {
 
 }
 
-impl<'a, E: ExtendRight, C: ContractLeft> StreamingIndex<'a, E, C>{
+impl<E: ExtendRight, C: ContractLeft> StreamingIndex<'_, E, C>{
 
     /// Returns an array A of length `query.len()`, where A\[i\] is a pair (d, I) where d is the length of the shortest suffix
     /// of `query[0..=i]` that occurs at most `freq_bound` times in the de Bruijn graph of the k-mers in the index, and

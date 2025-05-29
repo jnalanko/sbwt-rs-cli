@@ -13,7 +13,7 @@ pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<s
     let n_bits = input.read_u64::<LittleEndian>()?;
 
     // The length of the serialized data is padded to a multiple of 64 bits.
-    let n_bits_plus_pad = ((n_bits + 63) / 64) * 64;
+    let n_bits_plus_pad = n_bits.div_ceil(64) * 64;
 
     let n_bytes = n_bits_plus_pad / 8;
     let n_words = n_bytes / 8;
@@ -49,7 +49,7 @@ pub fn load_runtime_width_sdsl_int_vector(input: &mut impl std::io::Read) -> std
     let n_elements = n_bits / width;
 
     // The length of the serialized data is padded to a multiple of 64 bits.
-    let n_bits_plus_pad = ((n_bits + 63) / 64) * 64;
+    let n_bits_plus_pad = n_bits.div_ceil(64) * 64;
     let n_bytes = n_bits_plus_pad / 8;
     let n_words = n_bytes / 8;
 

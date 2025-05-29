@@ -1,12 +1,9 @@
 use std::cmp::min;
-use std::fs::canonicalize;
 use std::ops::Range;
 
 use bitvec::prelude::*;
-use rayon::iter::split;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelBridge;
 use rayon::iter::ParallelIterator;
 use crate::subsetseq::*;
 use crate::sbwt::*;
@@ -46,7 +43,7 @@ impl MergeInterleaving {
             // pieces start, and do bit-by-bit counting to find the precise start points of pieces.
 
             assert!(n_pieces > 0);
-            if s.len() > 0 {
+            if !s.is_empty() {
                 // The last bit should always be 1
                 assert!(s.last().unwrap() == true);
             }
@@ -93,7 +90,7 @@ impl MergeInterleaving {
                 n_zeros += block.len() - block_popcounts[block_idx];
             }
             assert_eq!(starts.len(), n_zeros_before_piece.len());
-            assert!(starts.len() > 0);
+            assert!(!starts.is_empty());
             while starts.len() < n_pieces {
                 // Add empty pieces to the end
                 starts.push(s.len());
@@ -116,7 +113,7 @@ impl MergeInterleaving {
     // Also returns the number of 0-bits before each segment.
     fn split_to_pieces(s: &BitSlice, n_pieces: usize) -> Vec<(usize, Range<usize>)> {
         assert!(n_pieces > 0);
-        if s.len() > 0 {
+        if !s.is_empty() {
             // The last bit should always be 1
             assert!(s.last().unwrap() == true);
         }
@@ -280,19 +277,18 @@ impl MergeInterleaving {
     // Falls back to binary search for long sequences
     #[inline]
     fn run_length_in_sorted_seq(seq: &[u8], c: u8) -> usize {
-        if seq.len() == 0 {
+        if seq.is_empty() {
             return 0;
         }
         if seq.len() > 200 {
             // Binary search the first element that is larger than c
-            let end = seq.binary_search_by(|&x| {
+            seq.binary_search_by(|&x| {
                 if x > c {
                     std::cmp::Ordering::Greater
                 } else {
                     std::cmp::Ordering::Less
                 }
-            }).unwrap_err(); // Is always Err because we never return Ordering::Equal
-            end
+            }).unwrap_err() // Is always Err because we never return Ordering::Equal
         } else {
             // Linear scan
             let mut i = 0;
@@ -429,8 +425,6 @@ impl MergeInterleaving {
 
 #[cfg(test)]
 mod tests {
-
-    use rand::{Rng, SeedableRng};
 
     use super::*;
 
