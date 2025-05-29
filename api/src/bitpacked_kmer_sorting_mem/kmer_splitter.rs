@@ -83,7 +83,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         let b = Mutex::new(buf);
         shared_bin_buffers_vec.push(b);
     };
-    let shared_bin_buf_capacity = 1_000_000;
+    let shared_bin_buf_capacity = 10_000_000;
     let shared_bin_buffers = &shared_bin_buffers_vec; // This is shared with threads
 
     log::info!("Bitpacking and binning k-mers");
