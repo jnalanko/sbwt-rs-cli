@@ -720,8 +720,12 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
         assert!(interleaving.s1.len() == interleaving.is_leader.len());
         let merged_length = interleaving.s1.len();
 
+        let n_kmers = merged_length - interleaving.is_dummy.count_ones();
+        log::info!("Merging into {} distinct k-mers", n_kmers);
+        log::info!("Number of sets in merged SBWT: {}", merged_length);
+
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
-        thread_pool.install(||{
+        let new_rows = thread_pool.install(|| {
 
             let piece_len = merged_length.div_ceil(n_threads);
             let mut merged_piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_length)).collect();
@@ -776,6 +780,10 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
                 new_rows
             }).collect();
 
+            drop(index1); // Free memory
+            drop(index2); // Free memory
+            drop(interleaving); // Free memory
+
             // Collect pieces for each char ("transpose the Vec<Vec<...>>")
             let mut char_to_piece_list = Vec::<Vec::<bitvec::vec::BitVec::<u64, Lsb0>>>::new();
             for _ in 0..sigma {
@@ -790,7 +798,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
             let rows: Vec::<bitvec::vec::BitVec::<u64, Lsb0>> = char_to_piece_list.into_iter().map(util::parallel_bitvec_concat).collect();
 
             // Load into simple_sds_sbwt vectors
-            let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_iter().map(|mut row| {
+            let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|mut row| {
                 // Let's use the deserialization function in simple_sds_sbwt for a raw bitvector.
                 // It requires the following header:
                 let mut header = [0u64, 0u64]; // bits, words
@@ -815,26 +823,25 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
             // edge to v, so the edge will point to v. There can not be two or more incoming edges because those would have to
             // come from the same suffix group, but each suffix group has each outgoing label at most once (at the leader).
 
-            let n_kmers = merged_length - interleaving.is_dummy.count_ones();
-            log::info!("Number of distinct k-mers: {}", n_kmers);
+            new_rows
+        });
 
-            // Create the C array
-            #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
-            let C: Vec<usize> = crate::util::get_C_array(&new_rows);
+        // Create the C array
+        #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
+        let C: Vec<usize> = crate::util::get_C_array_parallel(&new_rows, n_threads);
 
-            log::info!("Building the subset rank structure");
-            let mut subsetseq = SS::new_from_bit_vectors(new_rows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
-            subsetseq.build_rank();
-            let n_sets = subsetseq.len();
-            let mut index = SbwtIndex::<SS>::from_components(
-                subsetseq, n_kmers, k, C,
-                PrefixLookupTable::new_empty(n_sets));
+        log::info!("Building the subset rank structure");
+        let mut subsetseq = SS::new_from_bit_vectors(new_rows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
+        subsetseq.build_rank();
+        let n_sets = subsetseq.len();
+        let mut index = SbwtIndex::<SS>::from_components(
+            subsetseq, n_kmers, k, C,
+            PrefixLookupTable::new_empty(n_sets));
 
-            let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
-            index.set_lookup_table(lut);
+        let lut = PrefixLookupTable::new(&index, new_prefix_lookup_table_length);
+        index.set_lookup_table(lut);
 
-            index
-        })
+        index
     }
 }
 
