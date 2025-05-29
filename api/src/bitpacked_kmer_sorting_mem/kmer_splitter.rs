@@ -3,6 +3,64 @@ use crate::kmer::LongKmer;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 
+fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec<LongKmer<B>>) {
+    // Step 1: Extend `a` with enough space
+    let original_len = a.len();
+    let total_capacity = original_len + b.len();
+    a.resize(total_capacity, LongKmer::from_u64_data([0; B])); // Fill with placeholders
+
+    // Step 2: Pointers for merge
+    let mut i = original_len as isize - 1; // Last element of original `a`
+    let mut j = b.len() as isize - 1;      // Last element of `b`
+    let mut k = total_capacity as isize - 1; // End of resized `a`
+
+    // Step 3: Merge from back to front
+    while i >= 0 && j >= 0 {
+        let va = a[i as usize];
+        let vb = b[j as usize];
+        if va > vb {
+            a[k as usize] = va;
+            i -= 1;
+        } else if va < vb {
+            a[k as usize] = vb;
+            j -= 1;
+        } else {
+            // Equal values, keep one
+            a[k as usize] = va;
+            i -= 1;
+            j -= 1;
+        }
+        k -= 1;
+    }
+
+    // Copy remaining elements
+    while i >= 0 {
+        a[k as usize] = a[i as usize];
+        i -= 1;
+        k -= 1;
+    }
+    while j >= 0 {
+        a[k as usize] = b[j as usize];
+        j -= 1;
+        k -= 1;
+    }
+
+    // Step 4: Remove duplicates and shift left. Todo: no Option 
+    let mut last: Option<LongKmer<B>> = None;
+    let mut write = 0;
+    for read in (k + 1) as usize..total_capacity {
+        if Some(a[read]) != last {
+            a[write] = a[read];
+            last = Some(a[read]);
+            write += 1;
+        }
+    }
+
+    // Step 5: Truncate the vector
+    a.truncate(write);
+    a.shrink_to_fit();
+}
+
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
     k: usize,
@@ -91,7 +149,11 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             while let Ok(batch) = collector_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
-                    bins[bin_id].extend(batch);
+                    if dedup_batches {
+                        merge_sorted_unique_in_place(&mut bins[bin_id], batch);
+                    } else {
+                        bins[bin_id].extend(batch);
+                    }
                 }
             }
             bins
@@ -110,17 +172,19 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     // Sort bins in parallel: todo: largest first
 
-    log::info!("Sorting k-mer bins");
-    bins.par_iter_mut().for_each(|bin| {
-        if !bin.is_empty() {
-            let label = &bin.first().unwrap().to_string()[0..bin_prefix_len];
-            log::info!("Sorting bin {} of size {}", label, bin.len());
-            bin.sort_unstable();
-            bin.dedup();
-        } else {
-            log::info!("Empty bin -> not sorting.");
-        }
-    });
+    if !dedup_batches { // Otherwise already sorted
+        log::info!("Sorting k-mer bins");
+        bins.par_iter_mut().for_each(|bin| {
+            if !bin.is_empty() {
+                let label = &bin.first().unwrap().to_string()[0..bin_prefix_len];
+                log::info!("Sorting bin {} of size {}", label, bin.len());
+                bin.sort_unstable();
+                bin.dedup();
+            } else {
+                log::info!("Empty bin -> not sorting.");
+            }
+        });
+    }
 
 
     let mut bin_concat = Vec::<LongKmer::<B>>::new();
