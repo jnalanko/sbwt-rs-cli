@@ -49,15 +49,12 @@ pub(crate) fn is_dna(c: u8) -> bool {
 pub const ACGT_TO_0123: [u8; 256] = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 1, 255, 255, 255, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 1, 255, 255, 255, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 3, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
 
 #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
-pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
-    let sigma = rawrows.len();
-    assert!(sigma > 0);
-
+fn popcounts_to_C_array(popcounts: &[usize]) -> Vec<usize> {
+    let sigma = popcounts.len();
     let mut C: Vec<usize> = vec![0; sigma];
     for c in 0..sigma {
-        let popcount = rawrows[c].count_ones();
         for d in (c + 1)..sigma {
-            C[d] += popcount;
+            C[d] += popcounts[c];
         }
     }
 
@@ -68,32 +65,25 @@ pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) ->
     }
 
     C
+
 }
 
-// Todo: number of threads as input
+#[allow(non_snake_case)] // C-array is an established convention in BWT indexes
+pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
+    let popcounts: Vec<usize> = rawrows.iter().map(|row| row.count_ones()).collect(); 
+    popcounts_to_C_array(&popcounts)
+}
+
 #[allow(non_snake_case, dead_code)] // C-array is an established convention in BWT indexes
-pub(crate) fn get_C_array_parallel(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
+pub(crate) fn get_C_array_parallel(rawrows: &[simple_sds_sbwt::raw_vector::RawVector], n_threads: usize) -> Vec<usize> {
     let sigma = rawrows.len();
     assert!(sigma > 0);
 
-    let mut C: Vec<usize> = rawrows.par_iter().enumerate().map(|(c, rawrow)| {
-        let bv = BitVector::from(rawrow.clone()); // TODO: no clone!
-        let mut C: Vec<usize> = vec![0; sigma];
-        bv.one_iter().for_each(|_| {
-            for d in (c + 1)..(sigma) {
-                C[d] += 1;
-            }
-        });
-        C
-    }).reduce(|| vec![0; sigma], |a, b| a.iter().zip(b.iter()).map(|(x, y)| x + y).collect());
-
-    // Plus one for the ghost dollar
-    #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
-    for c in 0..sigma {
-        C[c] += 1;
-    }
-
-    C
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+    thread_pool.install(||{
+        let popcounts: Vec<usize> = rawrows.par_iter().map(|row| row.count_ones()).collect(); 
+        popcounts_to_C_array(&popcounts)
+    })
 }
 
 /// Reverses the given ASCII DNA sequence and replaces each nucleotide with its complement.
