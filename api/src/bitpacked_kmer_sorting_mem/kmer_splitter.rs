@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use crate::kmer::LongKmer;
 
 use rayon::iter::IntoParallelRefMutIterator;
@@ -72,7 +75,16 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     assert!(k >= bin_prefix_len);
     let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
-    let encoder_bin_buf_size = 1_000_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
+    let per_thread_bin_buf_size = 10_000_usize;
+
+    let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
+    for _ in 0..n_bins {
+        let buf = Vec::<LongKmer::<B>>::new();
+        let b = Mutex::new(buf);
+        shared_bin_buffers_vec.push(b);
+    };
+    let shared_bin_buf_capacity = 1_000_000;
+    let shared_bin_buffers = &shared_bin_buffers_vec; // This is shared with threads
 
     log::info!("Bitpacking and binning k-mers");
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
@@ -104,27 +116,32 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         });
 
         // Create encoders
-        let mut encoder_handles = Vec::<std::thread::JoinHandle::<()>>::new();
-        for _ in 0..n_threads{
+        let mut encoder_handles = Vec::<std::thread::ScopedJoinHandle::<()>>::new();
+
+        for _ in 0..n_threads {
             let receiver_clone = encoder_in.clone();
             let sender_clone = encoder_out.clone();
-            encoder_handles.push(std::thread::spawn(move || {
+            encoder_handles.push(scope.spawn(move || {
                 while let Ok(batch) = receiver_clone.recv(){
-                    let mut bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
+                    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
                     for seq in batch{
                         for kmer in seq.windows(k){
                             match LongKmer::<B>::from_ascii(kmer) {
                                 Ok(kmer) => {
                                     let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
-                                    bin_buffers[bin_id].push(kmer);
-                                    if bin_buffers[bin_id].len() == encoder_bin_buf_size{
-                                        if dedup_batches{
-                                            log::debug!("Sorting batch of {} kmers", bin_buffers[bin_id].len());
-                                            bin_buffers[bin_id].sort_unstable();
-                                            bin_buffers[bin_id].dedup();
+                                    this_thread_bin_buffers[bin_id].push(kmer);
+                                    if this_thread_bin_buffers[bin_id].len() >= per_thread_bin_buf_size {
+                                        let shared_bin = &mut shared_bin_buffers[bin_id].lock().unwrap();
+                                        shared_bin.extend(&this_thread_bin_buffers[bin_id]);
+                                        if shared_bin.len() >= shared_bin_buf_capacity {
+                                            if dedup_batches {
+                                                log::debug!("Sorting batch of {} kmers", shared_bin.len());
+                                                shared_bin.sort_unstable();
+                                                shared_bin.dedup();
+                                            }
+                                            sender_clone.send(shared_bin.clone()).unwrap();
+                                            shared_bin.clear();
                                         }
-                                        sender_clone.send(bin_buffers[bin_id].clone()).unwrap();
-                                        bin_buffers[bin_id].clear();
                                     }
                                 }
                                 Err(crate::kmer::KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
@@ -133,28 +150,40 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                         }
                     }
 
-                    // Send remaining buffers
-                    for mut b in bin_buffers{
+                    // Send remaining internal buffers of this thread
+                    for mut b in this_thread_bin_buffers.into_iter() {
                         if dedup_batches{
-                            log::debug!("Sorting batch of {} kmers", b.len());
+                            log::debug!("Sorting remaining per-thread batch of {} kmers", b.len());
                             b.sort_unstable();
                             b.dedup();
                         }
                         sender_clone.send(b).unwrap();
+                    }
+
+                    // Send remaining shared batches
+                    for sb in shared_bin_buffers.iter() {
+                        let mut sb = sb.lock().unwrap();
+                        if dedup_batches && !sb.is_empty(){
+                            log::debug!("Sorting final shared batch of {} kmers", sb.len());
+                            sb.sort_unstable();
+                            sb.dedup();
+                        }
+                        sender_clone.send(sb.clone()).unwrap();
+                        sb.clear();
                     }
                 }
             }));
         }
 
         let collector_handle = std::thread::spawn( move || {
-            let mut bins = vec![Vec::<LongKmer::<B>>::new(); n_bins];
+            let mut final_bins = vec![Vec::<LongKmer::<B>>::new(); n_bins];
             while let Ok(batch) = collector_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
-                    bins[bin_id].extend(batch);
+                    final_bins[bin_id].extend(batch);
                 }
             }
-            bins
+            final_bins
         });
 
         producer_handle.join().unwrap(); // Wait for the producer to finish
