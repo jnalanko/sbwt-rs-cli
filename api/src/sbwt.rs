@@ -754,16 +754,19 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
                 let mut s2_colex: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
 
                 assert!(interleaving.is_leader[colex_range.start]);
-                let mut current_leader = colex_range.start;
+
+                // Relative index of current leader in this peace
+                let mut piece_rel_current_leader = 0;
+
                 for merged_colex in colex_range.clone() {
                     if interleaving.is_leader[merged_colex] {
-                        current_leader = merged_colex;
+                        piece_rel_current_leader = merged_colex - colex_range.start;
                     }
                     for c in 0..sigma {
                         let s1_bit = interleaving.s1[merged_colex] && index1.sbwt.set_contains(s1_colex, c as u8);
                         let s2_bit = interleaving.s2[merged_colex] && index2.sbwt.set_contains(s2_colex, c as u8);
-                        let cur_bit = new_rows[c][current_leader];
-                        new_rows[c].set(current_leader, cur_bit | s1_bit | s2_bit);
+                        let cur_bit = new_rows[c][piece_rel_current_leader];
+                        new_rows[c].set(piece_rel_current_leader, cur_bit | s1_bit | s2_bit);
                     }
                     s1_colex += interleaving.s1[merged_colex] as usize;
                     s2_colex += interleaving.s2[merged_colex] as usize;
@@ -777,7 +780,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
 
             // Collect pieces for each char ("transpose the Vec<Vec<...>>")
             let mut char_to_piece_list = Vec::<Vec::<bitvec::vec::BitVec::<u64, Lsb0>>>::new();
-            for c in 0..sigma {
+            for _ in 0..sigma {
                 char_to_piece_list.push(vec![]); // Init new piece list for this char
             }
             for char_vecs_for_piece in pieces_vecvec {
