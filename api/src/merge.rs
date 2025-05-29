@@ -87,6 +87,9 @@ impl MergeInterleaving {
                 }
             }
 
+            drop(temp_char_buf_1);
+            drop(temp_char_buf_2);
+
             let leader_bits = leader_bits.unwrap(); // Computed in the last round
             log::debug!("Number of suffix groups: {}", leader_bits.count_ones());
 
