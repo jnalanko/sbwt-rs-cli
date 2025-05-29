@@ -746,7 +746,7 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
                 let mut new_rows = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
                 for _ in 0..sigma {
                     let mut row = bitvec::vec::BitVec::<u64, Lsb0>::new();
-                    row.resize(merged_length, false);
+                    row.resize(colex_range.len(), false);
                     new_rows.push(row);
                 }
 
