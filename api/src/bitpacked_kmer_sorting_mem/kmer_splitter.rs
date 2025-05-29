@@ -119,7 +119,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                     bin_buffers[bin_id].push(kmer);
                                     if bin_buffers[bin_id].len() == encoder_bin_buf_size{
                                         if dedup_batches{
-                                            log::debug!("Sorting {} kmers", bin_buffers[bin_id].len());
+                                            log::debug!("Sorting batch of {} kmers", bin_buffers[bin_id].len());
                                             bin_buffers[bin_id].sort_unstable();
                                             bin_buffers[bin_id].dedup();
                                         }
@@ -136,6 +136,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                     // Send remaining buffers
                     for mut b in bin_buffers{
                         if dedup_batches{
+                            log::debug!("Sorting batch of {} kmers", b.len());
                             b.sort_unstable();
                             b.dedup();
                         }
