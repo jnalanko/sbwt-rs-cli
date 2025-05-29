@@ -53,9 +53,6 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             encoder_handles.push(std::thread::spawn(move || {
                 while let Ok(batch) = receiver_clone.recv(){
                     let mut bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
-                    for buf in bin_buffers.iter_mut(){
-                        buf.reserve_exact(encoder_bin_buf_size);
-                    }
                     for seq in batch{
                         for kmer in seq.windows(k){
                             match LongKmer::<B>::from_ascii(kmer) {
