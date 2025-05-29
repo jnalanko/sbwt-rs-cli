@@ -72,7 +72,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     assert!(k >= bin_prefix_len);
     let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
     let producer_buf_size = 1_000_000_usize; // TODO: respect this
-    let encoder_bin_buf_size = 1_000_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
+    let encoder_bin_buf_size = 10_000_usize; // Deduplicate after this many k-mers in bin buffer. Todo: take as parameter.
 
     log::info!("Bitpacking and binning k-mers");
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
@@ -149,11 +149,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             while let Ok(batch) = collector_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
-                    if dedup_batches {
-                        merge_sorted_unique_in_place(&mut bins[bin_id], batch);
-                    } else {
-                        bins[bin_id].extend(batch);
-                    }
+                    bins[bin_id].extend(batch);
                 }
             }
             bins
@@ -172,19 +168,17 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     // Sort bins in parallel: todo: largest first
 
-    if !dedup_batches { // Otherwise already sorted
-        log::info!("Sorting k-mer bins");
-        bins.par_iter_mut().for_each(|bin| {
-            if !bin.is_empty() {
-                let label = &bin.first().unwrap().to_string()[0..bin_prefix_len];
-                log::info!("Sorting bin {} of size {}", label, bin.len());
-                bin.sort_unstable();
-                bin.dedup();
-            } else {
-                log::info!("Empty bin -> not sorting.");
-            }
-        });
-    }
+    log::info!("Sorting k-mer bins");
+    bins.par_iter_mut().for_each(|bin| {
+        if !bin.is_empty() {
+            let label = &bin.first().unwrap().to_string()[0..bin_prefix_len];
+            log::info!("Sorting bin {} of size {}", label, bin.len());
+            bin.sort_unstable();
+            bin.dedup();
+        } else {
+            log::info!("Empty bin -> not sorting.");
+        }
+    });
 
 
     let mut bin_concat = Vec::<LongKmer::<B>>::new();
