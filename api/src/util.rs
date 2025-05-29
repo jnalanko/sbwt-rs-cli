@@ -52,16 +52,12 @@ pub const ACGT_TO_0123: [u8; 256] = [255, 255, 255, 255, 255, 255, 255, 255, 255
 pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
     let sigma = rawrows.len();
     assert!(sigma > 0);
-    let n = rawrows[0].len();
 
     let mut C: Vec<usize> = vec![0; sigma];
-    for i in 0..n {
-        for c in 0..(sigma as u8) {
-            if rawrows[c as usize].bit(i){
-                for d in (c + 1)..(sigma as u8) {
-                    C[d as usize] += 1;
-                }
-            }
+    for c in 0..sigma {
+        let popcount = rawrows[c].count_ones();
+        for d in (c + 1)..sigma {
+            C[d] += popcount;
         }
     }
 
