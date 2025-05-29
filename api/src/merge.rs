@@ -33,7 +33,10 @@ pub struct MergeInterleaving {
 
 impl MergeInterleaving {
 
-    // Parallel version of split_to_pieces
+    // Parallel version of split_to_pieces (see mod tests for a single-threaded reference implementation)
+    // Returns a segmentation s[l_1..r_1), s[l_2..r_2], ... such that
+    // each segment ends in a 1-bit and has an approximately equal number of 1-bits.
+    // Also returns the number of 0-bits before each segment.
     fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(usize, Range<usize>)> {
         const BLOCK_SIZE: usize = 1024;
 
@@ -106,50 +109,6 @@ impl MergeInterleaving {
 
             pieces
         })
-    }
-
-    // Returns a segmentation s[l_1..r_1), s[l_2..r_2], ... such that
-    // each segment ends in a 1-bit and has an approximately equal number of 1-bits.
-    // Also returns the number of 0-bits before each segment.
-    fn split_to_pieces(s: &BitSlice, n_pieces: usize) -> Vec<(usize, Range<usize>)> {
-        assert!(n_pieces > 0);
-        if !s.is_empty() {
-            // The last bit should always be 1
-            assert!(s.last().unwrap() == true);
-        }
-        let s_popcount = s.count_ones();
-        let ones_per_piece = s_popcount.div_ceil(n_pieces); // Last pieces may have fewer
-
-        let mut s_ranges: Vec<Range<usize>> = vec![];
-        let mut zeros_before: Vec<usize> = vec![];
-
-        let mut cur_popcount = 0_usize;
-        let mut n_zeros = 0_usize;
-        for s_idx in s.iter_ones(){
-            cur_popcount += 1;
-            if cur_popcount == ones_per_piece || s_idx == s.len() - 1 {
-                let prev_end = match s_ranges.last() {
-                    Some(r) => r.end,
-                    None => 0,
-                };
-                let new_end = s_idx + 1;
-                s_ranges.push(prev_end..new_end);
-
-                zeros_before.push(n_zeros);
-                n_zeros += (new_end - prev_end) - cur_popcount;
-
-                cur_popcount = 0;
-            }
-        }
-        
-        while s_ranges.len() < n_pieces {
-            s_ranges.push(s.len()..s.len()); // Empty range
-            zeros_before.push(n_zeros);
-        }
-
-        // Pair of vectors into vector of pairs
-        zeros_before.into_iter().zip(s_ranges).collect()
-        
     }
 
     pub fn new<SS: SubsetSeq + Send + Sync>(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, n_threads: usize) -> MergeInterleaving {
@@ -442,7 +401,7 @@ mod tests {
         // 7 one-bits -> ceil(7/3) = 3 per piece
         //              e              e              e     e
         let s = bitvec![u64, Lsb0; 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
-        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        let pieces = split_to_pieces_ref_implementation(&s, 3);
         assert_eq!(pieces.len(), 3);
         assert_eq!(pieces[0], (0, 0..5));
         assert_eq!(pieces[1], (2, 5..10));
@@ -452,7 +411,7 @@ mod tests {
     #[test]
     fn split_to_pieces_empty() {
         let s = bitvec![u64, Lsb0;];
-        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        let pieces = split_to_pieces_ref_implementation(&s, 3);
         assert_eq!(pieces.len(), 3);
         assert_eq!(pieces[0], (0, 0..0));
         assert_eq!(pieces[1], (0, 0..0));
@@ -463,7 +422,7 @@ mod tests {
     fn split_to_pieces_run_out_of_pieces() {
         //              0  1  2  3  4  5  6  7  8  9  10 11
         let s = bitvec![u64, Lsb0; 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
-        let pieces = MergeInterleaving::split_to_pieces(&s, 20);
+        let pieces = split_to_pieces_ref_implementation(&s, 20);
         assert_eq!(pieces.len(), 20);
         assert_eq!(pieces[0], (0, 0..2));
         assert_eq!(pieces[1], (1, 2..3));
@@ -482,20 +441,66 @@ mod tests {
         // 7 one-bits -> ceil(7/3) = 3 per piece
         //              e              e              e     e
         let s = bitvec![u64, Lsb0; 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
-        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        let pieces = split_to_pieces_ref_implementation(&s, 3);
         let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 3, 4);
         assert_eq!(pieces, pieces_par);
 
         let s = bitvec![u64, Lsb0;];
-        let pieces = MergeInterleaving::split_to_pieces(&s, 3);
+        let pieces = split_to_pieces_ref_implementation(&s, 3);
         let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 3, 4);
         assert_eq!(pieces, pieces_par);
 
         //              0  1  2  3  4  5  6  7  8  9  10 11
         let s = bitvec![u64, Lsb0; 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1];
-        let pieces = MergeInterleaving::split_to_pieces(&s, 20);
+        let pieces = split_to_pieces_ref_implementation(&s, 20);
         let pieces_par = MergeInterleaving::split_to_pieces_par(&s, 20, 4);
         assert_eq!(pieces, pieces_par);
     }
+
+    // This is not a test. This is a single-threaded reference implementation.
+    // Returns a segmentation s[l_1..r_1), s[l_2..r_2], ... such that
+    // each segment ends in a 1-bit and has an approximately equal number of 1-bits.
+    // Also returns the number of 0-bits before each segment.
+    fn split_to_pieces_ref_implementation(s: &BitSlice, n_pieces: usize) -> Vec<(usize, Range<usize>)> {
+        assert!(n_pieces > 0);
+        if !s.is_empty() {
+            // The last bit should always be 1
+            assert!(s.last().unwrap() == true);
+        }
+        let s_popcount = s.count_ones();
+        let ones_per_piece = s_popcount.div_ceil(n_pieces); // Last pieces may have fewer
+
+        let mut s_ranges: Vec<Range<usize>> = vec![];
+        let mut zeros_before: Vec<usize> = vec![];
+
+        let mut cur_popcount = 0_usize;
+        let mut n_zeros = 0_usize;
+        for s_idx in s.iter_ones(){
+            cur_popcount += 1;
+            if cur_popcount == ones_per_piece || s_idx == s.len() - 1 {
+                let prev_end = match s_ranges.last() {
+                    Some(r) => r.end,
+                    None => 0,
+                };
+                let new_end = s_idx + 1;
+                s_ranges.push(prev_end..new_end);
+
+                zeros_before.push(n_zeros);
+                n_zeros += (new_end - prev_end) - cur_popcount;
+
+                cur_popcount = 0;
+            }
+        }
+        
+        while s_ranges.len() < n_pieces {
+            s_ranges.push(s.len()..s.len()); // Empty range
+            zeros_before.push(n_zeros);
+        }
+
+        // Pair of vectors into vector of pairs
+        zeros_before.into_iter().zip(s_ranges).collect()
+        
+    }
+
 
 }
