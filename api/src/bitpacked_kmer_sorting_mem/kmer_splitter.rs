@@ -122,8 +122,8 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             let receiver_clone = encoder_in.clone();
             let sender_clone = encoder_out.clone();
             encoder_handles.push(scope.spawn(move || {
+                let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
                 while let Ok(batch) = receiver_clone.recv(){
-                    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
                     for seq in batch{
                         for kmer in seq.windows(k){
                             match LongKmer::<B>::from_ascii(kmer) {
@@ -152,28 +152,28 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                             }        
                         }
                     }
+                }
 
-                    // Send remaining internal buffers of this thread
-                    for mut b in this_thread_bin_buffers.into_iter() {
-                        if dedup_batches{
-                            log::debug!("Sorting remaining per-thread batch of {} kmers", b.len());
-                            b.sort_unstable();
-                            b.dedup();
-                        }
-                        sender_clone.send(b).unwrap();
+                // Send remaining internal buffers of this thread
+                for mut b in this_thread_bin_buffers.into_iter() {
+                    if dedup_batches{
+                        log::debug!("Sorting remaining per-thread batch of {} kmers", b.len());
+                        b.sort_unstable();
+                        b.dedup();
                     }
+                    sender_clone.send(b).unwrap();
+                }
 
-                    // Send remaining shared batches
-                    for sb in shared_bin_buffers.iter() {
-                        let mut sb = sb.lock().unwrap();
-                        if dedup_batches && !sb.is_empty(){
-                            log::debug!("Sorting final shared batch of {} kmers", sb.len());
-                            sb.sort_unstable();
-                            sb.dedup();
-                        }
-                        sender_clone.send(sb.clone()).unwrap();
-                        sb.clear();
+                // Send remaining shared batches
+                for sb in shared_bin_buffers.iter() {
+                    let mut sb = sb.lock().unwrap();
+                    if dedup_batches && !sb.is_empty(){
+                        log::debug!("Sorting final shared batch of {} kmers", sb.len());
+                        sb.sort_unstable();
+                        sb.dedup();
                     }
+                    sender_clone.send(sb.clone()).unwrap();
+                    sb.clear();
                 }
             }));
         }
