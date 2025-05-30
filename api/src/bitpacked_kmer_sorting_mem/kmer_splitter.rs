@@ -132,9 +132,10 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         log::warn!("Exceeding memory budget");
     }
 
+    log::info!("Allocating shared buffers");
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
     for _ in 0..n_bins {
-        let buf = Vec::<LongKmer::<B>>::new();
+        let buf = Vec::<LongKmer::<B>>::with_capacity(shared_buf_caps);
         let b = Mutex::new(buf);
         shared_bin_buffers_vec.push(b);
     };
