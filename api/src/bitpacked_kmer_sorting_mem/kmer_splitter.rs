@@ -121,12 +121,12 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     };
 
     // One bin per thread per 3-mer
-    let thread_local_total = thread_local_buf_caps * n_threads * 64 * kmer_bytes; 
-    let shared_total = shared_buf_caps * 64 * kmer_bytes; // One bin per 3-mer
-    log::info!("Producer buffer capacity: {}", human_bytes::human_bytes(producer_buf_cap as f64));
-    log::info!("Thread-local buffer capacity: {} ({} total)", human_bytes::human_bytes(thread_local_buf_caps as f64), human_bytes::human_bytes(thread_local_total as f64)); // 64 local bins per thread
-    log::info!("Shared bin buffer capacity: {} ({} total)", human_bytes::human_bytes(shared_buf_caps as f64), human_bytes::human_bytes(shared_total as f64));
-    if producer_buf_cap + thread_local_total + shared_total > approx_mem_gb * (1_usize << 30) {
+    let thread_local_total_bytes = thread_local_buf_caps * n_threads * 64 * kmer_bytes; 
+    let shared_total_bytes = shared_buf_caps * 64 * kmer_bytes; // One bin per 3-mer
+    log::info!("Producer buffer capacity: {}", human_bytes::human_bytes((producer_buf_cap * kmer_bytes) as f64));
+    log::info!("Thread-local buffer capacity: {} ({} total)", human_bytes::human_bytes((thread_local_buf_caps * kmer_bytes) as f64), human_bytes::human_bytes(thread_local_total_bytes as f64)); // 64 local bins per thread
+    log::info!("Shared bin buffer capacity: {} ({} total)", human_bytes::human_bytes((shared_buf_caps * kmer_bytes) as f64), human_bytes::human_bytes(shared_total_bytes as f64));
+    if producer_buf_cap*kmer_bytes + thread_local_total_bytes + shared_total_bytes > approx_mem_gb * (1_usize << 30) {
         log::warn!("Exceeding memory budget");
     }
 
