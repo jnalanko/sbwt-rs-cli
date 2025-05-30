@@ -218,6 +218,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             log::info!("Sorting bin {} of size {}", label, bin.len());
             bin.sort_unstable();
             bin.dedup();
+            bin.shrink_to_fit();
         } else {
             log::info!("Empty bin -> not sorting.");
         }
