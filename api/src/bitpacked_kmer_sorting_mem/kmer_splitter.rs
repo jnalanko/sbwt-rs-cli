@@ -218,7 +218,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                 // Send remaining internal buffers of this thread
                 for mut b in this_thread_bin_buffers.into_iter() {
                     if dedup_batches{
-                        log::debug!("Sorting remaining per-thread batch of {} kmers", b.len());
+                        log::debug!("Sorting remaining thread-local batch of {} kmers", b.len());
                         b.sort_unstable();
                         b.dedup();
                     }
