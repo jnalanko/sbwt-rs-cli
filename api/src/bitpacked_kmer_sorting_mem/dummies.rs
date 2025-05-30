@@ -85,8 +85,8 @@ pub fn get_sorted_dummies<const B: usize>(
     let n = sorted_kmers.len();
 
     let mut char_cursors: Vec<(&[LongKmer::<B>], usize)> = (0..sigma).map(|c|{
-        let start = find_first_starting_with::<B>(sorted_kmers, c as u8);
-        let end = find_first_starting_with::<B>(sorted_kmers, c as u8 + 1);
+        let start = find_first_starting_with(sorted_kmers, c as u8);
+        let end = find_first_starting_with(sorted_kmers, c as u8 + 1);
         (&sorted_kmers[start..end], start)
     }).collect();
 
