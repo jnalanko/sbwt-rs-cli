@@ -108,7 +108,7 @@ pub fn get_sorted_dummies<const B: usize>(
     });
 
 
-    log::info!("Contructing dummy k-mers");
+    log::info!("Constructing dummy k-mers");
     let iterable = BitVector::from(has_predecessor);
     let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = iterable.zero_iter().par_bridge().map(|x| {
         let mut prefix = sorted_kmers[x.1];
