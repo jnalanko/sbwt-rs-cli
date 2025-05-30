@@ -101,8 +101,8 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
     let rawrows = (0..sigma).collect::<Vec<usize>>().into_par_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut pointed_idx = find_in_dummy(merged, c as u8) as usize;
-        let end = if c < sigma - 1 { find_in_dummy(merged, c as u8 + 1) as usize } else { n };
+        let mut pointed_idx = merged.first_that_starts_with(c as u8) as usize;
+        let end = if c < sigma - 1 { merged.first_that_starts_with(c as u8 + 1) as usize } else { n };
 
         for kmer_idx in 0..merged.len() {
             let(kmer, len) = merged.get(kmer_idx);

@@ -20,6 +20,16 @@ impl<const B: usize> KmersWithLengths<B> {
     pub fn len(&self) -> usize {
         self.kmers.len()
     }
+
+    // Returns the index of the first k-mer that starts with c,
+    // self.len() if not found.
+    pub fn first_that_starts_with(&self, c: u8) -> usize {
+        binary_search_leftmost_that_fulfills_pred(
+            |i| self.get(i), 
+            |(kmer,len)| len > 0 && kmer.get_from_left(0) >= c, 
+            self.len()
+        )
+    }
 }
 
 pub fn find_in_dummy<const B: usize>(
