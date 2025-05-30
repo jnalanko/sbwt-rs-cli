@@ -71,27 +71,44 @@ pub fn read_kmer_or_dummy<const B: usize>(
     }
 }
 
+/// Assumes both input vector have no duplicates, and any
+/// pair (kmer, len) exists in only one of the inputs.
 pub fn merge_kmers_and_dummies<const B: usize>(
-    kmers: Vec<LongKmer<B>>,
+    mut kmers: Vec<LongKmer<B>>,
     dummies: Vec<(LongKmer<B>, u8)>,
     k: usize) -> KmersWithLengths<B> {
 
     let n_merged = kmers.len() + dummies.len();
+    let n_non_dummies = kmers.len();
 
-    let mut kmers_pos = 0;
-    let mut dummies_pos = 0;
+    // Merge from back to front, putting the merged kmers to the same vector as the input kmers.
+    // Make more space
+    kmers.resize(n_merged, LongKmer::from_u64_data([0; B]));
 
-    // TODO: reduce the space overhead
-    let mut merged = KmersWithLengths{
-        kmers: Vec::with_capacity(n_merged), 
-        lengths: Vec::with_capacity(n_merged)
-    };
-    for _ in 0..n_merged {
-        let (kmer, len) = read_kmer_or_dummy(&kmers, &mut kmers_pos, &dummies, &mut dummies_pos, k);
-        merged.kmers.push(kmer);
-        merged.lengths.push(len);
+    // Allocated space for the lengths
+    let mut lengths: Vec<u8> = vec![0; n_merged];
+
+    let mut nondummy_in = n_non_dummies as isize - 1; // Input pointer in non-dummies
+    let mut dummy_in = dummies.len() as isize - 1; // Input pointer in dummies
+    let mut merged_out = n_merged as isize - 1; // Output pointer
+
+    // The merge algorithm is easy because there are no duplicates
+    while merged_out >= 0 {
+        if dummy_in < 0 || (nondummy_in >= 0 && (kmers[nondummy_in as usize], k as u8) > dummies[dummy_in as usize]) {
+            // Take an element from nondummies
+            kmers[merged_out as usize] = kmers[nondummy_in as usize];
+            lengths[merged_out as usize] = k as u8;
+            merged_out -= 1;
+            nondummy_in -= 1;
+        } else {
+            // Take an element from dummies
+            kmers[merged_out as usize] = dummies[dummy_in as usize].0;
+            lengths[merged_out as usize] = dummies[dummy_in as usize].1;
+            merged_out -= 1;
+            dummy_in -= 1;
+        }
     }
-    merged
+    KmersWithLengths{kmers, lengths}
 }
 
 // Returns the SBWT bit vectors and optionally the LCS array
@@ -106,8 +123,8 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
     let rawrows = (0..sigma).collect::<Vec<usize>>().into_par_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut pointed_idx = merged.first_that_starts_with(c as u8) as usize;
-        let end = merged.first_that_starts_with(c as u8 + 1) as usize;
+        let mut pointed_idx = merged.first_that_starts_with(c as u8);
+        let end = merged.first_that_starts_with(c as u8 + 1);
 
         for kmer_idx in 0..merged.len() {
             let(kmer, len) = merged.get(kmer_idx);
