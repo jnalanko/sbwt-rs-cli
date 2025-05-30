@@ -76,7 +76,7 @@ pub fn find_in_nondummy<const B: usize>(
     start as u64
 }
 
-pub fn get_set_bits<const B: usize>(
+pub fn get_has_predecessor_marks<const B: usize>(
     kmers: &[LongKmer::<B>],
     char_slice: (&[LongKmer<B>], usize),
     k: usize,
@@ -130,7 +130,7 @@ pub fn get_sorted_dummies<const B: usize>(
 
     log::info!("Identifying k-mers without predecessors");
     let has_predecessor = char_cursors.par_iter_mut().enumerate().map(|(c, cursor)| {
-        get_set_bits(sorted_kmers, *cursor, k, c as u8)
+        get_has_predecessor_marks(sorted_kmers, *cursor, k, c as u8)
     }).reduce(|| {
         let mut res = simple_sds_sbwt::raw_vector::RawVector::new();
         res.resize(n, false);
