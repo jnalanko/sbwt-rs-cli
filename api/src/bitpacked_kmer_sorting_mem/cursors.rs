@@ -1,6 +1,7 @@
 use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::raw_vector::AccessRaw;
 use std::cmp::min;
+use crate::kmer::Kmer;
 use crate::kmer::LongKmer;
 use crate::bitpacked_kmer_sorting_mem::dummies::find_in_dummy;
 
@@ -8,29 +9,35 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 
+use super::dummies::KmersWithLengths;
+
+
 // Returns the LCS array.
-// This first builds the uncompressed LCS array, and then compressed it to log(k) bits per element.
-// This means that the peak memory is high, but we have the k-mers in memory anyway, so it's only
-// twice that for B = 8 (k <= 32). TODO: compute the compressed LCS directly. 
+// This first builds the uncompressed LCS array of &[u16], and then compressed it to log(k) bits per element.
+// This means that the peak memory is high, but we have the k-mers in memory anyway, so it's not so bad
+// TODO: compute the compressed LCS directly. 
 pub fn build_lcs_array<const B: usize>(
-    kmers: &[(LongKmer::<B>, u8)],
+    kmers: &KmersWithLengths<B>,
     k: usize,
 ) -> simple_sds_sbwt::int_vector::IntVector {
     // LCS values are between 0 and k-1
     assert!(k > 0);
+    assert!(k < u16::MAX as usize);
+    assert!(kmers.len() > 0);
 
     let bitwidth = 64 - (k as u64 - 1).leading_zeros();
 
-    let non_compressed_lcs = std::iter::once(0_usize).chain(kmers.par_windows(2).map(|window| {
-        // The longest common suffix is the longest common prefix of reversed k-mers
-        let prev_kmer = &window[0].0;
-        let prev_len = &window[0].1;
-        let kmer = &window[1].0;
-        let len = &window[1].1;
-        let mut lcs_value = LongKmer::<B>::lcp(prev_kmer, kmer);
-        lcs_value = min(lcs_value, min(*prev_len as usize, *len as usize));
-        lcs_value
-    }).collect::<Vec<usize>>());
+    let non_compressed_lcs: Vec<u16> = (0..kmers.len()).into_par_iter().map(|i| {
+        if i == 0 {
+            0
+        } else {
+            let (prev_kmer, prev_len) = kmers.get(i-1);
+            let (kmer, len) = kmers.get(i);
+            let mut lcs_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
+            lcs_value = min(lcs_value, min(prev_len as usize, len as usize));
+            lcs_value as u16
+        }
+    }).collect();
 
     // Compress into log(k) bits per element
     let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(kmers.len(), bitwidth as usize).unwrap();
@@ -64,7 +71,6 @@ pub fn read_kmer_or_dummy<const B: usize>(
     }
 }
 
-
 pub fn merge_kmers_and_dummies<const B: usize>(
     kmers: Vec<LongKmer<B>>,
     dummies: Vec<(LongKmer<B>, u8)>,
@@ -85,7 +91,7 @@ pub fn merge_kmers_and_dummies<const B: usize>(
 
 // Returns the SBWT bit vectors and optionally the LCS array
 pub fn build_sbwt_bit_vectors<const B: usize>(
-    merged: &[(LongKmer<B>, u8)],
+    merged: &KmersWithLengths<B>,
     k: usize,
     sigma: usize,
     build_lcs: bool,
@@ -98,8 +104,9 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
         let mut pointed_idx = find_in_dummy(merged, c as u8) as usize;
         let end = if c < sigma - 1 { find_in_dummy(merged, c as u8 + 1) as usize } else { n };
 
-        merged.iter().enumerate().for_each(|(kmer_idx, (kmer, len))| {
-            let kmer_c = if *len as usize == k {
+        for kmer_idx in 0..merged.len() {
+            let(kmer, len) = merged.get(kmer_idx);
+            let kmer_c = if len as usize == k {
                 (
                     kmer
                         .set_from_left(k - 1, 0)
@@ -111,15 +118,15 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                 (kmer.right_shift(1).set_from_left(0, c as u8), len + 1) // Dummy
             };
 
-            while pointed_idx < end && merged[pointed_idx] < kmer_c {
+            while pointed_idx < end && merged.get(pointed_idx) < kmer_c {
                 pointed_idx += 1;
             }
 
-            if pointed_idx < end && merged[pointed_idx] == kmer_c {
+            if pointed_idx < end && merged.get(pointed_idx) == kmer_c {
                 rawrow.set_bit(kmer_idx, true);
                 pointed_idx += 1;
             }
-        });
+        };
         rawrow
     }).collect::<Vec<simple_sds_sbwt::raw_vector::RawVector>>();
 

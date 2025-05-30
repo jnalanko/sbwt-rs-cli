@@ -7,6 +7,21 @@ use simple_sds_sbwt::bit_vector::BitVector;
 use simple_sds_sbwt::raw_vector::*;
 use rayon::prelude::*;
 
+pub struct KmersWithLengths<const B: usize> {
+    pub kmers : Vec<LongKmer<B>>,
+    pub lengths: Vec<u8>, // B can be at most 8, which means max length 256
+}
+
+impl<const B: usize> KmersWithLengths<B> {
+    pub fn get(&self, i: usize) -> (LongKmer<B>, u8) {
+        (self.kmers[i], self.lengths[i])
+    }
+
+    pub fn len(&self) -> usize {
+        self.kmers.len()
+    }
+}
+
 pub fn find_in_dummy<const B: usize>(
     dummy_file: &[(LongKmer<B>, u8)],
     c: u8,
