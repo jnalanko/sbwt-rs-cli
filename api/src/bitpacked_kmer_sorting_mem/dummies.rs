@@ -137,7 +137,11 @@ pub fn get_sorted_dummies<const B: usize>(
         res
     }, |mut a, b| {
         let bv = BitVector::from(b); // Todo: unnecessary copy
-        bv.one_iter().for_each(|idx| a.set_bit(idx.1, true));
+        bv.one_iter().for_each(|idx| a.set_bit(idx.1, true)); // Todo: 64 bits at a time
+        // Both of the todos above become irrelevant if we just build
+        // the colex slices for each char and concatenate the results.
+        // But the best way to do this could be to split the colex space into
+        // n_threads chunks.
         a
     });
 
