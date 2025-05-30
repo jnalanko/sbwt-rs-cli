@@ -280,6 +280,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                 for next_piece in piece_iter {
                     first.extend(next_piece);
                 }
+                first.shrink_to_fit();
                 first
             }
         }).collect()
