@@ -83,7 +83,7 @@ pub fn get_has_predecessor_marks<const B: usize>(
     c: u8,
 ) -> simple_sds_sbwt::raw_vector::RawVector {
     let mut bits = simple_sds_sbwt::raw_vector::RawVector::new();
-    bits.resize(kmers.len(), false);
+    bits.resize(kmers.len(), false); // Todo: only need the colex slice for c, not the whole range
     let mut pointed_idx = 0;
     kmers.iter().for_each(|x| {
         let xc = x.set_from_left(k-1, 0).right_shift(1).set_from_left(0, c);
@@ -136,7 +136,7 @@ pub fn get_sorted_dummies<const B: usize>(
         res.resize(n, false);
         res
     }, |mut a, b| {
-        let bv = BitVector::from(b);
+        let bv = BitVector::from(b); // Todo: unnecessary copy
         bv.one_iter().for_each(|idx| a.set_bit(idx.1, true));
         a
     });
