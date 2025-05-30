@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::kmer::LongKmer;
 
+use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 
@@ -64,6 +65,7 @@ fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec
     a.shrink_to_fit();
 }
 
+// Rayon thread pool must be initialized before calling
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
     k: usize,
@@ -225,21 +227,10 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                     sender_clone.send(b).unwrap();
                 }
 
-                // Send remaining shared batches: Todo: the locking here means that only a single thread can sort at a time
-                for sb in shared_bin_buffers.iter() {
-                    let mut sb = sb.lock().unwrap();
-                    if dedup_batches && !sb.is_empty(){
-                        log::debug!("Sorting final shared batch of {} kmers", sb.len());
-                        sb.sort_unstable();
-                        sb.dedup();
-                    }
-                    sender_clone.send(sb.clone()).unwrap();
-                    sb.clear();
-                    sb.shrink_to_fit();
-                }
             }));
         }
 
+        // Spawn a collector that reads from the encoders and pushes to final bins
         let collector_handle = std::thread::spawn( move || {
             let mut final_bins = vec![Vec::<LongKmer::<B>>::new(); n_bins];
             while let Ok(batch) = collector_in.recv(){
@@ -256,6 +247,20 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         for h in encoder_handles { // Wait for the encoders to finish
             h.join().unwrap();
         }
+
+        // Send remaining shared batches
+        shared_bin_buffers.into_par_iter().for_each(|sb| {
+            let mut sb = sb.lock().unwrap();
+            if dedup_batches && !sb.is_empty(){
+                log::debug!("Sorting remaining shared batch of {} kmers", sb.len());
+                sb.sort_unstable();
+                sb.dedup();
+            }
+            encoder_out.send(sb.clone()).unwrap();
+            sb.clear();
+            sb.shrink_to_fit();
+        });
+
         drop(encoder_out); // Close the channel
 
         collector_handle.join().unwrap() // Wait for the collector to finish and return the bins
