@@ -688,7 +688,7 @@ fn main() {
                 .value_parser(clap::value_parser!(usize))
             )
             .arg(clap::Arg::new("mem-gb")
-                .help("An approximate memory budget in GB for disk-based construction. The actual memory usage may be higher.")
+                .help("An approximate memory budget for various buffers, in gigabytes. The total memory usage may be higher. The larger the budget, the more effective the deduplication is with --dedup-batches.")
                 .short('m')
                 .long("mem-gb")
                 .required(false)
