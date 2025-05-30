@@ -200,6 +200,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                                 let len_before = shared_bin_copy.len();
                                                 shared_bin_copy.sort_unstable();
                                                 shared_bin_copy.dedup();
+                                                shared_bin_copy.shrink_to_fit();
                                                 let len_after = shared_bin_copy.len();
                                                 log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
                                                 sender_clone.send(shared_bin_copy).unwrap();
