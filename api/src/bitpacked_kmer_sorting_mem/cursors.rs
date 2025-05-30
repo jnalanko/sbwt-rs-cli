@@ -61,7 +61,7 @@ pub fn merge_kmers_and_dummies<const B: usize>(
     // Make more space
     kmers.resize(n_merged, LongKmer::from_u64_data([0; B]));
 
-    // Allocated space for the lengths
+    // Allocate space for the lengths
     let mut lengths: Vec<u8> = vec![0; n_merged];
 
     let mut nondummy_in = n_non_dummies as isize - 1; // Input pointer in non-dummies
