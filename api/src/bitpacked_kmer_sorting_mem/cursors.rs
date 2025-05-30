@@ -2,55 +2,11 @@ use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::raw_vector::AccessRaw;
 use std::cmp::min;
 use crate::kmer::LongKmer;
-use crate::util::binary_search_leftmost_that_fulfills_pred;
+use crate::bitpacked_kmer_sorting_mem::dummies::find_in_dummy;
 
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
-
-pub fn find_in_dummy<const B: usize>(
-    dummy_file: &[(LongKmer<B>, u8)],
-    c: u8,
-) -> u64 {
-    let dummy_file_len = dummy_file.len();
-
-    let access_fn = |pos| {
-        dummy_file[pos]
-    };
-
-    let pred_fn = |kmer: (LongKmer::<B>,u8)| {
-        kmer.1 > 0 && kmer.0.get_from_left(0) >= c
-    };
-
-    let start = binary_search_leftmost_that_fulfills_pred(
-        access_fn,
-        pred_fn,
-        dummy_file_len);
-
-    start as u64
-}
-
-pub fn find_in_nondummy<const B: usize>(
-    nondummy_file: &[LongKmer<B>],
-    c: u8,
-) -> u64 {
-    let nondummy_file_len = nondummy_file.len();
-
-    let access_fn = |pos| {
-        nondummy_file[pos]
-    };
-
-    let pred_fn = |kmer: LongKmer::<B>| {
-        kmer.get_from_left(0) >= c
-    };
-
-    let start = binary_search_leftmost_that_fulfills_pred(
-        access_fn,
-        pred_fn,
-        nondummy_file_len);
-
-    start as u64
-}
 
 // Returns the LCS array.
 // This first builds the uncompressed LCS array, and then compressed it to log(k) bits per element.

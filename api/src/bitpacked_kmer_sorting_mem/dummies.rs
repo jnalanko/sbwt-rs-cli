@@ -1,11 +1,55 @@
-use crate::bitpacked_kmer_sorting_mem::cursors::find_in_nondummy;
 use crate::kmer::LongKmer;
+use crate::util::binary_search_leftmost_that_fulfills_pred;
 
 use simple_sds_sbwt::ops::Select;
 use simple_sds_sbwt::ops::SelectZero;
 use simple_sds_sbwt::bit_vector::BitVector;
 use simple_sds_sbwt::raw_vector::*;
 use rayon::prelude::*;
+
+pub fn find_in_dummy<const B: usize>(
+    dummy_file: &[(LongKmer<B>, u8)],
+    c: u8,
+) -> u64 {
+    let dummy_file_len = dummy_file.len();
+
+    let access_fn = |pos| {
+        dummy_file[pos]
+    };
+
+    let pred_fn = |kmer: (LongKmer::<B>,u8)| {
+        kmer.1 > 0 && kmer.0.get_from_left(0) >= c
+    };
+
+    let start = binary_search_leftmost_that_fulfills_pred(
+        access_fn,
+        pred_fn,
+        dummy_file_len);
+
+    start as u64
+}
+
+pub fn find_in_nondummy<const B: usize>(
+    nondummy_file: &[LongKmer<B>],
+    c: u8,
+) -> u64 {
+    let nondummy_file_len = nondummy_file.len();
+
+    let access_fn = |pos| {
+        nondummy_file[pos]
+    };
+
+    let pred_fn = |kmer: LongKmer::<B>| {
+        kmer.get_from_left(0) >= c
+    };
+
+    let start = binary_search_leftmost_that_fulfills_pred(
+        access_fn,
+        pred_fn,
+        nondummy_file_len);
+
+    start as u64
+}
 
 pub fn get_set_bits<const B: usize>(
     kmers: &[LongKmer::<B>],
