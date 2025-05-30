@@ -225,7 +225,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                     sender_clone.send(b).unwrap();
                 }
 
-                // Send remaining shared batches
+                // Send remaining shared batches: Todo: the locking here means that only a single thread can sort at a time
                 for sb in shared_bin_buffers.iter() {
                     let mut sb = sb.lock().unwrap();
                     if dedup_batches && !sb.is_empty(){
