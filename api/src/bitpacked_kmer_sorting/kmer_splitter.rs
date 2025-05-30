@@ -33,9 +33,13 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
 
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
     std::thread::scope(|scope| {
+        
+        // There is one bin for each 3-mer (64 bins). If you change the 3 to something else,
+        // you must update all the logic below
+        const BIN_PREFIX_LEN: usize = 3_usize; 
+        assert!(k >= BIN_PREFIX_LEN);
+        let n_bins = (4_usize).pow(BIN_PREFIX_LEN as u32); // 64
 
-        let bin_prefix_len = 3_usize; // If you update this you must update all the logic below
-        let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
         let producer_buf_size = 1_000_000_usize; // TODO: respect this
         let encoder_bin_buf_size = mem_gb * (1_usize << 30) / ((n_bins * LongKmer::<B>::byte_size()) * n_threads);
 
@@ -116,7 +120,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
         let mut bin_writers = 
             Vec::<std::io::BufWriter::<TempFile>>::new();
 
-        for binmer in colex_sorted_binmers(bin_prefix_len) {
+        for binmer in colex_sorted_binmers(BIN_PREFIX_LEN) {
             let name_prefix = format!("sbwt-temp-{}-", String::from_utf8(binmer).unwrap());
             let f = temp_file_manager.create_new_file(&name_prefix, 8, ".bin");
             bin_writers.push(BufWriter::new(f));

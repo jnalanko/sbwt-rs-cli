@@ -82,7 +82,7 @@ fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec
 ///   the shared bin buffers are sorted and deduplicated before storing to memory. The larger the
 ///   buffer size, the more duplicates we will find. If the capacity is C_s, then the total space
 ///   for the shared buffers will be:
-///        64 * C_s * sizeof(LongKmer<B>) = 512 * C_s
+///        64 * C_s * sizeof(LongKmer<B>) = 512 * C_s * B
 ///   If dedup_batches is not enabled, or your data has little to no duplicates, this buffer does 
 ///   not matter so much and you can just set it to e.g. 2^20. Otherwise, it's a good idea to put
 ///   all your available extra memory here to deduplicate as much as possible to decrease the peak memory. 
@@ -97,9 +97,12 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     shared_bin_buf_capacity: usize,
 ) -> Vec<LongKmer<B>> {
 
-    let bin_prefix_len = 3_usize; // If you update this you must update all the logic below
-    assert!(k >= bin_prefix_len);
-    let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
+    // There is one bin for each 3-mer (64 bins). If you change the 3 to something else,
+    // you must update all the logic below, and also the buffer size calculation 
+    // at the caller, and the log messages about buffer sizes, and possibly more.
+    const BIN_PREFIX_LEN: usize = 3_usize; 
+    assert!(k >= BIN_PREFIX_LEN);
+    let n_bins = (4_usize).pow(BIN_PREFIX_LEN as u32); // 64
 
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
     for _ in 0..n_bins {
@@ -237,7 +240,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     log::info!("Sorting k-mer bins");
     bins.par_iter_mut().for_each(|bin| {
         if !bin.is_empty() {
-            let label = &bin.first().unwrap().to_string()[0..bin_prefix_len];
+            let label = &bin.first().unwrap().to_string()[0..BIN_PREFIX_LEN];
             log::info!("Sorting bin {} of size {}", label, bin.len());
             bin.sort_unstable();
             bin.dedup();
