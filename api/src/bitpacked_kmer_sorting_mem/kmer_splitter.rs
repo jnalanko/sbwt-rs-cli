@@ -235,6 +235,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                     }
                     sender_clone.send(sb.clone()).unwrap();
                     sb.clear();
+                    sb.shrink_to_fit();
                 }
             }));
         }
