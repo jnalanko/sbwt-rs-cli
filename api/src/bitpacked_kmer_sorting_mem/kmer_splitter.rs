@@ -64,18 +64,42 @@ fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec
     a.shrink_to_fit();
 }
 
+/// How to choose the buffer sizes?
+/// * producer_buf_capacity: This determines how many k-mers are pushed to the work queue
+///   at a time. This needs to be large enough to avoid parallel contention, but small enough
+///   to distribute work quickly and evenly. A good default is 2^20.
+/// * thread_local_bin_buf_capacity. There is one thread-local buffer for each of the 64
+///   distinct 3-mers. Each of these buffers up to thread_local_bin_buf_capacity k-mers.
+///   So if thread_local_bin_buf_capacity is C_t, then the total space is: 
+///      C_t * n_threads * 64 * sizeof(LongKmer<B>>
+///      = C_t * n_threads * 64 * 8B
+///      = 512 * C_t * n_threads * B bytes
+///   The bigger the C_t, the less parallel contention there will be. If work example you have
+///   1GB memory available for this over 48 threads and k = 31 (B = 1), then you'll want to set 
+///   C_t to about 40,000.
+/// * shared_bin_buf_capacity: There is one shared buffer for each of the 64 3-mer bins. Each
+///   of these contains up to shared_bin_buf_capacity k-mers. If `dedup_batches` is enabled, then
+///   the shared bin buffers are sorted and deduplicated before storing to memory. The larger the
+///   buffer size, the more duplicates we will find. If the capacity is C_s, then the total space
+///   for the shared buffers will be:
+///        64 * C_s * sizeof(LongKmer<B>) = 512 * C_s
+///   If dedup_batches is not enabled, or your data has little to no duplicates, this buffer does 
+///   not matter so much and you can just set it to e.g. 2^20. Otherwise, it's a good idea to put
+///   all your available extra memory here to deduplicate as much as possible to decrease the peak memory. 
+///   For example, if you have 512GB available for this with k = 31 (B = 1), set C_s to 512GB / 512 = 1 GB.
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
     k: usize,
     n_threads: usize,
     dedup_batches: bool,
+    producer_buf_capacity: usize,
+    thread_local_bin_buf_capacity: usize,
+    shared_bin_buf_capacity: usize,
 ) -> Vec<LongKmer<B>> {
 
     let bin_prefix_len = 3_usize; // If you update this you must update all the logic below
     assert!(k >= bin_prefix_len);
     let n_bins = (4_usize).pow(bin_prefix_len as u32); // 64
-    let producer_buf_size = 1_000_000_usize; // TODO: respect this
-    let per_thread_bin_buf_size = 20_000_usize;
 
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
     for _ in 0..n_bins {
@@ -83,7 +107,6 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         let b = Mutex::new(buf);
         shared_bin_buffers_vec.push(b);
     };
-    let shared_bin_buf_capacity = 10_000_000;
     let shared_bin_buffers = &shared_bin_buffers_vec; // This is shared with threads
 
     log::info!("Bitpacking and binning k-mers");
@@ -103,7 +126,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                 let mut seq_copy = seq.to_owned();
                 seq_copy.reverse(); // Reverse to get colex sorting
                 buf.push(seq_copy.into_boxed_slice());
-                if current_total_buffer_size > producer_buf_size {
+                if current_total_buffer_size > producer_buf_capacity {
                     let mut sendbuf = Vec::<Box<[u8]>>::new();
                     std::mem::swap(&mut sendbuf, &mut buf);
                     parser_out.send(sendbuf).unwrap();
@@ -132,7 +155,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                 Ok(kmer) => {
                                     let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
                                     this_thread_bin_buffers[bin_id].push(kmer);
-                                    if this_thread_bin_buffers[bin_id].len() >= per_thread_bin_buf_size {
+                                    if this_thread_bin_buffers[bin_id].len() >= thread_local_bin_buf_capacity {
                                         // Move this local bin buffer to a shared buffer
                                         let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
                                         shared_bin.extend(&this_thread_bin_buffers[bin_id]);
