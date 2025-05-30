@@ -47,30 +47,6 @@ pub fn build_lcs_array<const B: usize>(
     compressed_lcs
 }
 
-// Read the next kmer or dummy from data stored separately in memory
-pub fn read_kmer_or_dummy<const B: usize>(
-    kmers: &[LongKmer<B>], kmers_pos: &mut usize,
-    dummies: &[(LongKmer<B>, u8)], dummies_pos: &mut usize,
-    k: usize,
-) -> (LongKmer<B>, u8) {
-    let n_kmers = kmers.len();
-    let n_dummies = dummies.len();
-
-    if *kmers_pos == n_kmers {
-        *dummies_pos += 1;
-        dummies[*dummies_pos - 1]
-    } else if *dummies_pos == n_dummies {
-        *kmers_pos += 1;
-        (kmers[*kmers_pos - 1], k as u8)
-    } else if dummies[*dummies_pos] < (kmers[*kmers_pos], k as u8) {
-        *dummies_pos += 1;
-        dummies[*dummies_pos - 1]
-    } else {
-        *kmers_pos += 1;
-        (kmers[*kmers_pos - 1], k as u8)
-    }
-}
-
 /// Assumes both input vector have no duplicates, and any
 /// pair (kmer, len) exists in only one of the inputs.
 pub fn merge_kmers_and_dummies<const B: usize>(
