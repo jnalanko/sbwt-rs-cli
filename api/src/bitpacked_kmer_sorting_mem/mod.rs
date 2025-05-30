@@ -37,6 +37,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
             let n_kmers = rev_kmers.len();
             log::info!("{} distinct k-mers found", n_kmers);
             let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k);
+            log::info!("Merging dummy k-mers with the rest");
             (cursors::merge_kmers_and_dummies(&rev_kmers, &dummies, k), n_kmers)
         };
 

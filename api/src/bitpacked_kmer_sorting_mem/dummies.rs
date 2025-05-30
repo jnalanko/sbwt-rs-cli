@@ -59,6 +59,7 @@ pub fn get_sorted_dummies<const B: usize>(
         (&sorted_kmers[start..(end as usize)], pos as usize)
     }).collect();
 
+    log::info!("Identifying k-mers without predecessors");
     let has_predecessor = char_cursors.par_iter_mut().enumerate().map(|(c, cursor)| {
         get_set_bits(sorted_kmers, *cursor, k, c as u8)
     }).reduce(|| {
@@ -71,6 +72,8 @@ pub fn get_sorted_dummies<const B: usize>(
         a
     });
 
+
+    log::info!("Contructing dummy k-mers");
     let iterable = BitVector::from(has_predecessor);
     let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = iterable.zero_iter().par_bridge().map(|x| {
         let mut prefix = sorted_kmers[x.1];
@@ -85,6 +88,7 @@ pub fn get_sorted_dummies<const B: usize>(
     // later, which adds one "ghost dollar" count to all counts.
     required_dummies.push((LongKmer::<B>::from_ascii(b"").unwrap(), 0));
 
+    log::info!("Sorting dummy k-mers");
     required_dummies.par_sort_unstable();
     required_dummies.dedup();
     required_dummies.shrink_to_fit();
