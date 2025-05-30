@@ -143,7 +143,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     log::info!("Bitpacking and binning k-mers");
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
-    let mut bins = std::thread::scope(|scope| {
+    let mut bins: Vec<Vec<LongKmer<B>>> = std::thread::scope(|scope| {
         use crossbeam::crossbeam_channel::unbounded;
         let (parser_out, encoder_in) = unbounded();
         let (encoder_out, collector_in) = unbounded();
@@ -234,14 +234,15 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
         // Spawn a collector that reads from the encoders and pushes to final bins
         let collector_handle = std::thread::spawn( move || {
-            let mut final_bins = vec![Vec::<LongKmer::<B>>::new(); n_bins];
+            // Vec of shared bin batches for each of the 64 3-mers (concatenated at the end)
+            let mut collected_shared_bins = vec![Vec::<Vec::<LongKmer::<B>>>::new(); n_bins];
             while let Ok(batch) = collector_in.recv(){
                 if !batch.is_empty() {
                     let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
-                    final_bins[bin_id].extend(batch);
+                    collected_shared_bins[bin_id].push(batch);
                 }
             }
-            final_bins
+            collected_shared_bins
         });
 
         producer_handle.join().unwrap(); // Wait for the producer to finish
@@ -265,7 +266,23 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
         drop(encoder_out); // Close the channel
 
-        collector_handle.join().unwrap() // Wait for the collector to finish and return the bins
+        // Wait for the collector to finish and concatenate each sequence of shared bins
+        let collected_shared_bin_seqs = collector_handle.join().unwrap();
+        collected_shared_bin_seqs.into_par_iter().map(|pieces| {
+            // Concatenate all to the first piece (TODO: here if the
+            // pieces are sorted, we can just merge the runs and the final sort
+            // is done also).
+            if pieces.len() == 0 {
+                vec![]
+            } else {
+                let mut piece_iter = pieces.into_iter();
+                let mut first = piece_iter.next().unwrap();
+                for next_piece in piece_iter {
+                    first.extend(next_piece);
+                }
+                first
+            }
+        }).collect()
 
     });
 
