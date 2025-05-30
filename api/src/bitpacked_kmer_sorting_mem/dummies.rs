@@ -32,48 +32,15 @@ impl<const B: usize> KmersWithLengths<B> {
     }
 }
 
-pub fn find_in_dummy<const B: usize>(
-    dummy_file: &[(LongKmer<B>, u8)],
-    c: u8,
-) -> u64 {
-    let dummy_file_len = dummy_file.len();
-
-    let access_fn = |pos| {
-        dummy_file[pos]
-    };
-
-    let pred_fn = |kmer: (LongKmer::<B>,u8)| {
-        kmer.1 > 0 && kmer.0.get_from_left(0) >= c
-    };
-
-    let start = binary_search_leftmost_that_fulfills_pred(
-        access_fn,
-        pred_fn,
-        dummy_file_len);
-
-    start as u64
-}
-
-pub fn find_in_nondummy<const B: usize>(
-    nondummy_file: &[LongKmer<B>],
+fn find_first_starting_with<const B: usize>(
+    v: &[LongKmer<B>],
     c: u8,
 ) -> usize {
-    let nondummy_file_len = nondummy_file.len();
-
-    let access_fn = |pos| {
-        nondummy_file[pos]
-    };
-
-    let pred_fn = |kmer: LongKmer::<B>| {
-        kmer.get_from_left(0) >= c
-    };
-
-    let start = binary_search_leftmost_that_fulfills_pred(
-        access_fn,
-        pred_fn,
-        nondummy_file_len);
-
-    start
+    binary_search_leftmost_that_fulfills_pred(
+        |pos| { v[pos] },
+        |kmer: LongKmer::<B>| { kmer.get_from_left(0) >= c },
+        v.len()
+    )
 }
 
 pub fn get_has_predecessor_marks<const B: usize>(
@@ -118,8 +85,8 @@ pub fn get_sorted_dummies<const B: usize>(
     let n = sorted_kmers.len();
 
     let mut char_cursors: Vec<(&[LongKmer::<B>], usize)> = (0..sigma).map(|c|{
-        let start = find_in_nondummy::<B>(sorted_kmers, c as u8);
-        let end = find_in_nondummy::<B>(sorted_kmers, c as u8 + 1);
+        let start = find_first_starting_with::<B>(sorted_kmers, c as u8);
+        let end = find_first_starting_with::<B>(sorted_kmers, c as u8 + 1);
         (&sorted_kmers[start..end], start)
     }).collect();
 

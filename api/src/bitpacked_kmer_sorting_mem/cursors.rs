@@ -3,7 +3,6 @@ use simple_sds_sbwt::raw_vector::AccessRaw;
 use std::cmp::min;
 use crate::kmer::Kmer;
 use crate::kmer::LongKmer;
-use crate::bitpacked_kmer_sorting_mem::dummies::find_in_dummy;
 
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
