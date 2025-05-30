@@ -125,7 +125,7 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
     let (sbwt, lcs) = if in_memory {
-        let algo = BitPackedKmerSortingMem::new().dedup_batches(dedup_batches);
+        let algo = BitPackedKmerSortingMem::new().mem_gb(mem_gb).dedup_batches(dedup_batches);
         SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).run(reader)
     } else {
         let algo = BitPackedKmerSorting::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
@@ -674,7 +674,6 @@ fn main() {
                 .help("Sort k-mers in memory. Faster, but requires a lot of memory.")
                 .long("in-memory")
                 .action(clap::ArgAction::SetTrue)
-                .conflicts_with("mem-gb") // Can not cap memory with in-memory construction
             )
             .arg(clap::Arg::new("build-lcs")
                 .help("Also build the LCS array (costs about log(k) bits per SBWT node)")

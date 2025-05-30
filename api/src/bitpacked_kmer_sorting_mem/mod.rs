@@ -17,6 +17,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
     seqs: IN,
     k: usize,
     n_threads: usize,
+    approx_mem_gb: usize,
     dedup_batches: bool,
     build_lcs: bool,
 ) -> (SbwtIndex::<SS>, Option<LcsArray>) {
