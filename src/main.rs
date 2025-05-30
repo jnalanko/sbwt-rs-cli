@@ -696,7 +696,7 @@ fn main() {
                 .default_value("8")
             )
             .arg(clap::Arg::new("dedup-batches")
-                .help("Slows down the construction, but saves disk if the data is very repetitive.")
+                .help("Slows down the construction, but reduces temporary disk space usage and memory if the data has many duplicate k-mers.")
                 .long("dedup-batches")
                 .short('d')
                 .action(clap::ArgAction::SetTrue)
