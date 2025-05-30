@@ -57,7 +57,7 @@ pub fn find_in_dummy<const B: usize>(
 pub fn find_in_nondummy<const B: usize>(
     nondummy_file: &[LongKmer<B>],
     c: u8,
-) -> u64 {
+) -> usize {
     let nondummy_file_len = nondummy_file.len();
 
     let access_fn = |pos| {
@@ -73,7 +73,7 @@ pub fn find_in_nondummy<const B: usize>(
         pred_fn,
         nondummy_file_len);
 
-    start as u64
+    start
 }
 
 pub fn get_has_predecessor_marks<const B: usize>(
@@ -118,14 +118,9 @@ pub fn get_sorted_dummies<const B: usize>(
     let n = sorted_kmers.len();
 
     let mut char_cursors: Vec<(&[LongKmer::<B>], usize)> = (0..sigma).map(|c|{
-        let pos = find_in_nondummy::<B>(sorted_kmers, c as u8);
-        let start = pos as usize;
-        let end = if c < sigma - 1 {
-            find_in_nondummy::<B>(sorted_kmers, c as u8 + 1)
-        } else {
-            sorted_kmers.len() as u64
-        };
-        (&sorted_kmers[start..(end as usize)], pos as usize)
+        let start = find_in_nondummy::<B>(sorted_kmers, c as u8);
+        let end = find_in_nondummy::<B>(sorted_kmers, c as u8 + 1);
+        (&sorted_kmers[start..end], start)
     }).collect();
 
     log::info!("Identifying k-mers without predecessors");
