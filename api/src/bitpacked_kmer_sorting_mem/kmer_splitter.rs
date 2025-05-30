@@ -91,7 +91,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     //      C_t * n_threads * 64 * sizeof(LongKmer<B>>
     //      = C_t * n_threads * 64 * 8B
     //      = 512 * C_t * n_threads * B bytes
-    //   The bigger the C_t, the less parallel contention there will be. If work example you have
+    //   The bigger the C_t, the less parallel contention there will be. If for example you have
     //   1GB memory available for this over 48 threads and k = 31 (B = 1), then you'll want to set 
     //   C_t to about 40,000.
     // * shared_bin_buf_capacity: There is one shared buffer for each of the 64 3-mer bins. Each

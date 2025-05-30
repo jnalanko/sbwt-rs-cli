@@ -120,6 +120,7 @@ pub fn merge_kmers_and_dummies<const B: usize>(
     let mut kmers_pos = 0;
     let mut dummies_pos = 0;
 
+    // TODO: reduce the space overhead
     let mut merged = Vec::<(LongKmer<B>, u8)>::with_capacity(n_merged);
     for _ in 0..n_merged {
         merged.push(read_kmer_or_dummy(kmers, &mut kmers_pos, dummies, &mut dummies_pos, k))
