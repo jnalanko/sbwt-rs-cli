@@ -140,12 +140,14 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                         if shared_bin.len() >= shared_bin_buf_capacity {
                                             // Flush shared bin to the collector thread
                                             if dedup_batches {
-                                                log::debug!("Sorting batch of {} kmers", shared_bin.len());
                                                 let mut shared_bin_copy = shared_bin.clone();
                                                 shared_bin.clear();
                                                 drop(shared_bin); // Release the mutex and proceed to sort
+                                                let len_before = shared_bin_copy.len();
                                                 shared_bin_copy.sort_unstable();
                                                 shared_bin_copy.dedup();
+                                                let len_after = shared_bin_copy.len();
+                                                log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
                                                 sender_clone.send(shared_bin_copy).unwrap();
                                             } else {
                                                 sender_clone.send(shared_bin.clone()).unwrap();
