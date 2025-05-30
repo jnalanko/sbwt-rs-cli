@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::cmp::max;
 use std::sync::Mutex;
 
 use crate::kmer::LongKmer;
@@ -64,37 +64,12 @@ fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec
     a.shrink_to_fit();
 }
 
-/// How to choose the buffer sizes?
-/// * producer_buf_capacity: This determines how many k-mers are pushed to the work queue
-///   at a time. This needs to be large enough to avoid parallel contention, but small enough
-///   to distribute work quickly and evenly. A good default is 2^20.
-/// * thread_local_bin_buf_capacity. There is one thread-local buffer for each of the 64
-///   distinct 3-mers. Each of these buffers up to thread_local_bin_buf_capacity k-mers.
-///   So if thread_local_bin_buf_capacity is C_t, then the total space is: 
-///      C_t * n_threads * 64 * sizeof(LongKmer<B>>
-///      = C_t * n_threads * 64 * 8B
-///      = 512 * C_t * n_threads * B bytes
-///   The bigger the C_t, the less parallel contention there will be. If work example you have
-///   1GB memory available for this over 48 threads and k = 31 (B = 1), then you'll want to set 
-///   C_t to about 40,000.
-/// * shared_bin_buf_capacity: There is one shared buffer for each of the 64 3-mer bins. Each
-///   of these contains up to shared_bin_buf_capacity k-mers. If `dedup_batches` is enabled, then
-///   the shared bin buffers are sorted and deduplicated before storing to memory. The larger the
-///   buffer size, the more duplicates we will find. If the capacity is C_s, then the total space
-///   for the shared buffers will be:
-///        64 * C_s * sizeof(LongKmer<B>) = 512 * C_s * B
-///   If dedup_batches is not enabled, or your data has little to no duplicates, this buffer does 
-///   not matter so much and you can just set it to e.g. 2^20. Otherwise, it's a good idea to put
-///   all your available extra memory here to deduplicate as much as possible to decrease the peak memory. 
-///   For example, if you have 512GB available for this with k = 31 (B = 1), set C_s to 512GB / 512 = 1 GB.
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     mut seqs: IN,
     k: usize,
     n_threads: usize,
     dedup_batches: bool,
-    producer_buf_capacity: usize,
-    thread_local_bin_buf_capacity: usize,
-    shared_bin_buf_capacity: usize,
+    approx_mem_gb: usize
 ) -> Vec<LongKmer<B>> {
 
     // There is one bin for each 3-mer (64 bins). If you change the 3 to something else,
@@ -103,6 +78,57 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     const BIN_PREFIX_LEN: usize = 3_usize; 
     assert!(k >= BIN_PREFIX_LEN);
     let n_bins = (4_usize).pow(BIN_PREFIX_LEN as u32); // 64
+
+    // Calculating suitable buffer sizes
+    // * producer_buf_capacity: This determines how many k-mers are pushed to the work queue
+    //   at a time. This needs to be large enough to avoid parallel contention, but small enough
+    //   to distribute work quickly and evenly. A good default is 2^20.
+    // * thread_local_bin_buf_capacity. There is one thread-local buffer for each of the 64
+    //   distinct 3-mers. Each of these buffers up to thread_local_bin_buf_capacity k-mers.
+    //   So if thread_local_bin_buf_capacity is C_t, then the total space is: 
+    //      C_t * n_threads * 64 * sizeof(LongKmer<B>>
+    //      = C_t * n_threads * 64 * 8B
+    //      = 512 * C_t * n_threads * B bytes
+    //   The bigger the C_t, the less parallel contention there will be. If work example you have
+    //   1GB memory available for this over 48 threads and k = 31 (B = 1), then you'll want to set 
+    //   C_t to about 40,000.
+    // * shared_bin_buf_capacity: There is one shared buffer for each of the 64 3-mer bins. Each
+    //   of these contains up to shared_bin_buf_capacity k-mers. If `dedup_batches` is enabled, then
+    //   the shared bin buffers are sorted and deduplicated before storing to memory. The larger the
+    //   buffer size, the more duplicates we will find. If the capacity is C_s, then the total space
+    //   for the shared buffers will be:
+    //       64 * C_s * sizeof(LongKmer<B>) = 512 * C_s * B
+    //   If dedup_batches is not enabled, or your data has little to no duplicates, this buffer does 
+    //   not matter so much and you can just set it to e.g. 2^20. Otherwise, it's a good idea to put
+    //   all your available extra memory here to deduplicate as much as possible to decrease the peak memory. 
+    //   For example, if you have 512GB available for this with k = 31 (B = 1), set C_s to 512GB / 512 = 1 GB.
+
+    let kmer_bytes = std::mem::size_of::<crate::kmer::LongKmer<B>>();
+    let producer_buf_cap = (1_usize << 23) / kmer_bytes; // 8 MB of k-mers
+    let thread_local_buf_caps = 1_usize << 16;
+    let shared_buf_caps = if dedup_batches { 
+        let bytes_remaining = approx_mem_gb as isize * (1 << 30) - (producer_buf_cap * kmer_bytes) as isize - (thread_local_buf_caps * n_threads * 64 * kmer_bytes) as isize;
+        let bytes_remaining = max(bytes_remaining, 1_isize << 30) as usize; // Use at least 1 GB
+
+        // The total memory in the shared buffers will be:
+        // 64 * buf_cap * kmer_bytes 
+        // Set this equal to bytes_remaining and solve for buf_cap:
+        let cap = bytes_remaining / 64 / kmer_bytes;
+        assert!(cap > 0); // Should be because bytes_remaining >= 1GB
+        cap
+    } else {
+        1 << 30 // Whatever, does not matter since we do not deduplicate
+    };
+
+    // One bin per thread per 3-mer
+    let thread_local_total = thread_local_buf_caps * n_threads * 64 * kmer_bytes; 
+    let shared_total = shared_buf_caps * 64 * kmer_bytes; // One bin per 3-mer
+    log::info!("Producer buffer capacity: {}", human_bytes::human_bytes(producer_buf_cap as f64));
+    log::info!("Thread-local buffer capacity: {} ({} total)", human_bytes::human_bytes(thread_local_buf_caps as f64), human_bytes::human_bytes(thread_local_total as f64)); // 64 local bins per thread
+    log::info!("Shared bin buffer capacity: {} ({} total)", human_bytes::human_bytes(shared_buf_caps as f64), human_bytes::human_bytes(shared_total as f64));
+    if producer_buf_cap + thread_local_total + shared_total > approx_mem_gb * (1_usize << 30) {
+        log::warn!("Exceeding memory budget");
+    }
 
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
     for _ in 0..n_bins {
@@ -129,7 +155,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                 let mut seq_copy = seq.to_owned();
                 seq_copy.reverse(); // Reverse to get colex sorting
                 buf.push(seq_copy.into_boxed_slice());
-                if current_total_buffer_size > producer_buf_capacity {
+                if current_total_buffer_size > producer_buf_cap {
                     let mut sendbuf = Vec::<Box<[u8]>>::new();
                     std::mem::swap(&mut sendbuf, &mut buf);
                     parser_out.send(sendbuf).unwrap();
@@ -158,12 +184,12 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                                 Ok(kmer) => {
                                     let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
                                     this_thread_bin_buffers[bin_id].push(kmer);
-                                    if this_thread_bin_buffers[bin_id].len() >= thread_local_bin_buf_capacity {
+                                    if this_thread_bin_buffers[bin_id].len() >= thread_local_buf_caps {
                                         // Move this local bin buffer to a shared buffer
                                         let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
                                         shared_bin.extend(&this_thread_bin_buffers[bin_id]);
                                         this_thread_bin_buffers[bin_id].clear();
-                                        if shared_bin.len() >= shared_bin_buf_capacity {
+                                        if shared_bin.len() >= shared_buf_caps {
                                             // Flush shared bin to the collector thread
                                             if dedup_batches {
                                                 let mut shared_bin_copy = shared_bin.clone();
