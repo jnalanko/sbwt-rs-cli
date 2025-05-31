@@ -1,3 +1,5 @@
+use std::cmp::min;
+
 use read_exact::{self, ReadExactExt};
 
 use crate::util::is_dna;
@@ -177,6 +179,11 @@ impl<const B: usize> LongKmer<B>{
             }
         }
         B*32 // Full k-mer match: 32 nucleotids per block
+    }
+
+    pub fn lcp_with_different_lengths(a: (&Self, u8), b: (&Self, u8)) -> usize { // Takes pairs (kmer, len)
+        let lcp_value = LongKmer::<B>::lcp(&a.0, &b.0);
+        min(lcp_value, min(a.1 as usize, b.1 as usize))
     }
 
 }

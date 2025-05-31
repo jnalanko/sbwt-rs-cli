@@ -42,8 +42,7 @@ pub fn build_lcs_array<const B: usize>(
     let (mut prev_kmer, mut prev_len) = merged_slice.next().unwrap();
 
     while let Some((kmer, len)) = merged_slice.next() {
-        let mut lcp_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
-        lcp_value = min(lcp_value, min(prev_len as usize, len as usize));
+        let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
         non_compressed_lcs.push(lcp_value as u16);
         (prev_kmer, prev_len) = (kmer,len);
     }
@@ -134,7 +133,8 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
         let mut rows = vec![];
         for c in 0..sigma {
-            let row_pieces = input_ranges.clone().into_par_iter().map(|input_range|{
+            let row_pieces = input_ranges.clone().into_iter().map(|input_range|{
+                eprintln!("Processing input range {:?}", input_range.clone());
                 let mut row_piece: bitvec::vec::BitVec::<u64, Lsb0> = bitvec::vec::BitVec::with_capacity(input_range.len());
                 row_piece.resize(input_range.len(), false);
 
@@ -150,16 +150,34 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                     let mut src_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, input_range.clone(), k); // Origin of edge
                     let mut dest_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, dest_start_idx..n, k); // Destination of edge over
 
+                    // We might be starting at a k-mer that is not a suffix group leader. We must not
+                    // add any edges for it. Rewind forward until we are at a suffix group leader.
+                    let mut cur = x;
+                    if input_range.start > 0 {
+                        let mut prev = get_ith_merged_kmer(&kmers, &dummies, input_range.start - 1, k);
+                        while LongKmer::<B>::lcp_with_different_lengths((&prev.0, prev.1), (&cur.0, cur.1)) == k-1 {
+                            src_pointer.next(); // Advance
+                            prev = cur;
+                            if let Some(next) = src_pointer.peek() {
+                                cur = next;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
+                    // Now src_pointer should point to the first leader of a suffix group
+                    // in the input range.
                     while let Some((kmer, len)) = src_pointer.next() {
                         let kmer_c = prepend_c((kmer,len), k, c);
 
-                        while dest_pointer.peek().is_some_and(|x| x < kmer_c) {
+                        while dest_pointer.peek().is_some_and(|y| y < kmer_c) {
                             dest_pointer.next();
                         }
 
-                        if dest_pointer.peek().is_some_and(|x| x == kmer_c) {
+                        if dest_pointer.peek().is_some_and(|y| y == kmer_c) {
                             row_piece.set(src_pointer.cur_merged_index() - 1 - input_range.start, true); // -1 because we have advanced past the current k-mer
-                            dest_pointer.next().unwrap();
+                            dest_pointer.next().unwrap(); // Don't point to this k-mer anymore because it now has an edge
                         }
                     };
                 }
