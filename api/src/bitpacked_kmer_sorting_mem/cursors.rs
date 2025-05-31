@@ -134,7 +134,6 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
         let mut rows = vec![];
         for c in 0..sigma {
             let row_pieces = input_ranges.clone().into_iter().map(|input_range|{
-                eprintln!("Processing input range {:?}", input_range.clone());
                 let mut row_piece: bitvec::vec::BitVec::<u64, Lsb0> = bitvec::vec::BitVec::with_capacity(input_range.len());
                 row_piece.resize(input_range.len(), false);
 
