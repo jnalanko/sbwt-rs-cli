@@ -240,7 +240,10 @@ mod tests {
 
     #[test]
     fn test_binary_search_merged_list() {
+        // Test empty vs empty
+        assert_eq!((0,0,true), binary_search_position_in_merged_list(|i| i, |j| j, 0, 0, 0));
 
+        // Random testcases
         let seed = 1234;
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         for rep in 0..100 { // Stress test with 100 random runs
@@ -259,7 +262,6 @@ mod tests {
             let mut v2 = v[split_point..].to_vec();
             v1.sort();
             v2.sort();
-            dbg!(&v1, &v2);
 
             let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
             merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
