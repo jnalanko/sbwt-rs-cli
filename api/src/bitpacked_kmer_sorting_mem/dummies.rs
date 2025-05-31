@@ -120,8 +120,7 @@ fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) 
         (a_idx, b_idx, true)
     } else { 
         // The target position is in b. a[a_idx] is larger than the answer in b (or a_idx == a_len).
-        // That means we take a_idx from a. and the rest from b. If a_idx == 0,
-        // then we take 0 from a.
+        // That means we take a_idx from a. and the rest from b. 
         (a_idx, target_pos - a_idx, false)
     }
 }
