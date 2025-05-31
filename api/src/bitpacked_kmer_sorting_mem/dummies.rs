@@ -77,17 +77,30 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
     pub fn new(all_dummies: &'a KmersWithLengths<B>, all_kmers: &'a [LongKmer<B>], merged_range: Range<usize>, k: usize) -> Self {
         assert!(merged_range.end <= all_dummies.len() + all_kmers.len());
 
-        todo!();
         // Binary search the starts and ends in kmers and dummies.
 
+        let (kmer_start, dummy_start, _) = binary_search_position_in_merged_list(
+            |i| (all_kmers[i], k as u8), 
+            |j| all_dummies.get(j), 
+            merged_range.start, 
+            all_kmers.len(), 
+            all_dummies.len()
+        );
 
+        let (kmer_end, dummy_end, _) = binary_search_position_in_merged_list(
+            |i| (all_kmers[i], k as u8), 
+            |j| all_dummies.get(j), 
+            merged_range.end, 
+            all_kmers.len(), 
+            all_dummies.len()
+        );
 
-        /*Self {
+        Self {
             all_dummies, all_kmers, 
-            dummy_idx: dummy_range.start, dummy_end: dummy_range.end,
-            kmer_idx: kmer_range.start, kmer_end: kmer_range.end,
+            dummy_idx: dummy_start, dummy_end,
+            kmer_idx: kmer_start, kmer_end,
             k
-        }*/
+        }
     }
 }
 
