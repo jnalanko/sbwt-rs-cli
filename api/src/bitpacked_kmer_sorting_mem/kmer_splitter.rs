@@ -71,8 +71,6 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
     let mut cur_starts = Vec::<usize>::new();
     
     while let Some(seq) = seqs.stream_next(){
-        let old_start = cur_concat.len();
-
         // Add to concatenation
         cur_starts.push(cur_concat.len());
         cur_concat.extend(seq);
