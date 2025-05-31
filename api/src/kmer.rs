@@ -1,5 +1,7 @@
 use read_exact::{self, ReadExactExt};
 
+use crate::util::is_dna;
+
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
 pub struct Kmer{
     data: u64
@@ -14,11 +16,22 @@ pub enum KmerEncodingError{
 
 // B is the number of u64 in a kmer
 // The k-mer will be a (32*B)-mer
+// k-mer comparing structs gives lexicographic k-mer comparison.
 // NOTE: k-mer comparison only works correctly for equal-length kmers
-// because k-mers are padded with A's at the end to fill B*32 characters
+// because k-mers are padded with A's at the end to fill B*32 characters.
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
-pub struct LongKmer<const B: usize>{
+pub struct LongKmer<const B: usize> {
     data: [u64; B] // Packed with 2 bits / nucleotide so that bitwise lex comparison is k-mer lex comparison
+}
+
+fn ascii_to_bitpair_panic_if_not_ACGT(c: u8) -> u8 {
+    match c {
+        b'A' => 0,
+        b'C' => 1,
+        b'G' => 2,
+        b'T' => 3,
+        _ => panic!("Invalid nucleotide"),
+    }
 }
 
 // TODO: always pass these by value since this type is Copy?
@@ -48,6 +61,8 @@ impl<const B: usize> LongKmer<B>{
         Ok(Self{data})
     }
 
+    /// c has alphabet {0,1,2,3}!
+    /// TODO: it's confusing that this does not modify the k-mer but returns a new one
     pub fn set_from_left(&self, i: usize, c: u8) -> Self {
         let pos = i;
         let block = pos / 32;
@@ -65,11 +80,12 @@ impl<const B: usize> LongKmer<B>{
         let pos = i;
         let block = pos / 32;
         let off = 31 - pos % 32;
-        //eprintln!("Get {} {} {}", block, off, pos);
         ((self.data[block] >> (2*off)) & 3) as u8
     }
 
     // Extends with A's at the end
+    // c has alphabet {0,1,2,3}!
+    /// TODO: it's confusing that this does not modify the k-mer but returns a new one
     pub fn right_shift(&self, chars: usize) -> Self{
         // TODO: this could be done without any branching
         let mut new_data = [0_u64; B];
@@ -92,8 +108,7 @@ impl<const B: usize> LongKmer<B>{
         Self{data: new_data}
     }
 
-
-
+    /// TODO: it's confusing that this does not modify the k-mer but returns a new one
     pub fn left_shift(&self, chars: usize) -> Self{
         // TODO: this could be done without any branching
         let chars = chars as isize;
@@ -116,7 +131,6 @@ impl<const B: usize> LongKmer<B>{
         }
         Self{data: new_data}
     }
-
 
     #[allow(dead_code)]
     pub fn get_u64_data(&self) -> &[u64]{
@@ -171,6 +185,61 @@ impl<const B: usize> LongKmer<B>{
 
 }
 
+struct KmerIterator<'a, const B: usize> {
+    seq: &'a[u8],
+    cur_kmer: LongKmer<B>,
+    first_iteration: bool,
+    next_seq_pos: usize,
+    cur_len: usize,
+    k: usize,
+}
+
+impl<'a, const B: usize> KmerIterator<'a, B> {
+    fn new(seq: &'a [u8], k: usize) -> KmerIterator<'a, B>{
+        Self{seq, cur_kmer: LongKmer::from_u64_data([0; B]), first_iteration: true, next_seq_pos: 0, cur_len: 0, k}
+    }
+
+    fn scan_to_next_full_kmer(&mut self) -> Option<LongKmer<B>> {
+        // Find the next k-mer that as only symbols from alphabet ACGT 
+        while self.cur_len < self.k && self.next_seq_pos < self.seq.len() {
+            let ascii_char = self.seq[self.next_seq_pos];
+            if is_dna(ascii_char) {
+                let c = ascii_to_bitpair_panic_if_not_ACGT(ascii_char);
+                self.cur_kmer = self.cur_kmer.set_from_left(self.cur_len, c); // Append c
+                self.cur_len += 1;
+            } else {
+                self.cur_kmer = LongKmer::from_u64_data([0; B]); // Clear
+                self.cur_len = 0;
+            }
+            self.next_seq_pos += 1;
+        }
+
+        if self.cur_len == self.k {
+            Some(self.cur_kmer)
+        } else {
+            None
+        }
+
+    }
+}
+
+impl<const B: usize> Iterator for KmerIterator<'_, B> {
+    type Item = LongKmer<B>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.first_iteration {
+            self.first_iteration = false;
+            self.scan_to_next_full_kmer()
+        } else {
+            assert!(self.cur_len == self.k);
+            self.cur_kmer = self.cur_kmer.left_shift(1); // Deletes the first character
+            self.cur_len -= 1;
+            self.scan_to_next_full_kmer()
+        }
+    }
+
+}
+
 impl<const B: usize> std::fmt::Display for LongKmer<B>{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
@@ -221,6 +290,20 @@ mod tests{
         let x = LongKmer::<2>::from_ascii(ascii1).unwrap();        
         let y = LongKmer::<2>::from_ascii(ascii2).unwrap();        
         assert_eq!(LongKmer::<2>::lcp(&x, &y), 64);
+    }
+
+    #[test]
+    fn test_kmer_iterator(){
+        let ascii = b"NACGATNACANANAAATN";
+        let k = 4;
+        let packed_kmers: Vec<LongKmer<3>> = KmerIterator::<3>::new(ascii, k).collect();
+        let ascii_kmers: Vec<Vec<u8>> = packed_kmers.iter().map(|x| x.to_string().as_bytes()[0..k].to_owned()).collect();
+        let true_ascii_kmers = vec![b"ACGA".to_vec(), b"CGAT".to_vec(), b"AATN".to_vec()];
+
+        assert_eq!(ascii_kmers, true_ascii_kmers);
+
+        // Todo: Also test no k-mers produced
+        // Equal k-mers
     }
 
     #[test]
