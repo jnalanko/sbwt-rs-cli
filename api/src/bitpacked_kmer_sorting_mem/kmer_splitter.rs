@@ -32,21 +32,7 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
     drop(out);
 }
 
-// Rayon thread pool must be initialized before calling
-pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
-    mut seqs: IN,
-    k: usize,
-    n_threads: usize,
-    dedup_batches: bool,
-    approx_mem_gb: usize
-) -> Vec<LongKmer<B>> {
-
-    // There is one bin for each 3-mer (64 bins). If you change the 3 to something else,
-    // you must update all the logic below, and also the buffer size calculation 
-    // at the caller, and the log messages about buffer sizes, and possibly more.
-    const BIN_PREFIX_LEN: usize = 3_usize; 
-    assert!(k >= BIN_PREFIX_LEN);
-    let n_bins = (4_usize).pow(BIN_PREFIX_LEN as u32); // 64
+fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: usize, n_threads: usize) -> (usize, usize, usize) {
 
     // Calculating suitable buffer sizes
     // * producer_buf_capacity: This determines how many k-mers are pushed to the work queue
@@ -98,6 +84,27 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     if producer_buf_cap*kmer_bytes + thread_local_total_bytes + shared_total_bytes > approx_mem_gb * (1_usize << 30) {
         log::warn!("Exceeding memory budget");
     }
+
+    (producer_buf_cap, thread_local_buf_caps, shared_buf_caps)
+}
+
+// Rayon thread pool must be initialized before calling
+pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
+    mut seqs: IN,
+    k: usize,
+    n_threads: usize,
+    dedup_batches: bool,
+    approx_mem_gb: usize
+) -> Vec<LongKmer<B>> {
+
+    // There is one bin for each 3-mer (64 bins). If you change the 3 to something else,
+    // you must update all the logic below, and also the buffer size calculation 
+    // and the log messages about buffer sizes, and possibly more.
+    const BIN_PREFIX_LEN: usize = 3_usize; 
+    assert!(k >= BIN_PREFIX_LEN);
+    let n_bins = (4_usize).pow(BIN_PREFIX_LEN as u32); // 64
+
+    let (producer_buf_cap, thread_local_buf_caps, shared_buf_caps) = determine_buf_capacities::<B>(dedup_batches, approx_mem_gb, n_threads);
 
     log::info!("Allocating shared buffers");
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
