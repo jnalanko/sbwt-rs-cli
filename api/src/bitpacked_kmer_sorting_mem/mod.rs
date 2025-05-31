@@ -6,6 +6,7 @@ mod cursors;
 
 use std::cmp::max;
 
+use dummies::KmersWithLengths;
 use kmer_splitter::get_bitpacked_sorted_distinct_kmers;
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, util::DNA_ALPHABET};
@@ -33,17 +34,21 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Bit-packing and sorting all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
         let rev_kmers = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches, approx_mem_gb);
 
-        let (merged, n_kmers) = {
-            let n_kmers = rev_kmers.len();
-            log::info!("{} distinct k-mers found", n_kmers);
-            let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k);
-            log::info!("Merging dummy k-mers with the rest");
-            (cursors::merge_kmers_and_dummies(rev_kmers, dummies, k), n_kmers)
+        let n_kmers = rev_kmers.len();
+        log::info!("{} distinct k-mers found", n_kmers);
+
+        log::info!("Constructing dummy k-mers");
+        let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k);
+
+        log::info!("{} Compacting dummies and lengths", n_kmers);
+        let dummies_and_lengths = KmersWithLengths{ // This fixes word alignment overhead
+            kmers: dummies.iter().map(|pair| pair.0).collect(),
+            lengths: dummies.into_iter().map(|pair| pair.1).collect()
         };
 
         log::info!("Constructing the sbwt subset sequence");
 
-        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&merged, k, sigma, build_lcs);
+        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(rev_kmers, dummies_and_lengths, k, sigma, build_lcs);
 
         // Create the C array
         #[allow(non_snake_case)] // C-array is an established convention in BWT indexes

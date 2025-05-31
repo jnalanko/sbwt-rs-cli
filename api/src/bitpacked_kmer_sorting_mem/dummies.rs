@@ -41,12 +41,20 @@ pub struct KmerDummyMergeSlice<'a, const B: usize> {
     all_kmers: &'a [LongKmer<B>],
     dummy_idx: usize,
     kmer_idx: usize,
-    dummy_end: usize,
-    kmer_end: usize,
+    dummy_range: Range<usize>,
+    kmer_range: Range<usize>,
     k: usize,
 }
 
 impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
+
+    pub fn len(&self) -> usize {
+        self.dummy_range.len() + self.kmer_range.len()
+    }
+
+    pub fn cur_merged_index(&self) -> usize {
+        self.dummy_idx + self.kmer_idx
+    }
 
     fn advance_dummy(&mut self) -> (LongKmer<B>, u8) {
         let x = self.all_dummies.get(self.dummy_idx);
@@ -60,12 +68,27 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
         (x, self.k as u8)
     }
 
-    pub fn next(&mut self) -> Option<(LongKmer<B>, u8)> {
-        if self.dummy_idx == self.dummy_end && self.kmer_idx == self.kmer_end {
+    pub fn peek(&mut self) -> Option<(LongKmer<B>, u8)> {
+        // Todo: refactor this logic together with next()
+        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
             None
-        } else if self.dummy_idx == self.dummy_end {
+        } else if self.dummy_idx == self.dummy_range.end {
+            Some((self.all_kmers[self.kmer_idx], self.k as u8))
+        } else if self.kmer_idx == self.kmer_range.end {
+            Some(self.all_dummies.get(self.dummy_idx))
+        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
+            Some((self.all_kmers[self.kmer_idx], self.k as u8))
+        } else {
+            Some(self.all_dummies.get(self.dummy_idx))
+        }
+    }
+
+    pub fn next(&mut self) -> Option<(LongKmer<B>, u8)> {
+        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
+            None
+        } else if self.dummy_idx == self.dummy_range.end {
             Some(self.advance_kmers())
-        } else if self.kmer_idx == self.kmer_end {
+        } else if self.kmer_idx == self.kmer_range.end {
             Some(self.advance_dummy())
         } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
             Some(self.advance_kmers())
@@ -97,8 +120,10 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
 
         Self {
             all_dummies, all_kmers, 
-            dummy_idx: dummy_start, dummy_end,
-            kmer_idx: kmer_start, kmer_end,
+            dummy_idx: dummy_start,
+            kmer_idx: kmer_start,
+            dummy_range: dummy_start..dummy_end,
+            kmer_range: kmer_start..kmer_end,
             k
         }
     }
@@ -190,7 +215,6 @@ pub fn get_has_predecessor_marks<const B: usize>(
     bits
 }
 
-// We take in a path and not a file object because we need multiple readers to the same file
 pub fn get_sorted_dummies<const B: usize>(
     sorted_kmers: &[LongKmer::<B>],
     sigma: usize, k: usize,

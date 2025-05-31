@@ -8,6 +8,7 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 
+use super::dummies::KmerDummyMergeSlice;
 use super::dummies::KmersWithLengths;
 
 
@@ -16,30 +17,30 @@ use super::dummies::KmersWithLengths;
 // This means that the peak memory is high, but we have the k-mers in memory anyway, so it's not so bad
 // TODO: compute the compressed LCS directly. 
 pub fn build_lcs_array<const B: usize>(
-    kmers: &KmersWithLengths<B>,
+    mut merged_slice: KmerDummyMergeSlice<B>,
     k: usize,
 ) -> simple_sds_sbwt::int_vector::IntVector {
     // LCS values are between 0 and k-1
     assert!(k > 0);
     assert!(k < u16::MAX as usize);
-    assert!(kmers.len() > 0);
+    //assert!(kmers.len() > 0);
 
     let bitwidth = 64 - (k as u64 - 1).leading_zeros();
 
-    let non_compressed_lcs: Vec<u16> = (0..kmers.len()).into_par_iter().map(|i| {
-        if i == 0 {
-            0
-        } else {
-            let (prev_kmer, prev_len) = kmers.get(i-1);
-            let (kmer, len) = kmers.get(i);
-            let mut lcs_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
-            lcs_value = min(lcs_value, min(prev_len as usize, len as usize));
-            lcs_value as u16
-        }
-    }).collect();
+    let mut non_compressed_lcs = Vec::<u16>::with_capacity(merged_slice.len());
+    non_compressed_lcs.push(0);
+    let (mut prev_kmer, mut prev_len) = merged_slice.next().unwrap();
+
+
+    while let Some((kmer, len)) = merged_slice.next() {
+        let mut lcs_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
+        lcs_value = min(lcs_value, min(prev_len as usize, len as usize));
+        non_compressed_lcs.push(lcs_value as u16);
+        (prev_kmer, prev_len) = (kmer,len);
+    }
 
     // Compress into log(k) bits per element
-    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(kmers.len(), bitwidth as usize).unwrap();
+    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(merged_slice.len(), bitwidth as usize).unwrap();
     for x in non_compressed_lcs {
         compressed_lcs.push(x as u64);
     }
@@ -88,21 +89,23 @@ pub fn merge_kmers_and_dummies<const B: usize>(
 
 // Returns the SBWT bit vectors and optionally the LCS array
 pub fn build_sbwt_bit_vectors<const B: usize>(
-    merged: &KmersWithLengths<B>,
+    kmers: Vec<LongKmer<B>>,
+    dummies: KmersWithLengths<B>,
     k: usize,
     sigma: usize,
     build_lcs: bool,
 ) -> (Vec<simple_sds_sbwt::raw_vector::RawVector>, Option<simple_sds_sbwt::int_vector::IntVector>) {
 
-    let n = merged.len();
+    let n = kmers.len() + dummies.len(); // Merged lengths
 
     let rawrows = (0..sigma).collect::<Vec<usize>>().into_par_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut pointed_idx = merged.first_that_starts_with(c as u8);
-        let end = merged.first_that_starts_with(c as u8 + 1);
+        let mut input_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k);
+        let mut output_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Todo: range C[c]..C[c+1]
+        //let mut pointed_idx = merged.first_that_starts_with(c as u8); // TODO: from C array
+        //let end = merged.first_that_starts_with(c as u8 + 1); // TODO: from C array
 
-        for kmer_idx in 0..merged.len() {
-            let(kmer, len) = merged.get(kmer_idx);
+        while let Some((kmer, len)) = input_pointer.next() {
             let kmer_c = if len as usize == k {
                 (
                     kmer
@@ -115,13 +118,13 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                 (kmer.right_shifted(1).copy_set_from_left(0, c as u8), len + 1) // Dummy
             };
 
-            while pointed_idx < end && merged.get(pointed_idx) < kmer_c {
-                pointed_idx += 1;
+            while output_pointer.peek().is_some_and(|x| x < kmer_c) {
+                output_pointer.next();
             }
 
-            if pointed_idx < end && merged.get(pointed_idx) == kmer_c {
-                rawrow.set_bit(kmer_idx, true);
-                pointed_idx += 1;
+            if output_pointer.peek().is_some_and(|x| x == kmer_c) {
+                rawrow.set_bit(output_pointer.cur_merged_index(), true);
+                output_pointer.next().unwrap();
             }
         };
         rawrow
@@ -129,7 +132,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
     let lcs = if build_lcs {
         // LCS values are between 0 and k-1
-        Some(build_lcs_array(merged, k))
+        Some(build_lcs_array(KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k), k))
     } else {
         None
     };
