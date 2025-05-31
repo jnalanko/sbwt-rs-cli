@@ -147,7 +147,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                     let dest_start_idx = cx_kmer_insertion_index + cx_dummy_insertion_index;
 
                     let mut src_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, input_range.clone(), k); // Origin of edge
-                    let mut dest_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, dest_start_idx..n, k); // Destination of edge over
+                    let mut dest_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, dest_start_idx..n, k); // Destination of edge
 
                     // We might be starting at a k-mer that is not a suffix group leader. We must not
                     // add any edges for it. Rewind forward until we are at a suffix group leader.
