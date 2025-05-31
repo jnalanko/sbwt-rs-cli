@@ -32,6 +32,18 @@ impl SeqBatch {
     fn len(&self) -> usize {
         self.starts.len() - 1 // Has concat.len() at the end
     }
+
+    fn reverse_all(&mut self) {
+        // Compute starts in reverse concat
+        let mut rev_starts = Vec::<usize>::with_capacity(self.starts.len());
+        rev_starts.push(0);
+        for i in (0..self.len()).rev() {
+            rev_starts.push(rev_starts.last().unwrap() + self.starts[i+1] - self.starts[i]);
+        }
+
+        self.concat.reverse();
+        self.starts = rev_starts;
+    }
 }
 
 struct SeqBatchIterator<'a> {
@@ -65,9 +77,6 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
         cur_starts.push(cur_concat.len());
         cur_concat.extend(seq);
 
-        // Reverse to get colex sorting
-        cur_concat[old_start..old_start + seq.len()].reverse();
-
         if cur_concat.len() >= buf_cap {
             cur_starts.push(cur_concat.len()); // End sentinel, as required
             let batch = SeqBatch{concat: cur_concat, starts: cur_starts};
@@ -93,7 +102,10 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
 fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool) {
     assert!(shared_bin_buffers.len() == N_BINS);
     let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); N_BINS];
-    while let Ok(batch) = input.recv(){
+    while let Ok(mut batch) = input.recv(){
+        // Reverse to get colex sorting
+        batch.reverse_all();
+
         for seq in batch.iter(){
             for kmer in seq.windows(k){
                 match LongKmer::<B>::from_ascii(kmer) {
