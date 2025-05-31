@@ -3,66 +3,33 @@ use std::sync::Mutex;
 
 use crate::kmer::LongKmer;
 
+use crossbeam::channel::Sender;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 
-fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec<LongKmer<B>>) {
-    // Step 1: Extend `a` with enough space
-    let original_len = a.len();
-    let total_capacity = original_len + b.len();
-    a.resize(total_capacity, LongKmer::from_u64_data([0; B])); // Fill with placeholders
 
-    // Step 2: Pointers for merge
-    let mut i = original_len as isize - 1; // Last element of original `a`
-    let mut j = b.len() as isize - 1;      // Last element of `b`
-    let mut k = total_capacity as isize - 1; // End of resized `a`
-
-    // Step 3: Merge from back to front
-    while i >= 0 && j >= 0 {
-        let va = a[i as usize];
-        let vb = b[j as usize];
-        if va > vb {
-            a[k as usize] = va;
-            i -= 1;
-        } else if va < vb {
-            a[k as usize] = vb;
-            j -= 1;
-        } else {
-            // Equal values, keep one
-            a[k as usize] = va;
-            i -= 1;
-            j -= 1;
-        }
-        k -= 1;
-    }
-
-    // Copy remaining elements
-    while i >= 0 {
-        a[k as usize] = a[i as usize];
-        i -= 1;
-        k -= 1;
-    }
-    while j >= 0 {
-        a[k as usize] = b[j as usize];
-        j -= 1;
-        k -= 1;
-    }
-
-    // Step 4: Remove duplicates and shift left. Todo: no Option 
-    let mut last: Option<LongKmer<B>> = None;
-    let mut write = 0;
-    for read in (k + 1) as usize..total_capacity {
-        if Some(a[read]) != last {
-            a[write] = a[read];
-            last = Some(a[read]);
-            write += 1;
+fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usize, out: Sender<Vec<Box<[u8]>>>){
+    let mut buf = Vec::<Box<[u8]>>::new();
+    let mut current_total_buffer_size = 0_usize;
+    
+    while let Some(seq) = seqs.stream_next(){
+        current_total_buffer_size += seq.len();
+        let mut seq_copy = seq.to_owned();
+        seq_copy.reverse(); // Reverse to get colex sorting
+        buf.push(seq_copy.into_boxed_slice());
+        if current_total_buffer_size > buf_cap {
+            let mut sendbuf = Vec::<Box<[u8]>>::new();
+            std::mem::swap(&mut sendbuf, &mut buf);
+            out.send(sendbuf).unwrap();
+            current_total_buffer_size = 0;
         }
     }
+    
+    out.send(buf).unwrap();
 
-    // Step 5: Truncate the vector
-    a.truncate(write);
-    a.shrink_to_fit();
+    log::info!("Producer thread: all work pushed to work queue");
+    drop(out);
 }
 
 // Rayon thread pool must be initialized before calling
@@ -150,26 +117,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
         // Create producer
         let producer_handle = scope.spawn(move || {
-            let mut buf = Vec::<Box<[u8]>>::new();
-            let mut current_total_buffer_size = 0_usize;
-            
-            while let Some(seq) = seqs.stream_next(){
-                current_total_buffer_size += seq.len();
-                let mut seq_copy = seq.to_owned();
-                seq_copy.reverse(); // Reverse to get colex sorting
-                buf.push(seq_copy.into_boxed_slice());
-                if current_total_buffer_size > producer_buf_cap {
-                    let mut sendbuf = Vec::<Box<[u8]>>::new();
-                    std::mem::swap(&mut sendbuf, &mut buf);
-                    parser_out.send(sendbuf).unwrap();
-                    current_total_buffer_size = 0;
-                }
-            }
-            
-            parser_out.send(buf).unwrap();
-
-            log::info!("Producer thread: all work pushed to work queue");
-            drop(parser_out);
+            input_parsing_thread(seqs, producer_buf_cap, parser_out);
         });
 
         // Create encoders
@@ -313,4 +261,64 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     bin_concat
 
+}
+
+
+#[allow(dead_code)] // Might be useful later
+fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec<LongKmer<B>>) {
+    // Step 1: Extend `a` with enough space
+    let original_len = a.len();
+    let total_capacity = original_len + b.len();
+    a.resize(total_capacity, LongKmer::from_u64_data([0; B])); // Fill with placeholders
+
+    // Step 2: Pointers for merge
+    let mut i = original_len as isize - 1; // Last element of original `a`
+    let mut j = b.len() as isize - 1;      // Last element of `b`
+    let mut k = total_capacity as isize - 1; // End of resized `a`
+
+    // Step 3: Merge from back to front
+    while i >= 0 && j >= 0 {
+        let va = a[i as usize];
+        let vb = b[j as usize];
+        if va > vb {
+            a[k as usize] = va;
+            i -= 1;
+        } else if va < vb {
+            a[k as usize] = vb;
+            j -= 1;
+        } else {
+            // Equal values, keep one
+            a[k as usize] = va;
+            i -= 1;
+            j -= 1;
+        }
+        k -= 1;
+    }
+
+    // Copy remaining elements
+    while i >= 0 {
+        a[k as usize] = a[i as usize];
+        i -= 1;
+        k -= 1;
+    }
+    while j >= 0 {
+        a[k as usize] = b[j as usize];
+        j -= 1;
+        k -= 1;
+    }
+
+    // Step 4: Remove duplicates and shift left. Todo: no Option 
+    let mut last: Option<LongKmer<B>> = None;
+    let mut write = 0;
+    for read in (k + 1) as usize..total_capacity {
+        if Some(a[read]) != last {
+            a[write] = a[read];
+            last = Some(a[read]);
+            write += 1;
+        }
+    }
+
+    // Step 5: Truncate the vector
+    a.truncate(write);
+    a.shrink_to_fit();
 }
