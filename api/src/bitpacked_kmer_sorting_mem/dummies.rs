@@ -76,6 +76,7 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
     pub fn new(all_dummies: &'a KmersWithLengths<B>, all_kmers: &'a [LongKmer<B>], merged_range: Range<usize>, k: usize) -> Self {
         assert!(merged_range.end <= all_dummies.len() + all_kmers.len());
 
+        todo!();
         // Binary search the starts and ends in kmers and dummies.
 
 
@@ -225,8 +226,25 @@ mod tests {
     fn test_binary_search_merged_list() {
         let v1: Vec<usize> = vec![0,1,2,5,7,8,10];
         let v2: Vec<usize> = vec![3,4,6,9,11];
-        let (i,j,from_v1) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], 8, v1.len(), v2.len());
-        assert_eq!((i,j,from_v1), (5, 4, true));
+
+        let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
+        merged.extend(v1.iter().enumerate().map(|x| (x.0, *x.1, true)));
+        merged.extend(v2.iter().enumerate().map(|x| (x.0, *x.1, false)));
+        merged.sort();
+
+        for query in 0..12 {
+            let mut true_i = 0;
+            let mut true_j = 0;
+            for (_,_,from_a) in &merged[0..query] {
+                true_i += *from_a as usize;
+                true_j += !(*from_a) as usize;
+            }
+            let true_from_a = merged[query].2;
+            let (i,j,from_a) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], 8, v1.len(), v2.len());
+            assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
+
+        }
+
     }
 //fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access: Fn(usize) -> T>(access_a: Access, access_b: Access, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
 }
