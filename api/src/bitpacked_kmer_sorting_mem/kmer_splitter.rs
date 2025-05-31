@@ -127,26 +127,22 @@ fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: 
     //   for the shared buffers will be:
     //       64 * C_s * sizeof(LongKmer<B>) = 512 * C_s * B
     //   If dedup_batches is not enabled, or your data has little to no duplicates, this buffer does 
-    //   not matter so much and you can just set it to e.g. 2^20. Otherwise, it's a good idea to put
-    //   all your available extra memory here to deduplicate as much as possible to decrease the peak memory. 
+    //   not matter so much. Otherwise, it's a good idea to put  all your available extra memory 
+    //   here to deduplicate as much as possible to decrease the peak memory. 
     //   For example, if you have 512GB available for this with k = 31 (B = 1), set C_s to 512GB / 512 = 1 GB.
 
     let kmer_bytes = std::mem::size_of::<crate::kmer::LongKmer<B>>();
     let producer_buf_cap = (1_usize << 23) / kmer_bytes; // 8 MB of k-mers
     let thread_local_buf_caps = 1_usize << 16;
-    let shared_buf_caps = if dedup_batches { 
-        let bytes_remaining = approx_mem_gb as isize * (1 << 30) - (producer_buf_cap * kmer_bytes) as isize - (thread_local_buf_caps * n_threads * N_BINS * kmer_bytes) as isize;
-        let bytes_remaining = max(bytes_remaining, 1_isize << 30) as usize; // Use at least 1 GB
 
-        // The total memory in the shared buffers will be:
-        // N_BINS * buf_cap * kmer_bytes 
-        // Set this equal to bytes_remaining and solve for buf_cap:
-        let cap = bytes_remaining / N_BINS / kmer_bytes;
-        assert!(cap > 0); // Should be because bytes_remaining >= 1GB
-        cap
-    } else {
-        1 << 30 // Whatever, does not matter since we do not deduplicate
-    };
+    let bytes_remaining = approx_mem_gb as isize * (1 << 30) - (producer_buf_cap * kmer_bytes) as isize - (thread_local_buf_caps * n_threads * N_BINS * kmer_bytes) as isize;
+    let bytes_remaining = max(bytes_remaining, 1_isize << 30) as usize; // Use at least 1 GB
+
+    // The total memory in the shared buffers will be:
+    // N_BINS * buf_cap * kmer_bytes 
+    // Set this equal to bytes_remaining and solve for buf_cap:
+    let shared_buf_caps = bytes_remaining / N_BINS / kmer_bytes;
+    assert!(shared_buf_caps > 0); // Should be because bytes_remaining >= 1GB
 
     // One bin per thread per 3-mer
     let thread_local_total_bytes = thread_local_buf_caps * n_threads * N_BINS * kmer_bytes; 
