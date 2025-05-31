@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::kmer::LongKmer;
 
+use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefMutIterator;
@@ -30,6 +31,60 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
 
     log::info!("Producer thread: all work pushed to work queue");
     drop(out);
+}
+
+fn kmer_encoder_thread<const B: usize>(input: Receiver<Vec<Box<[u8]>>>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool) {
+    let n_bins = shared_bin_buffers.len();
+    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
+    while let Ok(batch) = input.recv(){
+        for seq in batch{
+            for kmer in seq.windows(k){
+                match LongKmer::<B>::from_ascii(kmer) {
+                    Ok(kmer) => {
+                        let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
+                        this_thread_bin_buffers[bin_id].push(kmer);
+                        if this_thread_bin_buffers[bin_id].len() >= thread_local_buf_caps {
+                            // Move this local bin buffer to a shared buffer
+                            let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
+                            shared_bin.extend(&this_thread_bin_buffers[bin_id]);
+                            this_thread_bin_buffers[bin_id].clear();
+                            if shared_bin.len() >= shared_buf_caps {
+                                // Flush shared bin to the collector thread
+                                if dedup_batches {
+                                    let mut shared_bin_copy = shared_bin.clone();
+                                    shared_bin.clear();
+                                    drop(shared_bin); // Release the mutex and proceed to sort
+                                    let len_before = shared_bin_copy.len();
+                                    shared_bin_copy.sort_unstable();
+                                    shared_bin_copy.dedup();
+                                    shared_bin_copy.shrink_to_fit();
+                                    let len_after = shared_bin_copy.len();
+                                    log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
+                                    output.send(shared_bin_copy).unwrap();
+                                } else {
+                                    output.send(shared_bin.clone()).unwrap();
+                                    shared_bin.clear();
+                                }
+                            }
+                        }
+                    }
+                    Err(crate::kmer::KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
+                    Err(crate::kmer::KmerEncodingError::TooLong(_)) => panic!("k = {} is too long", k),
+                }        
+            }
+        }
+    }
+
+    // Send remaining internal buffers of this thread
+    for mut b in this_thread_bin_buffers.into_iter() {
+        if dedup_batches{
+            log::debug!("Sorting remaining thread-local batch of {} kmers", b.len());
+            b.sort_unstable();
+            b.dedup();
+        }
+        output.send(b).unwrap();
+    }
+
 }
 
 fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: usize, n_threads: usize) -> (usize, usize, usize) {
@@ -90,7 +145,7 @@ fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: 
 
 // Rayon thread pool must be initialized before calling
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
-    mut seqs: IN,
+    seqs: IN,
     k: usize,
     n_threads: usize,
     dedup_batches: bool,
@@ -131,59 +186,10 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         let mut encoder_handles = Vec::<std::thread::ScopedJoinHandle::<()>>::new();
 
         for _ in 0..n_threads {
-            let receiver_clone = encoder_in.clone();
-            let sender_clone = encoder_out.clone();
+            let encoder_in_clone = encoder_in.clone();
+            let encoder_out_clone = encoder_out.clone();
             encoder_handles.push(scope.spawn(move || {
-                let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
-                while let Ok(batch) = receiver_clone.recv(){
-                    for seq in batch{
-                        for kmer in seq.windows(k){
-                            match LongKmer::<B>::from_ascii(kmer) {
-                                Ok(kmer) => {
-                                    let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
-                                    this_thread_bin_buffers[bin_id].push(kmer);
-                                    if this_thread_bin_buffers[bin_id].len() >= thread_local_buf_caps {
-                                        // Move this local bin buffer to a shared buffer
-                                        let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
-                                        shared_bin.extend(&this_thread_bin_buffers[bin_id]);
-                                        this_thread_bin_buffers[bin_id].clear();
-                                        if shared_bin.len() >= shared_buf_caps {
-                                            // Flush shared bin to the collector thread
-                                            if dedup_batches {
-                                                let mut shared_bin_copy = shared_bin.clone();
-                                                shared_bin.clear();
-                                                drop(shared_bin); // Release the mutex and proceed to sort
-                                                let len_before = shared_bin_copy.len();
-                                                shared_bin_copy.sort_unstable();
-                                                shared_bin_copy.dedup();
-                                                shared_bin_copy.shrink_to_fit();
-                                                let len_after = shared_bin_copy.len();
-                                                log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
-                                                sender_clone.send(shared_bin_copy).unwrap();
-                                            } else {
-                                                sender_clone.send(shared_bin.clone()).unwrap();
-                                                shared_bin.clear();
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(crate::kmer::KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
-                                Err(crate::kmer::KmerEncodingError::TooLong(_)) => panic!("k = {} is too long", k),
-                            }        
-                        }
-                    }
-                }
-
-                // Send remaining internal buffers of this thread
-                for mut b in this_thread_bin_buffers.into_iter() {
-                    if dedup_batches{
-                        log::debug!("Sorting remaining thread-local batch of {} kmers", b.len());
-                        b.sort_unstable();
-                        b.dedup();
-                    }
-                    sender_clone.send(b).unwrap();
-                }
-
+                kmer_encoder_thread(encoder_in_clone, encoder_out_clone, shared_bin_buffers, k, thread_local_buf_caps, shared_buf_caps, dedup_batches);
             }));
         }
 
