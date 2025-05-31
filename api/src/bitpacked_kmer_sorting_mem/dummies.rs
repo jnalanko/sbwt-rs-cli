@@ -95,32 +95,40 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
 // Returns (pos_a, pos_b, take_from_a)
 fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) -> T, Access2: Fn(usize) -> T>(access_a: Access1, access_b: Access2, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
 
-    assert!(target_pos < len_a + len_b); // Must be a valid index in the merged list
-    assert!(len_a > 0); // TODO: don't assume this
-    assert!(len_b > 0); // TODO: don't assume this
+    assert!(target_pos <= len_a + len_b); // One-past the end allowed 
 
-    // Guess an index i in a and find how many elements of b are smaller than that (index j in b)
-    // The element a[i] is at index i+j in the merged list. Binary search with this info. If the sought-after
-    // merged index was found in a, we're good. Otherwise, the merged index is in b. Then we m be the number
-    // of elements we're short of the target. The answer is then j+m.
-    let is_ge_target = |a_idx| {
-        let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(min(a_idx, len_a-1)), len_b);
-        dbg!(a_idx, b_idx);
-        a_idx + b_idx >= target_pos
+    let pos_in_merged_list = |a_idx: usize| {
+        // Returns the index of a[a_idx] in the merged list of a and b
+        // That is equal to to number of element in a that are smaller than a[a_idx],
+        // and the number of elements in b that are smaller than a[a_idx].
+        // We imagine that a[a_len] is infinity to make that corner case work.
+
+        if a_idx == len_a {
+            // All of a and b are smaller than infinity
+            len_a + len_b 
+        } else {
+            let b_count = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(a_idx), len_b);
+            a_idx + b_count
+        }
+
     };
 
-    let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, is_ge_target, len_a);
-    dbg!("Landed on", a_idx);
-
-    // Find the corresponding b position (could remember this from the first search but whatever, it's just one more search).
-    let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |j| access_b(j) > access_a(min(a_idx, len_a-1)), len_b);
-    dbg!("Found", target_pos, a_idx, b_idx);
-
-    if a_idx + b_idx == target_pos {
-        (a_idx, b_idx, true)
-    } else { 
-        // The target position is in b.
-        // That means we take a_idx from a, and the rest from b. 
+    // Find the smallest a_idx that is at or after the target position
+    let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, |a_idx| pos_in_merged_list(a_idx) >= target_pos, len_a);
+    if pos_in_merged_list(a_idx) == target_pos {
+        // Bingo. Find the b_idx of the next element in b, that is
+        // the smallest element in b that is larger than a[a_idx]
+        if a_idx == len_a {
+            (len_a, len_b, true) // End
+        } else {
+            let x = access_a(a_idx); 
+            let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > x, len_b);
+            assert_eq!(a_idx + b_idx, target_pos);
+            (a_idx, b_idx, true)
+        }
+    } else {
+        // a[a_idx] is after the target position, and a[a_idx-1] is before it (if exists)
+        // This means that there are a_idx elements from a before the target position.
         (a_idx, target_pos - a_idx, false)
     }
 }
@@ -239,7 +247,7 @@ mod tests {
         merged.sort();
         let n_merged = merged.len();
         eprintln!("{:?}", &merged);
-        merged.push((v1.len(), v2.len(), true)); // One past the end. The true is arbitrary.
+        merged.push((v1.len(), v2.len(), false)); // One past the end. The bit is false to match how the search behaves.
 
         for query in 0..n_merged {
             let mut true_i = 0;
