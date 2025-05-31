@@ -105,20 +105,26 @@ fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) 
     // of elements we're short of the target. The answer is then j+m.
     let is_ge_target = |a_idx| {
         let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(min(a_idx, len_a-1)), len_b);
-        a_idx + b_idx < target_pos
+        dbg!(a_idx, b_idx);
+        a_idx + b_idx >= target_pos
     };
 
     let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, is_ge_target, len_a);
+    dbg!("Landed on", a_idx);
 
     // Find the corresponding b position (could remember this from the first search but whatever, it's just one more search).
-    let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |j| access_b(j) > access_a(min(len_a,a_idx-1)), len_b);
+    let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |j| access_b(j) > access_a(min(a_idx, len_a-1)), len_b);
+    dbg!("Found", target_pos, a_idx, b_idx);
 
     if a_idx + b_idx == target_pos {
         (a_idx, b_idx, true)
-    } else { // The target position is in b
-        assert!(a_idx + b_idx < target_pos);
-        let n_missing = target_pos - a_idx - b_idx;
-        (a_idx, b_idx + n_missing, false)
+    } else { 
+        // The target position is in b. a[a_idx] is larger than the answer in b (or a_idx == a_len).
+        // That means we take a_idx - 1 from a. and the rest from b. If a_idx == 0,
+        // then we take 0 from a.
+        let how_many_from_a = if a_idx > 0 {a_idx - 1} else { 0 };
+        assert!(how_many_from_a < target_pos);
+        (a_idx, target_pos - how_many_from_a, false)
     }
 }
 
@@ -231,9 +237,10 @@ mod tests {
         let v2: Vec<usize> = vec![3,4,6,9,11];
 
         let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
-        merged.extend(v1.iter().enumerate().map(|x| (x.0, *x.1, true)));
-        merged.extend(v2.iter().enumerate().map(|x| (x.0, *x.1, false)));
+        merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
+        merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
         merged.sort();
+        eprintln!("{:?}", &merged);
 
         for query in 0..12 {
             let mut true_i = 0;
@@ -244,6 +251,7 @@ mod tests {
             }
             let true_from_a = merged[query].2;
             let (i,j,from_a) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], query, v1.len(), v2.len());
+            dbg!((i,j,from_a), (true_i, true_j, true_from_a));
             assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
 
         }
