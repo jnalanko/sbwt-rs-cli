@@ -119,8 +119,8 @@ fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) 
     if a_idx + b_idx == target_pos {
         (a_idx, b_idx, true)
     } else { 
-        // The target position is in b. a[a_idx] is larger than the answer in b (or a_idx == a_len).
-        // That means we take a_idx from a. and the rest from b. 
+        // The target position is in b.
+        // That means we take a_idx from a, and the rest from b. 
         (a_idx, target_pos - a_idx, false)
     }
 }
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_binary_search_merged_list() {
-        let v1: Vec<usize> = vec![0,1,2,5,7,8,10];
+        let v1: Vec<usize> = vec![0,1,2,5,7,8,10,12];
         let v2: Vec<usize> = vec![3,4,6,9,11];
 
         let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
@@ -239,7 +239,7 @@ mod tests {
         merged.sort();
         eprintln!("{:?}", &merged);
 
-        for query in 0..12 {
+        for query in 0..=merged.len() {
             let mut true_i = 0;
             let mut true_j = 0;
             for (_,_,from_a) in &merged[0..query] {
