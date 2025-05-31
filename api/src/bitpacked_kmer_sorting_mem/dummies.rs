@@ -234,33 +234,41 @@ pub fn get_sorted_dummies<const B: usize>(
 
 #[cfg(test)]
 mod tests {
+    use rand::{seq::SliceRandom, Rng, SeedableRng};
+
     use super::binary_search_position_in_merged_list;
 
     #[test]
     fn test_binary_search_merged_list() {
-        let v1: Vec<usize> = vec![0,1,2,5,7,8,10,12,17];
-        let v2: Vec<usize> = vec![3,4,6,9,11,13,14,15,16,18];
 
-        let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
-        merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
-        merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
-        merged.sort();
-        let n_merged = merged.len();
-        eprintln!("{:?}", &merged);
-        merged.push((v1.len(), v2.len(), false)); // One past the end. The bit is false to match how the search behaves.
+        let seed = 1234;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        for _ in 0..100 { // Stress test with 100 random runs
+            let mut v: Vec<usize> = (0..20).collect();
+            v.shuffle(&mut rng);
+            let split_point = rng.gen_range(0,v.len()+1);
+            let v1 = v[0..split_point].to_vec();
+            let v2 = v[split_point..].to_vec();
+            dbg!(&v1, &v2);
 
-        for query in 0..n_merged {
-            let mut true_i = 0;
-            let mut true_j = 0;
-            for (_,_,from_a) in &merged[0..query] {
-                true_i += *from_a as usize;
-                true_j += !(*from_a) as usize;
+            let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
+            merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
+            merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
+            merged.sort();
+            let n_merged = merged.len();
+            merged.push((v1.len(), v2.len(), false)); // One past the end. The bit is false to match how the search behaves.
+
+            for query in 0..n_merged {
+                let mut true_i = 0;
+                let mut true_j = 0;
+                for (_,_,from_a) in &merged[0..query] {
+                    true_i += *from_a as usize;
+                    true_j += !(*from_a) as usize;
+                }
+                let true_from_a = merged[query].2;
+                let (i,j,from_a) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], query, v1.len(), v2.len());
+                assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
             }
-            let true_from_a = merged[query].2;
-            let (i,j,from_a) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], query, v1.len(), v2.len());
-            dbg!((i,j,from_a), (true_i, true_j, true_from_a));
-            assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
-
         }
 
     }
