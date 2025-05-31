@@ -230,8 +230,8 @@ mod tests {
 
     #[test]
     fn test_binary_search_merged_list() {
-        let v1: Vec<usize> = vec![0,1,2,5,7,8,10,12];
-        let v2: Vec<usize> = vec![3,4,6,9,11];
+        let v1: Vec<usize> = vec![0,1,2,5,7,8,10,12,17];
+        let v2: Vec<usize> = vec![3,4,6,9,11,13,14,15,16,18];
 
         let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
         merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
