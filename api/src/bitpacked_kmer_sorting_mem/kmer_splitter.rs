@@ -1,6 +1,7 @@
 use std::cmp::max;
 use std::sync::Mutex;
 
+use crate::kmer::KmerIterator;
 use crate::kmer::LongKmer;
 
 use crossbeam::channel::Receiver;
@@ -109,37 +110,31 @@ fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender
         batch.reverse_all();
 
         for seq in batch.iter(){
-            for kmer in seq.windows(k){ // Todo: slide window instead by bit-shifting packed k-mers
-                match LongKmer::<B>::from_ascii(kmer) {
-                    Ok(kmer) => {
-                        let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
-                        this_thread_bin_buffers[bin_id].push(kmer);
-                        if this_thread_bin_buffers[bin_id].len() >= thread_local_buf_caps {
-                            // Move this local bin buffer to a shared buffer
-                            let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
-                            shared_bin.extend(&this_thread_bin_buffers[bin_id]);
-                            this_thread_bin_buffers[bin_id].clear();
-                            if shared_bin.len() >= shared_buf_caps {
-                                // Flush shared bin to the collector thread
-                                if dedup_batches {
-                                    let mut shared_bin_owned: Vec<LongKmer<B>> = std::mem::take(shared_bin.as_mut());
-                                    drop(shared_bin); // Release the mutex and proceed to sort
-                                    let len_before = shared_bin_owned.len();
-                                    shared_bin_owned.sort_unstable();
-                                    shared_bin_owned.dedup();
-                                    shared_bin_owned.shrink_to_fit(); // This will probably lock the heap memory manager but that's ok
-                                    let len_after = shared_bin_owned.len();
-                                    log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
-                                    output.send(shared_bin_owned).unwrap();
-                                } else {
-                                    output.send(shared_bin.clone()).unwrap();
-                                    shared_bin.clear();
-                                }
-                            }
+            for kmer in KmerIterator::<B>::new(seq, k) {
+                let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
+                this_thread_bin_buffers[bin_id].push(kmer);
+                if this_thread_bin_buffers[bin_id].len() >= thread_local_buf_caps {
+                    // Move this local bin buffer to a shared buffer
+                    let mut shared_bin = shared_bin_buffers[bin_id].lock().unwrap();
+                    shared_bin.extend(&this_thread_bin_buffers[bin_id]);
+                    this_thread_bin_buffers[bin_id].clear();
+                    if shared_bin.len() >= shared_buf_caps {
+                        // Flush shared bin to the collector thread
+                        if dedup_batches {
+                            let mut shared_bin_owned: Vec<LongKmer<B>> = std::mem::take(shared_bin.as_mut());
+                            drop(shared_bin); // Release the mutex and proceed to sort
+                            let len_before = shared_bin_owned.len();
+                            shared_bin_owned.sort_unstable();
+                            shared_bin_owned.dedup();
+                            shared_bin_owned.shrink_to_fit(); // This will probably lock the heap memory manager but that's ok
+                            let len_after = shared_bin_owned.len();
+                            log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
+                            output.send(shared_bin_owned).unwrap();
+                        } else {
+                            output.send(shared_bin.clone()).unwrap();
+                            shared_bin.clear();
                         }
                     }
-                    Err(crate::kmer::KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
-                    Err(crate::kmer::KmerEncodingError::TooLong(_)) => panic!("k = {} is too long", k),
                 }        
             }
         }

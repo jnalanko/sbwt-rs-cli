@@ -69,7 +69,6 @@ impl<const B: usize> LongKmer<B>{
         let off = 31 - pos % 32;
         let mask = 3_u64 << (2*off);
 
-
         let mut data_copy = self.data;
         data_copy[block] = (data_copy[block] & !mask) | ((c as u64) << (2*off));
 
@@ -185,7 +184,7 @@ impl<const B: usize> LongKmer<B>{
 
 }
 
-struct KmerIterator<'a, const B: usize> {
+pub struct KmerIterator<'a, const B: usize> {
     seq: &'a[u8],
     cur_kmer: LongKmer<B>,
     first_iteration: bool,
@@ -195,7 +194,7 @@ struct KmerIterator<'a, const B: usize> {
 }
 
 impl<'a, const B: usize> KmerIterator<'a, B> {
-    fn new(seq: &'a [u8], k: usize) -> KmerIterator<'a, B>{
+    pub fn new(seq: &'a [u8], k: usize) -> KmerIterator<'a, B>{
         Self{seq, cur_kmer: LongKmer::from_u64_data([0; B]), first_iteration: true, next_seq_pos: 0, cur_len: 0, k}
     }
 
