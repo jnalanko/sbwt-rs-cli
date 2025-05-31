@@ -106,13 +106,13 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
             let kmer_c = if len as usize == k {
                 (
                     kmer
-                        .set_from_left(k - 1, 0)
+                        .copy_set_from_left(k - 1, 0)
                         .right_shifted(1)
-                        .set_from_left(0, c as u8),
+                        .copy_set_from_left(0, c as u8),
                     k as u8,
                 )
             } else {
-                (kmer.right_shifted(1).set_from_left(0, c as u8), len + 1) // Dummy
+                (kmer.right_shifted(1).copy_set_from_left(0, c as u8), len + 1) // Dummy
             };
 
             while pointed_idx < end && merged.get(pointed_idx) < kmer_c {

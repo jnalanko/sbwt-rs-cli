@@ -259,13 +259,13 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
             let kmer_c = if len as usize == k {
                 (
                     kmer.clone()
-                        .set_from_left(k - 1, 0)
+                        .copy_set_from_left(k - 1, 0)
                         .right_shifted(1)
-                        .set_from_left(0, c),
+                        .copy_set_from_left(0, c),
                     k as u8,
                 )
             } else {
-                (kmer.clone().right_shifted(1).set_from_left(0, c), len + 1) // Dummy
+                (kmer.clone().right_shifted(1).copy_set_from_left(0, c), len + 1) // Dummy
             };
 
             while char_cursors[c as usize].peek().is_some() && char_cursors[c as usize].peek().unwrap() < kmer_c {

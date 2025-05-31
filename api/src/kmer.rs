@@ -62,8 +62,7 @@ impl<const B: usize> LongKmer<B>{
     }
 
     /// c has alphabet {0,1,2,3}!
-    /// TODO: it's confusing that this does not modify the k-mer but returns a new one
-    pub fn set_from_left(&self, i: usize, c: u8) -> Self {
+    pub fn copy_set_from_left(&self, i: usize, c: u8) -> Self {
         let pos = i;
         let block = pos / 32;
         let off = 31 - pos % 32;
@@ -202,7 +201,7 @@ impl<'a, const B: usize> KmerIterator<'a, B> {
             let ascii_char = self.seq[self.next_seq_pos];
             if is_dna(ascii_char) {
                 let c = ascii_to_bitpair_panic_if_not_ACGT(ascii_char);
-                self.cur_kmer = self.cur_kmer.set_from_left(self.cur_len, c); // Append c
+                self.cur_kmer = self.cur_kmer.copy_set_from_left(self.cur_len, c); // Append c
                 self.cur_len += 1;
             } else {
                 self.cur_kmer = LongKmer::from_u64_data([0; B]); // Clear
@@ -312,9 +311,9 @@ mod tests{
 
         // Setting and getting
 
-        x = x.set_from_left(0, 2);
-        x = x.set_from_left(1, 3);
-        x = x.set_from_left(62, 1);
+        x = x.copy_set_from_left(0, 2);
+        x = x.copy_set_from_left(1, 3);
+        x = x.copy_set_from_left(62, 1);
         eprintln!("{}", x);
 
         let mut expected = String::from("GTGTACGTACGTACGTACGTACGTACGTACGTACATGCATTTAAAAAAAAAAAAAAAAAAAACA");

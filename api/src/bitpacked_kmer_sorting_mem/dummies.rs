@@ -53,7 +53,7 @@ pub fn get_has_predecessor_marks<const B: usize>(
     bits.resize(kmers.len(), false); // Todo: only need the colex slice for c, not the whole range
     let mut pointed_idx = 0;
     kmers.iter().for_each(|x| {
-        let xc = x.set_from_left(k-1, 0).right_shifted(1).set_from_left(0, c);
+        let xc = x.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c);
 
         while pointed_idx < char_slice.0.len() {
             match char_slice.0[pointed_idx].cmp(&xc) {
