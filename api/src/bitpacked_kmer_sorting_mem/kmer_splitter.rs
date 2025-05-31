@@ -109,7 +109,7 @@ fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender
         batch.reverse_all();
 
         for seq in batch.iter(){
-            for kmer in seq.windows(k){
+            for kmer in seq.windows(k){ // Todo: slide window instead by bit-shifting packed k-mers
                 match LongKmer::<B>::from_ascii(kmer) {
                     Ok(kmer) => {
                         let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
