@@ -158,6 +158,7 @@ pub(crate) fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
     if bitvecs.len() == 1 {
         return bitvecs.into_iter().next().unwrap(); // Nothing to do
     }
+    eprintln!("Concatenating lengths {:?}", bitvecs.iter().map(|v| v.len()).collect::<Vec::<usize>>());
     let total_length = bitvecs.iter().fold(0_usize, |acc, s| acc + s.len());
     let n_words = total_length.div_ceil(64);
     let mut output_data = vec![0_u64; n_words];
@@ -193,11 +194,8 @@ pub(crate) fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
         let last_in_slice = &s[(s.len() - n_bits_written_to_last_word)..];
         last_out_slice.copy_from_bitslice(last_in_slice);
 
-
         let first_exclusive_word = (first_word + 1) as isize;
-        let last_exclusive_word = (last_word - 1) as isize;
-
-        //dbg!(&s.len(), last_bit, first_word, last_word+1, first_exclusive_word, last_exclusive_word);
+        let last_exclusive_word = last_word as isize - 1;
 
         if first_exclusive_word <= last_exclusive_word {
             // Nonempty range of exclusive words
