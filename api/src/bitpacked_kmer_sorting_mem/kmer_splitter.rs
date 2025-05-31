@@ -122,16 +122,15 @@ fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender
                             if shared_bin.len() >= shared_buf_caps {
                                 // Flush shared bin to the collector thread
                                 if dedup_batches {
-                                    let mut shared_bin_copy = shared_bin.clone();
-                                    shared_bin.clear();
+                                    let mut shared_bin_owned: Vec<LongKmer<B>> = std::mem::take(shared_bin.as_mut());
                                     drop(shared_bin); // Release the mutex and proceed to sort
-                                    let len_before = shared_bin_copy.len();
-                                    shared_bin_copy.sort_unstable();
-                                    shared_bin_copy.dedup();
-                                    shared_bin_copy.shrink_to_fit();
-                                    let len_after = shared_bin_copy.len();
+                                    let len_before = shared_bin_owned.len();
+                                    shared_bin_owned.sort_unstable();
+                                    shared_bin_owned.dedup();
+                                    shared_bin_owned.shrink_to_fit(); // This will probably lock the heap memory manager but that's ok
+                                    let len_after = shared_bin_owned.len();
                                     log::debug!("Deduplicated batch of {} kmers ({:.2}% kept)", len_before, len_after as f64 / len_before as f64 * 100.0);
-                                    output.send(shared_bin_copy).unwrap();
+                                    output.send(shared_bin_owned).unwrap();
                                 } else {
                                     output.send(shared_bin.clone()).unwrap();
                                     shared_bin.clear();
