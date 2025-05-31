@@ -294,16 +294,17 @@ mod tests{
 
     #[test]
     fn test_kmer_iterator(){
-        let ascii = b"NACGATNACANANAAATN";
+
         let k = 4;
+
+        assert_eq!(KmerIterator::<3>::new(b"", k).count(), 0);
+        assert_eq!(KmerIterator::<3>::new(b"NON-NUCLEOTIDES", k).count(), 0);
+
+        let ascii = b"NACGATNACANANAAATN";
         let packed_kmers: Vec<LongKmer<3>> = KmerIterator::<3>::new(ascii, k).collect();
         let ascii_kmers: Vec<Vec<u8>> = packed_kmers.iter().map(|x| x.to_string().as_bytes()[0..k].to_owned()).collect();
-        let true_ascii_kmers = vec![b"ACGA".to_vec(), b"CGAT".to_vec(), b"AATN".to_vec()];
-
+        let true_ascii_kmers = vec![b"ACGA".to_vec(), b"CGAT".to_vec(), b"AAAT".to_vec()];
         assert_eq!(ascii_kmers, true_ascii_kmers);
-
-        // Todo: Also test no k-mers produced
-        // Equal k-mers
     }
 
     #[test]
