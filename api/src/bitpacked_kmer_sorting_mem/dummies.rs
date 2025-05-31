@@ -237,9 +237,11 @@ mod tests {
         merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
         merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
         merged.sort();
+        let n_merged = merged.len();
         eprintln!("{:?}", &merged);
+        merged.push((v1.len(), v2.len(), true)); // One past the end. The true is arbitrary.
 
-        for query in 0..=merged.len() {
+        for query in 0..n_merged {
             let mut true_i = 0;
             let mut true_j = 0;
             for (_,_,from_a) in &merged[0..query] {
