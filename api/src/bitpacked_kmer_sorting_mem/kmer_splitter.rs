@@ -105,7 +105,7 @@ fn collector_thread<const B: usize>(input: Receiver<Vec<LongKmer<B>>>) -> Vec<Ve
     collected_shared_bins
 }
 
-fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: usize, n_threads: usize) -> (usize, usize, usize) {
+fn determine_buf_capacities<const B: usize>(approx_mem_gb: usize, n_threads: usize) -> (usize, usize, usize) {
 
     // Calculating suitable buffer sizes. Assuming there are 64 bins.
     // * producer_buf_capacity: This determines how many k-mers are pushed to the work queue
@@ -168,7 +168,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     assert!(k >= BIN_PREFIX_LEN);
 
-    let (producer_buf_cap, thread_local_buf_caps, shared_buf_caps) = determine_buf_capacities::<B>(dedup_batches, approx_mem_gb, n_threads);
+    let (producer_buf_cap, thread_local_buf_caps, shared_buf_caps) = determine_buf_capacities::<B>(approx_mem_gb, n_threads);
 
     log::info!("Allocating shared buffers");
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
