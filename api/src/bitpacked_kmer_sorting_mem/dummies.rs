@@ -126,12 +126,26 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
             kmer_range: kmer_start..kmer_end,
             k
         }
+    }
+}
 
+// log^2(n) time complexity 
+pub fn get_ith_merged_kmer<const B: usize>(all_kmers: &Vec<LongKmer<B>>, all_dummies: &KmersWithLengths<B>, i: usize, k: usize) -> (LongKmer<B>, u8) {
+    let (kmers_idx, dummy_idx, in_kmers) = binary_search_position_in_merged_list(
+        |i| (all_kmers[i], k as u8), 
+        |j| all_dummies.get(j), 
+        i, all_kmers.len(), all_dummies.len());
+
+    if in_kmers {
+        (all_kmers[kmers_idx], k as u8)
+    } else {
+        all_dummies.get(dummy_idx)
     }
 }
 
 // Assumes the two sorted lists have no duplicates in them or between them.
 // Returns (pos_a, pos_b, take_from_a)
+// Takes O(log^2(n)) time
 fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) -> T, Access2: Fn(usize) -> T>(access_a: Access1, access_b: Access2, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
 
     assert!(target_pos <= len_a + len_b); // One-past the end allowed 

@@ -48,7 +48,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         log::info!("Constructing the sbwt subset sequence");
 
-        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(rev_kmers, dummies_and_lengths, k, sigma, build_lcs);
+        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(rev_kmers, dummies_and_lengths, k, sigma, build_lcs, n_threads);
 
         // Create the C array
         #[allow(non_snake_case)] // C-array is an established convention in BWT indexes

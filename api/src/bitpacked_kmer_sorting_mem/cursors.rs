@@ -1,13 +1,23 @@
+use bitvec::order::Lsb0;
+use bitvec::prelude;
+use rand::AsByteSliceMut;
 use simple_sds_sbwt::ops::Push;
 use simple_sds_sbwt::raw_vector::AccessRaw;
+use simple_sds_sbwt::serialize::Serialize;
 use std::cmp::min;
+use std::io::Cursor;
+use std::io::Read;
+use std::ops::Range;
 use crate::kmer::Kmer;
 use crate::kmer::LongKmer;
+use crate::util::binary_search_leftmost_that_fulfills_pred;
+use crate::util::parallel_bitvec_concat;
 
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::ParallelSlice;
 
+use super::dummies::get_ith_merged_kmer;
 use super::dummies::KmerDummyMergeSlice;
 use super::dummies::KmersWithLengths;
 
@@ -86,6 +96,21 @@ pub fn merge_kmers_and_dummies<const B: usize>(
     KmersWithLengths{kmers, lengths}
 }
 
+// Here c is from 0..3
+fn prepend_c<const B: usize>(kmer: (LongKmer<B>, u8), k: usize, c: usize) -> (LongKmer<B>, u8) {
+    if kmer.1 as usize == k {
+        (
+            kmer.0
+                .copy_set_from_left(k - 1, 0)
+                .right_shifted(1)
+                .copy_set_from_left(0, c as u8),
+            k as u8,
+        )
+    } else {
+        (kmer.0.right_shifted(1).copy_set_from_left(0, c as u8), kmer.1 + 1) // Dummy
+    }
+}
+
 // Returns the SBWT bit vectors and optionally the LCS array
 pub fn build_sbwt_bit_vectors<const B: usize>(
     kmers: Vec<LongKmer<B>>,
@@ -93,48 +118,79 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
     k: usize,
     sigma: usize,
     build_lcs: bool,
+    n_threads: usize,
 ) -> (Vec<simple_sds_sbwt::raw_vector::RawVector>, Option<simple_sds_sbwt::int_vector::IntVector>) {
 
     let n = kmers.len() + dummies.len(); // Merged lengths
 
-    let rawrows = (0..sigma).collect::<Vec<usize>>().into_iter().map(|c|{
-        let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut src_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Origin of edge
-        let mut dest_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Destination of edge
-        //let mut pointed_idx = merged.first_that_starts_with(c as u8); // TODO: from C array
-        //let end = merged.first_that_starts_with(c as u8 + 1); // TODO: from C array
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+    thread_pool.install(||{
+        // Split the merged range 0..n into segments for threads
+        let segment_len = n.div_ceil(n_threads);
+        let mut input_ranges: Vec<Range<usize>> = vec![];
+        for t in 0..n_threads {
+            input_ranges.push(t*segment_len .. min((t+1)*segment_len,n)); // Final segments may be empty. Is ok.
+        }
 
-        while let Some((kmer, len)) = src_pointer.next() {
-            let kmer_c = if len as usize == k {
-                (
-                    kmer
-                        .copy_set_from_left(k - 1, 0)
-                        .right_shifted(1)
-                        .copy_set_from_left(0, c as u8),
-                    k as u8,
-                )
-            } else {
-                (kmer.right_shifted(1).copy_set_from_left(0, c as u8), len + 1) // Dummy
-            };
+        let mut rows = vec![];
+        for c in 0..sigma {
+            let row_pieces = input_ranges.clone().into_par_iter().map(|input_range|{
+                let mut row_piece: bitvec::vec::BitVec::<u64, Lsb0> = bitvec::vec::BitVec::with_capacity(input_range.len());
+                row_piece.resize(input_range.len(), false);
 
-            while dest_pointer.peek().is_some_and(|x| x < kmer_c) {
-                dest_pointer.next();
-            }
+                if !input_range.is_empty() {
+                    // Let x be the first input kmer in this range. The destinations of the c-edges start
+                    // from the smallest k-mer that is larger or equal to cx.
+                    let x: (LongKmer<B>, u8) = get_ith_merged_kmer(&kmers, &dummies, input_range.start, k);
+                    let (cx, cx_len) = prepend_c(x, k, c);
+                    let cx_kmer_insertion_index = binary_search_leftmost_that_fulfills_pred(|i| kmers[i], |y| (y, k as u8) >= (cx, cx_len), kmers.len()); 
+                    let cx_dummy_insertion_index = binary_search_leftmost_that_fulfills_pred(|i| dummies.get(i), |y| y >= (cx, cx_len), dummies.len());
+                    let dest_start_idx = cx_kmer_insertion_index + cx_dummy_insertion_index;
 
-            if dest_pointer.peek().is_some_and(|x| x == kmer_c) {
-                rawrow.set_bit(src_pointer.cur_merged_index()-1, true); // -1 because we have advanced past the current k-mer
-                dest_pointer.next().unwrap();
-            }
+                    let mut src_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, input_range.clone(), k); // Origin of edge
+                    let mut dest_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, dest_start_idx..n, k); // Destination of edge over
+
+                    while let Some((kmer, len)) = src_pointer.next() {
+                        let kmer_c = prepend_c((kmer,len), k, c);
+
+                        while dest_pointer.peek().is_some_and(|x| x < kmer_c) {
+                            dest_pointer.next();
+                        }
+
+                        if dest_pointer.peek().is_some_and(|x| x == kmer_c) {
+                            row_piece.set(src_pointer.cur_merged_index() - 1 - input_range.start, true); // -1 because we have advanced past the current k-mer
+                            dest_pointer.next().unwrap();
+                        }
+                    };
+                }
+                row_piece
+            }).collect();
+            rows.push(crate::util::parallel_bitvec_concat(row_pieces));
+        }
+
+
+        // Convert rows into simple_sds_sbwt vectors
+        let rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|mut row| {
+            // Let's use the deserialization function in simple_sds_sbwt for a raw bitvector.
+            // It requires the following header: (TODO: this code is repeated in sbwt.rs... refactor)
+            let mut header = [0u64, 0u64]; // bits, words
+            header[0] = row.len() as u64; // Assumes little-endian byte order
+            header[1] = row.len().div_ceil(64) as u64;
+
+            let header_bytes = header.as_byte_slice_mut();
+            let raw_data = row.as_raw_mut_slice().as_byte_slice_mut();
+            let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
+
+            simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
+        }).collect();
+
+        let lcs = if build_lcs {
+            // LCS values are between 0 and k-1
+            Some(build_lcs_array(KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k), k))
+        } else {
+            None
         };
-        rawrow
-    }).collect::<Vec<simple_sds_sbwt::raw_vector::RawVector>>();
 
-    let lcs = if build_lcs {
-        // LCS values are between 0 and k-1
-        Some(build_lcs_array(KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k), k))
-    } else {
-        None
-    };
-
-    (rawrows, lcs)
+        (rows, lcs)
+    })
 }
