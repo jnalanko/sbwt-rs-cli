@@ -31,7 +31,7 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
         // x is reversed
         for c in 0..(sigma as u8){
             // Shiting a reversed k-mer to the right means shifting the original k-mer to the left
-            let xc = x.set_from_left(k-1, 0).right_shift(1).set_from_left(0, c);
+            let xc = x.set_from_left(k-1, 0).right_shifted(1).set_from_left(0, c);
             while char_cursors[c as usize].peek().is_some(){
                 match char_cursors[c as usize].peek().unwrap().0.cmp(&xc) {
                     std::cmp::Ordering::Greater => break,
@@ -66,7 +66,7 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
             let mut prefix = x;
             for i in 0..k {
                 let len = k - i - 1;
-                prefix = prefix.left_shift(1);
+                prefix = prefix.left_shifted(1);
                 required_dummies.push((prefix, len as u8));
             }
         }

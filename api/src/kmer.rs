@@ -84,8 +84,7 @@ impl<const B: usize> LongKmer<B>{
 
     // Extends with A's at the end
     // c has alphabet {0,1,2,3}!
-    /// TODO: it's confusing that this does not modify the k-mer but returns a new one
-    pub fn right_shift(&self, chars: usize) -> Self{
+    pub fn right_shifted(&self, chars: usize) -> Self{
         // TODO: this could be done without any branching
         let mut new_data = [0_u64; B];
         for block in 0..B{
@@ -107,8 +106,7 @@ impl<const B: usize> LongKmer<B>{
         Self{data: new_data}
     }
 
-    /// TODO: it's confusing that this does not modify the k-mer but returns a new one
-    pub fn left_shift(&self, chars: usize) -> Self{
+    pub fn left_shifted(&self, chars: usize) -> Self{
         // TODO: this could be done without any branching
         let chars = chars as isize;
         let mut new_data = [0_u64; B];
@@ -231,7 +229,7 @@ impl<const B: usize> Iterator for KmerIterator<'_, B> {
             self.scan_to_next_full_kmer()
         } else {
             assert!(self.cur_len == self.k);
-            self.cur_kmer = self.cur_kmer.left_shift(1); // Deletes the first character
+            self.cur_kmer = self.cur_kmer.left_shifted(1); // Deletes the first character
             self.cur_len -= 1;
             self.scan_to_next_full_kmer()
         }
@@ -326,7 +324,7 @@ mod tests{
         // Shifts
 
         for i in 0..100{
-            let our = x.left_shift(i);
+            let our = x.left_shifted(i);
             eprintln!("{}", our);
             assert_eq!(expected, format!("{}", our));
             expected = left_shifted(&expected);
@@ -334,7 +332,7 @@ mod tests{
 
         expected = String::from("GTGTACGTACGTACGTACGTACGTACGTACGTACATGCATTTAAAAAAAAAAAAAAAAAAAACA");
         for i in 0..100{
-            let our = x.right_shift(i);
+            let our = x.right_shifted(i);
             eprintln!("{}", our);
             assert_eq!(expected, format!("{}", our));
             expected = right_shifted(&expected);

@@ -107,12 +107,12 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                 (
                     kmer
                         .set_from_left(k - 1, 0)
-                        .right_shift(1)
+                        .right_shifted(1)
                         .set_from_left(0, c as u8),
                     k as u8,
                 )
             } else {
-                (kmer.right_shift(1).set_from_left(0, c as u8), len + 1) // Dummy
+                (kmer.right_shifted(1).set_from_left(0, c as u8), len + 1) // Dummy
             };
 
             while pointed_idx < end && merged.get(pointed_idx) < kmer_c {

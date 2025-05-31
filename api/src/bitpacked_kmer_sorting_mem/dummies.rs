@@ -53,7 +53,7 @@ pub fn get_has_predecessor_marks<const B: usize>(
     bits.resize(kmers.len(), false); // Todo: only need the colex slice for c, not the whole range
     let mut pointed_idx = 0;
     kmers.iter().for_each(|x| {
-        let xc = x.set_from_left(k-1, 0).right_shift(1).set_from_left(0, c);
+        let xc = x.set_from_left(k-1, 0).right_shifted(1).set_from_left(0, c);
 
         while pointed_idx < char_slice.0.len() {
             match char_slice.0[pointed_idx].cmp(&xc) {
@@ -114,7 +114,7 @@ pub fn get_sorted_dummies<const B: usize>(
         let mut prefix = sorted_kmers[x.1];
         (0..k).collect::<Vec<usize>>().iter().map(|i| {
             let len = k - i - 1;
-            prefix = prefix.left_shift(1);
+            prefix = prefix.left_shifted(1);
             (prefix, len as u8)
         }).collect::<Vec<(LongKmer::<B>, u8)>>()
     }).flatten().collect();
