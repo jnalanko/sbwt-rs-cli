@@ -15,34 +15,86 @@ use rayon::iter::ParallelIterator;
 const BIN_PREFIX_LEN: usize = 3; 
 const N_BINS: usize = 64;
 
-fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usize, out: Sender<Vec<Box<[u8]>>>){
-    let mut buf = Vec::<Box<[u8]>>::new();
-    let mut current_total_buffer_size = 0_usize;
-    
-    while let Some(seq) = seqs.stream_next(){
-        current_total_buffer_size += seq.len();
-        let mut seq_copy = seq.to_owned();
-        seq_copy.reverse(); // Reverse to get colex sorting
-        buf.push(seq_copy.into_boxed_slice());
-        if current_total_buffer_size > buf_cap {
-            let mut sendbuf = Vec::<Box<[u8]>>::new();
-            std::mem::swap(&mut sendbuf, &mut buf);
-            out.send(sendbuf).unwrap();
-            current_total_buffer_size = 0;
+struct SeqBatch {
+    pub concat: Vec<u8>,
+    pub starts: Vec<usize>, // Also has concat.len() at the end 
+}
+
+impl SeqBatch {
+    fn iter(&self) -> SeqBatchIterator {
+        SeqBatchIterator{batch: self, index: 0}
+    }
+
+    fn get_seq(&self, idx: usize) -> &[u8] {
+        &self.concat[self.starts[idx]..self.starts[idx+1]]
+    }
+
+    fn len(&self) -> usize {
+        self.starts.len() - 1 // Has concat.len() at the end
+    }
+}
+
+struct SeqBatchIterator<'a> {
+    batch: &'a SeqBatch,
+    index: usize, // Current iteration index
+}
+
+impl<'a> Iterator for SeqBatchIterator<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.batch.len() {
+            None
+        }  else {
+            let seq = self.batch.get_seq(self.index);
+            self.index += 1;
+            Some(seq)
         }
     }
+
+}
+
+fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usize, out: Sender<SeqBatch>){
+    let mut cur_concat = Vec::<u8>::with_capacity(buf_cap);
+    let mut cur_starts = Vec::<usize>::new();
     
-    out.send(buf).unwrap();
+    while let Some(seq) = seqs.stream_next(){
+        let old_start = cur_concat.len();
+
+        // Add to concatenation
+        cur_starts.push(cur_concat.len());
+        cur_concat.extend(seq);
+
+        // Reverse to get colex sorting
+        cur_concat[old_start..old_start + seq.len()].reverse();
+
+        if cur_concat.len() >= buf_cap {
+            cur_starts.push(cur_concat.len()); // End sentinel, as required
+            let batch = SeqBatch{concat: cur_concat, starts: cur_starts};
+            out.send(batch).unwrap();
+
+            // Start a new batch
+            cur_concat = Vec::<u8>::with_capacity(buf_cap);
+            cur_starts = Vec::<usize>::new();
+        }
+    }
+
+    if !cur_concat.is_empty() {
+        // Send remaining batch
+        cur_starts.push(cur_concat.len()); // End sentinel, as required
+        let batch = SeqBatch{concat: cur_concat, starts: cur_starts};
+        out.send(batch).unwrap();
+    }
 
     log::info!("Producer thread: all work pushed to work queue");
     drop(out);
 }
 
-fn kmer_encoder_thread<const B: usize>(input: Receiver<Vec<Box<[u8]>>>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool) {
+fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool) {
     assert!(shared_bin_buffers.len() == N_BINS);
     let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); N_BINS];
     while let Ok(batch) = input.recv(){
-        for seq in batch{
+        for seq in batch.iter(){
             for kmer in seq.windows(k){
                 match LongKmer::<B>::from_ascii(kmer) {
                     Ok(kmer) => {
