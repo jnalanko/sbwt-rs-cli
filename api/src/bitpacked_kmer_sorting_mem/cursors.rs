@@ -31,11 +31,10 @@ pub fn build_lcs_array<const B: usize>(
     non_compressed_lcs.push(0);
     let (mut prev_kmer, mut prev_len) = merged_slice.next().unwrap();
 
-
     while let Some((kmer, len)) = merged_slice.next() {
-        let mut lcs_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
-        lcs_value = min(lcs_value, min(prev_len as usize, len as usize));
-        non_compressed_lcs.push(lcs_value as u16);
+        let mut lcp_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
+        lcp_value = min(lcp_value, min(prev_len as usize, len as usize));
+        non_compressed_lcs.push(lcp_value as u16);
         (prev_kmer, prev_len) = (kmer,len);
     }
 
@@ -123,7 +122,8 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
             }
 
             if output_pointer.peek().is_some_and(|x| x == kmer_c) {
-                rawrow.set_bit(output_pointer.cur_merged_index(), true);
+                dbg!((&output_pointer.peek().unwrap().0.to_string()[0..k], output_pointer.peek().unwrap().1, output_pointer.cur_merged_index()));
+                rawrow.set_bit(input_pointer.cur_merged_index()-1, true); // -1 because we have advanced past the current k-mer
                 output_pointer.next().unwrap();
             }
         };

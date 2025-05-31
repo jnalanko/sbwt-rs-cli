@@ -398,7 +398,7 @@ mod tests {
 
         let true_lcs = [0,0,1,3,2,2,1,1,1,0,0,2,2,1,3,3,0,2];
         for i in 0..lcs.len() {
-            println!("LCS {}", lcs.access(i));
+            println!("LCS[{}] = {}", i, lcs.access(i));
             assert_eq!(true_lcs[i], lcs.access(i));
             assert_eq!(true_lcs[i], from_sbwt.access(i));
         }
