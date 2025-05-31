@@ -99,12 +99,12 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
     let rawrows = (0..sigma).collect::<Vec<usize>>().into_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
-        let mut input_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k);
-        let mut output_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Todo: range C[c]..C[c+1]
+        let mut src_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Origin of edge
+        let mut dest_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Destination of edge
         //let mut pointed_idx = merged.first_that_starts_with(c as u8); // TODO: from C array
         //let end = merged.first_that_starts_with(c as u8 + 1); // TODO: from C array
 
-        while let Some((kmer, len)) = input_pointer.next() {
+        while let Some((kmer, len)) = src_pointer.next() {
             let kmer_c = if len as usize == k {
                 (
                     kmer
@@ -117,14 +117,13 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
                 (kmer.right_shifted(1).copy_set_from_left(0, c as u8), len + 1) // Dummy
             };
 
-            while output_pointer.peek().is_some_and(|x| x < kmer_c) {
-                output_pointer.next();
+            while dest_pointer.peek().is_some_and(|x| x < kmer_c) {
+                dest_pointer.next();
             }
 
-            if output_pointer.peek().is_some_and(|x| x == kmer_c) {
-                dbg!((&output_pointer.peek().unwrap().0.to_string()[0..k], output_pointer.peek().unwrap().1, output_pointer.cur_merged_index()));
-                rawrow.set_bit(input_pointer.cur_merged_index()-1, true); // -1 because we have advanced past the current k-mer
-                output_pointer.next().unwrap();
+            if dest_pointer.peek().is_some_and(|x| x == kmer_c) {
+                rawrow.set_bit(src_pointer.cur_merged_index()-1, true); // -1 because we have advanced past the current k-mer
+                dest_pointer.next().unwrap();
             }
         };
         rawrow
