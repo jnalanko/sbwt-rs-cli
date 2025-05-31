@@ -98,7 +98,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
     let n = kmers.len() + dummies.len(); // Merged lengths
 
-    let rawrows = (0..sigma).collect::<Vec<usize>>().into_par_iter().map(|c|{
+    let rawrows = (0..sigma).collect::<Vec<usize>>().into_iter().map(|c|{
         let mut rawrow = simple_sds_sbwt::raw_vector::RawVector::with_len(n, false);
         let mut input_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k);
         let mut output_pointer = KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k); // Todo: range C[c]..C[c+1]

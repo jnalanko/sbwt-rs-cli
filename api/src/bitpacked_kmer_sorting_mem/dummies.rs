@@ -63,7 +63,7 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
     }
 
     fn advance_kmers(&mut self) -> (LongKmer<B>, u8) {
-        let x = self.all_kmers[self.dummy_idx];
+        let x = self.all_kmers[self.kmer_idx];
         self.kmer_idx += 1;
         (x, self.k as u8)
     }
@@ -126,6 +126,7 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
             kmer_range: kmer_start..kmer_end,
             k
         }
+
     }
 }
 
