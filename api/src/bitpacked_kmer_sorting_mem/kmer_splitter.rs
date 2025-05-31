@@ -34,6 +34,10 @@ impl SeqBatch {
     }
 
     fn reverse_all(&mut self) {
+        // There should be at least 1 start (in that case the batch is empty).
+        // If starts is empty, then the user forgot to add the end sentinel.
+        assert!(!self.starts.is_empty()); 
+
         // Compute starts in reverse concat
         let mut rev_starts = Vec::<usize>::with_capacity(self.starts.len());
         rev_starts.push(0);
