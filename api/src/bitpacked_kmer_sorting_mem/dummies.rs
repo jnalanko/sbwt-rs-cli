@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::ops::Range;
 
 use crate::kmer::Kmer;
@@ -95,20 +96,22 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
 fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) -> T, Access2: Fn(usize) -> T>(access_a: Access1, access_b: Access2, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
 
     assert!(target_pos < len_a + len_b); // Must be a valid index in the merged list
+    assert!(len_a > 0); // TODO: don't assume this
+    assert!(len_b > 0); // TODO: don't assume this
 
     // Guess an index i in a and find how many elements of b are smaller than that (index j in b)
     // The element a[i] is at index i+j in the merged list. Binary search with this info. If the sought-after
     // merged index was found in a, we're good. Otherwise, the merged index is in b. Then we m be the number
     // of elements we're short of the target. The answer is then j+m.
     let is_ge_target = |a_idx| {
-        let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(a_idx), len_b);
+        let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(min(a_idx, len_a-1)), len_b);
         a_idx + b_idx < target_pos
     };
 
     let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, is_ge_target, len_a);
 
     // Find the corresponding b position (could remember this from the first search but whatever, it's just one more search).
-    let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |j| access_b(j) > access_a(a_idx), len_b);
+    let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |j| access_b(j) > access_a(min(len_a,a_idx-1)), len_b);
 
     if a_idx + b_idx == target_pos {
         (a_idx, b_idx, true)
@@ -240,7 +243,7 @@ mod tests {
                 true_j += !(*from_a) as usize;
             }
             let true_from_a = merged[query].2;
-            let (i,j,from_a) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], 8, v1.len(), v2.len());
+            let (i,j,from_a) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], query, v1.len(), v2.len());
             assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
 
         }
