@@ -247,8 +247,10 @@ mod tests {
             let mut v: Vec<usize> = (0..20).collect();
             v.shuffle(&mut rng);
             let split_point = rng.gen_range(0,v.len()+1);
-            let v1 = v[0..split_point].to_vec();
-            let v2 = v[split_point..].to_vec();
+            let mut v1 = v[0..split_point].to_vec();
+            let mut v2 = v[split_point..].to_vec();
+            v1.sort();
+            v2.sort();
             dbg!(&v1, &v2);
 
             let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
