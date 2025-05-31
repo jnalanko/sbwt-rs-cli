@@ -9,6 +9,11 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 
+// There is one bin for each 3-mer, so there are 4^3 = 64 bins. This is a
+// hardcoded assumption in few places in this file, so don't touch these constants
+// if you're not willing to go through the whole file and find those places.
+const BIN_PREFIX_LEN: usize = 3; 
+const N_BINS: usize = 64;
 
 fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usize, out: Sender<Vec<Box<[u8]>>>){
     let mut buf = Vec::<Box<[u8]>>::new();
@@ -34,8 +39,8 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
 }
 
 fn kmer_encoder_thread<const B: usize>(input: Receiver<Vec<Box<[u8]>>>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool) {
-    let n_bins = shared_bin_buffers.len();
-    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); n_bins];
+    assert!(shared_bin_buffers.len() == N_BINS);
+    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); N_BINS];
     while let Ok(batch) = input.recv(){
         for seq in batch{
             for kmer in seq.windows(k){
@@ -87,9 +92,22 @@ fn kmer_encoder_thread<const B: usize>(input: Receiver<Vec<Box<[u8]>>>, output: 
 
 }
 
+fn collector_thread<const B: usize>(input: Receiver<Vec<LongKmer<B>>>) -> Vec<Vec<Vec<LongKmer<B>>>> {
+    // Vec of shared bin batches for each of the 64 3-mers (concatenated at the end)
+    let mut collected_shared_bins = vec![Vec::<Vec::<LongKmer::<B>>>::new(); N_BINS];
+    while let Ok(batch) = input.recv(){
+        if !batch.is_empty() {
+            // This part assumes that BIN_PREFIX_LEN = 3 and N_BINS = 64
+            let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
+            collected_shared_bins[bin_id].push(batch);
+        }
+    }
+    collected_shared_bins
+}
+
 fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: usize, n_threads: usize) -> (usize, usize, usize) {
 
-    // Calculating suitable buffer sizes
+    // Calculating suitable buffer sizes. Assuming there are 64 bins.
     // * producer_buf_capacity: This determines how many k-mers are pushed to the work queue
     //   at a time. This needs to be large enough to avoid parallel contention, but small enough
     //   to distribute work quickly and evenly. A good default is 2^20.
@@ -117,13 +135,13 @@ fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: 
     let producer_buf_cap = (1_usize << 23) / kmer_bytes; // 8 MB of k-mers
     let thread_local_buf_caps = 1_usize << 16;
     let shared_buf_caps = if dedup_batches { 
-        let bytes_remaining = approx_mem_gb as isize * (1 << 30) - (producer_buf_cap * kmer_bytes) as isize - (thread_local_buf_caps * n_threads * 64 * kmer_bytes) as isize;
+        let bytes_remaining = approx_mem_gb as isize * (1 << 30) - (producer_buf_cap * kmer_bytes) as isize - (thread_local_buf_caps * n_threads * N_BINS * kmer_bytes) as isize;
         let bytes_remaining = max(bytes_remaining, 1_isize << 30) as usize; // Use at least 1 GB
 
         // The total memory in the shared buffers will be:
-        // 64 * buf_cap * kmer_bytes 
+        // N_BINS * buf_cap * kmer_bytes 
         // Set this equal to bytes_remaining and solve for buf_cap:
-        let cap = bytes_remaining / 64 / kmer_bytes;
+        let cap = bytes_remaining / N_BINS / kmer_bytes;
         assert!(cap > 0); // Should be because bytes_remaining >= 1GB
         cap
     } else {
@@ -131,10 +149,10 @@ fn determine_buf_capacities<const B: usize>(dedup_batches: bool, approx_mem_gb: 
     };
 
     // One bin per thread per 3-mer
-    let thread_local_total_bytes = thread_local_buf_caps * n_threads * 64 * kmer_bytes; 
-    let shared_total_bytes = shared_buf_caps * 64 * kmer_bytes; // One bin per 3-mer
+    let thread_local_total_bytes = thread_local_buf_caps * n_threads * N_BINS * kmer_bytes; 
+    let shared_total_bytes = shared_buf_caps * N_BINS * kmer_bytes;
     log::info!("Producer buffer capacity: {}", human_bytes::human_bytes((producer_buf_cap * kmer_bytes) as f64));
-    log::info!("Thread-local buffer capacity: {} ({} total)", human_bytes::human_bytes((thread_local_buf_caps * kmer_bytes) as f64), human_bytes::human_bytes(thread_local_total_bytes as f64)); // 64 local bins per thread
+    log::info!("Thread-local buffer capacity: {} ({} total)", human_bytes::human_bytes((thread_local_buf_caps * kmer_bytes) as f64), human_bytes::human_bytes(thread_local_total_bytes as f64));
     log::info!("Shared bin buffer capacity: {} ({} total)", human_bytes::human_bytes((shared_buf_caps * kmer_bytes) as f64), human_bytes::human_bytes(shared_total_bytes as f64));
     if producer_buf_cap*kmer_bytes + thread_local_total_bytes + shared_total_bytes > approx_mem_gb * (1_usize << 30) {
         log::warn!("Exceeding memory budget");
@@ -152,18 +170,13 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     approx_mem_gb: usize
 ) -> Vec<LongKmer<B>> {
 
-    // There is one bin for each 3-mer (64 bins). If you change the 3 to something else,
-    // you must update all the logic below, and also the buffer size calculation 
-    // and the log messages about buffer sizes, and possibly more.
-    const BIN_PREFIX_LEN: usize = 3_usize; 
     assert!(k >= BIN_PREFIX_LEN);
-    let n_bins = (4_usize).pow(BIN_PREFIX_LEN as u32); // 64
 
     let (producer_buf_cap, thread_local_buf_caps, shared_buf_caps) = determine_buf_capacities::<B>(dedup_batches, approx_mem_gb, n_threads);
 
     log::info!("Allocating shared buffers");
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
-    for _ in 0..n_bins {
+    for _ in 0..N_BINS {
         let buf = Vec::<LongKmer::<B>>::with_capacity(shared_buf_caps);
         let b = Mutex::new(buf);
         shared_bin_buffers_vec.push(b);
@@ -195,15 +208,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
         // Spawn a collector that reads from the encoders and pushes to final bins
         let collector_handle = std::thread::spawn( move || {
-            // Vec of shared bin batches for each of the 64 3-mers (concatenated at the end)
-            let mut collected_shared_bins = vec![Vec::<Vec::<LongKmer::<B>>>::new(); n_bins];
-            while let Ok(batch) = collector_in.recv(){
-                if !batch.is_empty() {
-                    let bin_id = batch[0].get_from_left(0) as usize * 16 + batch[0].get_from_left(1) as usize * 4 + batch[0].get_from_left(2) as usize; // Intepret nucleotides in base-4
-                    collected_shared_bins[bin_id].push(batch);
-                }
-            }
-            collected_shared_bins
+            collector_thread(collector_in)
         });
 
         producer_handle.join().unwrap(); // Wait for the producer to finish
