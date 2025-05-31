@@ -243,10 +243,18 @@ mod tests {
 
         let seed = 1234;
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        for _ in 0..100 { // Stress test with 100 random runs
+        for rep in 0..100 { // Stress test with 100 random runs
             let mut v: Vec<usize> = (0..20).collect();
             v.shuffle(&mut rng);
-            let split_point = rng.gen_range(0,v.len()+1);
+            let split_point = if rep == 0 {
+                0 // Test empty v1    
+            } else if rep == 1 {
+                v.len() // Test empty v2
+            } else {
+                // Random split point
+                rng.gen_range(0,v.len()+1)
+            };
+
             let mut v1 = v[0..split_point].to_vec();
             let mut v2 = v[split_point..].to_vec();
             v1.sort();
@@ -258,9 +266,9 @@ mod tests {
             merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
             merged.sort();
             let n_merged = merged.len();
-            merged.push((v1.len(), v2.len(), false)); // One past the end. The bit is false to match how the search behaves.
+            merged.push((v1.len(), v2.len(), true)); // One past the end. The bit is true to match how the search treats this.
 
-            for query in 0..n_merged {
+            for query in 0..=n_merged {
                 let mut true_i = 0;
                 let mut true_j = 0;
                 for (_,_,from_a) in &merged[0..query] {
