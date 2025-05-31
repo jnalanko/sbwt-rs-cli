@@ -1,3 +1,6 @@
+use std::ops::Range;
+
+use crate::kmer::Kmer;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
 
@@ -29,6 +32,89 @@ impl<const B: usize> KmersWithLengths<B> {
             |(kmer,len)| len > 0 && kmer.get_from_left(0) >= c, 
             self.len()
         )
+    }
+}
+
+pub struct KmerDummyMergeSlice<'a, const B: usize> {
+    all_dummies: &'a KmersWithLengths<B>,
+    all_kmers: &'a [LongKmer<B>],
+    dummy_idx: usize,
+    kmer_idx: usize,
+    dummy_end: usize,
+    kmer_end: usize,
+    k: usize,
+}
+
+impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
+
+    fn advance_dummy(&mut self) -> (LongKmer<B>, u8) {
+        let x = self.all_dummies.get(self.dummy_idx);
+        self.dummy_idx += 1;
+        x
+    }
+
+    fn advance_kmers(&mut self) -> (LongKmer<B>, u8) {
+        let x = self.all_kmers[self.dummy_idx];
+        self.kmer_idx += 1;
+        (x, self.k as u8)
+    }
+
+    pub fn next(&mut self) -> Option<(LongKmer<B>, u8)> {
+        if self.dummy_idx == self.dummy_end && self.kmer_idx == self.kmer_end {
+            None
+        } else if self.dummy_idx == self.dummy_end {
+            Some(self.advance_kmers())
+        } else if self.kmer_idx == self.kmer_end {
+            Some(self.advance_dummy())
+        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
+            Some(self.advance_kmers())
+        } else {
+            Some(self.advance_dummy())
+        }
+    }
+
+    pub fn new(all_dummies: &'a KmersWithLengths<B>, all_kmers: &'a [LongKmer<B>], merged_range: Range<usize>, k: usize) -> Self {
+        assert!(merged_range.end <= all_dummies.len() + all_kmers.len());
+
+        // Binary search the starts and ends in kmers and dummies.
+
+
+
+        /*Self {
+            all_dummies, all_kmers, 
+            dummy_idx: dummy_range.start, dummy_end: dummy_range.end,
+            kmer_idx: kmer_range.start, kmer_end: kmer_range.end,
+            k
+        }*/
+    }
+}
+
+// Assumes the two sorted lists have no duplicates in them or between them.
+// Returns (pos_a, pos_b, take_from_a)
+fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) -> T, Access2: Fn(usize) -> T>(access_a: Access1, access_b: Access2, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
+
+    assert!(target_pos < len_a + len_b); // Must be a valid index in the merged list
+
+    // Guess an index i in a and find how many elements of b are smaller than that (index j in b)
+    // The element a[i] is at index i+j in the merged list. Binary search with this info. If the sought-after
+    // merged index was found in a, we're good. Otherwise, the merged index is in b. Then we m be the number
+    // of elements we're short of the target. The answer is then j+m.
+    let is_ge_target = |a_idx| {
+        let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(a_idx), len_b);
+        a_idx + b_idx < target_pos
+    };
+
+    let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, is_ge_target, len_a);
+
+    // Find the corresponding b position (could remember this from the first search but whatever, it's just one more search).
+    let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |j| access_b(j) > access_a(a_idx), len_b);
+
+    if a_idx + b_idx == target_pos {
+        (a_idx, b_idx, true)
+    } else { // The target position is in b
+        assert!(a_idx + b_idx < target_pos);
+        let n_missing = target_pos - a_idx - b_idx;
+        (a_idx, b_idx + n_missing, false)
     }
 }
 
@@ -129,4 +215,18 @@ pub fn get_sorted_dummies<const B: usize>(
     required_dummies.shrink_to_fit();
 
     required_dummies
+}
+
+#[cfg(test)]
+mod tests {
+    use super::binary_search_position_in_merged_list;
+
+    #[test]
+    fn test_binary_search_merged_list() {
+        let v1: Vec<usize> = vec![0,1,2,5,7,8,10];
+        let v2: Vec<usize> = vec![3,4,6,9,11];
+        let (i,j,from_v1) = binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], 8, v1.len(), v2.len());
+        assert_eq!((i,j,from_v1), (5, 4, true));
+    }
+//fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access: Fn(usize) -> T>(access_a: Access, access_b: Access, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
 }
