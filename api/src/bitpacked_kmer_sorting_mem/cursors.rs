@@ -23,6 +23,11 @@ pub struct KmerDummyMergeSlice<'a, const B: usize> {
     kmer_range: Range<usize>,
     k: usize,
 }
+enum NextInfo<const B: usize> {
+    None,
+    Kmer((LongKmer<B>, u8)),
+    Dummy((LongKmer<B>, u8)),
+}
 
 impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
 
@@ -34,44 +39,40 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
         self.dummy_idx + self.kmer_idx
     }
 
-    fn advance_dummy(&mut self) -> (LongKmer<B>, u8) {
-        let x = self.all_dummies.get(self.dummy_idx);
-        self.dummy_idx += 1;
-        x
-    }
+    fn determine_next(&self) -> NextInfo<B> {
+        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
+            NextInfo::None
+        } else if self.dummy_idx == self.dummy_range.end {
+            NextInfo::Kmer((self.all_kmers[self.kmer_idx], self.k as u8))
+        } else if self.kmer_idx == self.kmer_range.end {
+            NextInfo::Dummy(self.all_dummies.get(self.dummy_idx))
+        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
+            NextInfo::Kmer((self.all_kmers[self.kmer_idx], self.k as u8))
+        } else {
+            NextInfo::Dummy(self.all_dummies.get(self.dummy_idx))
+        }
 
-    fn advance_kmers(&mut self) -> (LongKmer<B>, u8) {
-        let x = self.all_kmers[self.kmer_idx];
-        self.kmer_idx += 1;
-        (x, self.k as u8)
     }
 
     pub fn peek(&mut self) -> Option<(LongKmer<B>, u8)> {
-        // Todo: refactor this logic together with next()
-        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
-            None
-        } else if self.dummy_idx == self.dummy_range.end {
-            Some((self.all_kmers[self.kmer_idx], self.k as u8))
-        } else if self.kmer_idx == self.kmer_range.end {
-            Some(self.all_dummies.get(self.dummy_idx))
-        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
-            Some((self.all_kmers[self.kmer_idx], self.k as u8))
-        } else {
-            Some(self.all_dummies.get(self.dummy_idx))
+        match self.determine_next() {
+            NextInfo::None => None,
+            NextInfo::Kmer(x) => Some(x),
+            NextInfo::Dummy(x) => Some(x),
         }
     }
 
     pub fn next(&mut self) -> Option<(LongKmer<B>, u8)> {
-        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
-            None
-        } else if self.dummy_idx == self.dummy_range.end {
-            Some(self.advance_kmers())
-        } else if self.kmer_idx == self.kmer_range.end {
-            Some(self.advance_dummy())
-        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
-            Some(self.advance_kmers())
-        } else {
-            Some(self.advance_dummy())
+        match self.determine_next() {
+            NextInfo::None => None,
+            NextInfo::Kmer(x) => {
+                self.kmer_idx += 1;
+                Some(x)
+            },
+            NextInfo::Dummy(x) => {
+                self.dummy_idx += 1;
+                Some(x)
+            }
         }
     }
 
