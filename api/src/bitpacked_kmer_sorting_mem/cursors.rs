@@ -340,18 +340,8 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
 
         // Convert rows into simple_sds_sbwt vectors
-        let rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|mut row| {
-            // Let's use the deserialization function in simple_sds_sbwt for a raw bitvector.
-            // It requires the following header: (TODO: this code is repeated in sbwt.rs... refactor)
-            let mut header = [0u64, 0u64]; // bits, words
-            header[0] = row.len() as u64; // Assumes little-endian byte order
-            header[1] = row.len().div_ceil(64) as u64;
-
-            let header_bytes = header.as_byte_slice_mut();
-            let raw_data = row.as_raw_mut_slice().as_byte_slice_mut();
-            let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
-
-            simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
+        let rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|row| {
+            crate::util::bitvec_to_simple_sds_raw_bitvec(row)
         }).collect();
 
         let lcs = if build_lcs {
