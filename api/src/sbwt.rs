@@ -798,18 +798,8 @@ impl<SS: SubsetSeq + Send + Sync> SbwtIndex<SS> {
             let rows: Vec::<bitvec::vec::BitVec::<u64, Lsb0>> = char_to_piece_list.into_iter().map(util::parallel_bitvec_concat).collect();
 
             // Load into simple_sds_sbwt vectors
-            let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|mut row| {
-                // Let's use the deserialization function in simple_sds_sbwt for a raw bitvector.
-                // It requires the following header:
-                let mut header = [0u64, 0u64]; // bits, words
-                header[0] = merged_length as u64; // Assumes little-endian byte order
-                header[1] = merged_length.div_ceil(64) as u64;
-
-                let header_bytes = header.as_byte_slice_mut();
-                let raw_data = row.as_raw_mut_slice().as_byte_slice_mut();
-                let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
-
-                simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
+            let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|row| {
+                crate::util::bitvec_to_simple_sds_raw_bitvec(row)
             }).collect();
 
             // At this point, there should be exactly merged_length - 1 bits set in new_rows.
