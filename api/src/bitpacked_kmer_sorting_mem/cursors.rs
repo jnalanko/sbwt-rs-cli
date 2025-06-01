@@ -40,15 +40,13 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
     }
 
     fn determine_next(&self) -> NextInfo<B> {
-        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
+        let dummies_done = self.dummy_idx == self.dummy_range.end;
+        let kmers_done = self.kmer_idx == self.kmer_range.end;
+        if kmers_done && dummies_done {
             NextInfo::None
-        } else if self.dummy_idx == self.dummy_range.end {
+        } else if dummies_done || (!kmers_done && (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx)) {
             NextInfo::Kmer((self.all_kmers[self.kmer_idx], self.k as u8))
-        } else if self.kmer_idx == self.kmer_range.end {
-            NextInfo::Dummy(self.all_dummies.get(self.dummy_idx))
-        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
-            NextInfo::Kmer((self.all_kmers[self.kmer_idx], self.k as u8))
-        } else {
+        } else { 
             NextInfo::Dummy(self.all_dummies.get(self.dummy_idx))
         }
 
