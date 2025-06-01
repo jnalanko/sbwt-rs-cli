@@ -1,11 +1,7 @@
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
-use crate::bitpacked_kmer_sorting_mem::cursors::find_first_starting_with;
 
-use simple_sds_sbwt::ops::Select;
-use simple_sds_sbwt::ops::SelectZero;
-use simple_sds_sbwt::bit_vector::BitVector;
-use simple_sds_sbwt::raw_vector::*;
+use bitvec::order::Lsb0;
 use rayon::prelude::*;
 
 pub struct KmersWithLengths<const B: usize> {
@@ -34,24 +30,24 @@ impl<const B: usize> KmersWithLengths<B> {
 }
 
 pub fn get_has_predecessor_marks<const B: usize>(
-    kmers: &[LongKmer::<B>],
-    char_slice: (&[LongKmer<B>], usize),
+    source_slice: &[LongKmer::<B>],
+    dest_slice: &[LongKmer<B>],
     k: usize,
     c: u8,
-) -> simple_sds_sbwt::raw_vector::RawVector {
-    let mut bits = simple_sds_sbwt::raw_vector::RawVector::new();
-    bits.resize(kmers.len(), false); // Todo: only need the colex slice for c, not the whole range
+) -> bitvec::vec::BitVec<u64, Lsb0> {
+    let mut bits = bitvec::vec::BitVec::<u64,Lsb0>::new(); 
+    bits.resize(dest_slice.len(), false);
     let mut pointed_idx = 0;
-    kmers.iter().for_each(|x| {
+    source_slice.iter().for_each(|x| {
         let xc = x.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c);
 
-        while pointed_idx < char_slice.0.len() {
-            match char_slice.0[pointed_idx].cmp(&xc) {
+        while pointed_idx < dest_slice.len() {
+            match dest_slice[pointed_idx].cmp(&xc) {
                 std::cmp::Ordering::Greater => {
                     break
                 },
                 std::cmp::Ordering::Equal => {
-                    bits.set_bit(pointed_idx + char_slice.1, true);
+                    bits.set(pointed_idx, true);
                     pointed_idx += 1; // Advance
                     break
                 },
@@ -68,54 +64,73 @@ pub fn get_has_predecessor_marks<const B: usize>(
 
 pub fn get_sorted_dummies<const B: usize>(
     sorted_kmers: &[LongKmer::<B>],
-    sigma: usize, k: usize,
+    sigma: usize, k: usize, n_threads: usize
 ) -> Vec<(LongKmer<B>, u8)> {
-    // Number of k-mers in file
-    let n = sorted_kmers.len();
 
-    let mut char_cursors: Vec<(&[LongKmer::<B>], usize)> = (0..sigma).map(|c|{
-        let start = find_first_starting_with(sorted_kmers, c as u8);
-        let end = find_first_starting_with(sorted_kmers, c as u8 + 1);
-        (&sorted_kmers[start..end], start)
-    }).collect();
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+    thread_pool.install(||{
 
-    log::info!("Identifying k-mers without predecessors");
-    let has_predecessor = char_cursors.par_iter_mut().enumerate().map(|(c, cursor)| {
-        get_has_predecessor_marks(sorted_kmers, *cursor, k, c as u8)
-    }).reduce(|| {
-        let mut res = simple_sds_sbwt::raw_vector::RawVector::new();
-        res.resize(n, false);
-        res
-    }, |mut a, b| {
-        let bv = BitVector::from(b); // Todo: unnecessary copy
-        bv.one_iter().for_each(|idx| a.set_bit(idx.1, true)); // Todo: 64 bits at a time
-        // Both of the todos above become irrelevant if we just build
-        // the colex slices for each char and concatenate the results.
-        // But the best way to do this could be to split the colex space into
-        // n_threads chunks.
-        a
-    });
+        let mut rows = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
 
+        log::info!("Identifying k-mers without predecessors");
+        for c in 0..sigma {
+            let input_ranges = crate::util::segment_range(0..sorted_kmers.len(), n_threads);
+            let pieces = input_ranges.into_par_iter().map(|range| {
+                if !range.is_empty() {
+                    let source_slice = &sorted_kmers[range.clone()];
+                    let x_start = sorted_kmers[range.start];
+                    let cx_start = x_start.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c as u8);
+                    let dest_slice_start = match sorted_kmers.binary_search_by(|probe| probe.cmp(&cx_start)) {
+                        Ok(y) => y,
+                        Err(y) => y,
+                    };
+                    let dest_slice_end = if range.end < sorted_kmers.len() {
+                        let x_end = sorted_kmers[range.end]; 
+                        let cx_end = x_end.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c as u8);
+                        match sorted_kmers.binary_search_by(|probe| probe.cmp(&cx_end)) {
+                            Ok(y) => y,
+                            Err(y) => y,
+                        }
+                    } else {
+                        sorted_kmers.len()
+                    };
 
-    log::info!("Constructing dummy k-mers");
-    let iterable = BitVector::from(has_predecessor);
-    let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = iterable.zero_iter().par_bridge().map(|x| {
-        let mut prefix = sorted_kmers[x.1];
-        (0..k).collect::<Vec<usize>>().iter().map(|i| {
-            let len = k - i - 1;
-            prefix = prefix.left_shifted(1);
-            (prefix, len as u8)
-        }).collect::<Vec<(LongKmer::<B>, u8)>>()
-    }).flatten().collect();
+                    get_has_predecessor_marks(source_slice, &sorted_kmers[dest_slice_start..dest_slice_end], k, c as u8) 
+                } else {
+                    bitvec::vec::BitVec::<u64,Lsb0>::new()
+                }
+            }).collect();
+            let row = crate::util::parallel_bitvec_concat(pieces);
+            rows.push(row);
+        }
 
-    // We always assume that the empty k-mer exists. This assumption is reflected in the C-array
-    // later, which adds one "ghost dollar" count to all counts.
-    required_dummies.push((LongKmer::<B>::from_ascii(b"").unwrap(), 0));
+        // Bitwise-or the rows together
+        let mut rows_iter = rows.into_iter();
+        let mut row = rows_iter.next().unwrap();
+        for other in rows_iter {
+            assert_eq!(row.len(), other.len());
+            row |= other;
+        }
 
-    log::info!("Sorting dummy k-mers");
-    required_dummies.par_sort_unstable();
-    required_dummies.dedup();
-    required_dummies.shrink_to_fit();
+        log::info!("Constructing dummy k-mers");
+        let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = row.iter_zeros().par_bridge().map(|x| {
+            let mut prefix = sorted_kmers[x];
+            (0..k).collect::<Vec<usize>>().iter().map(|i| {
+                let len = k - i - 1;
+                prefix = prefix.left_shifted(1);
+                (prefix, len as u8)
+            }).collect::<Vec<(LongKmer::<B>, u8)>>()
+        }).flatten().collect();
 
-    required_dummies
+        // We always assume that the empty k-mer exists. This assumption is reflected in the C-array
+        // later, which adds one "ghost dollar" count to all counts.
+        required_dummies.push((LongKmer::<B>::from_ascii(b"").unwrap(), 0));
+
+        log::info!("Sorting dummy k-mers");
+        required_dummies.par_sort_unstable();
+        required_dummies.dedup();
+        required_dummies.shrink_to_fit();
+
+        required_dummies
+    })
 }

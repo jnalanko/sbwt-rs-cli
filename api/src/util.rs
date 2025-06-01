@@ -268,6 +268,16 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(bv: bitvec::vec::BitVec<u64, Lsb0>
 
 }
 
+pub(crate) fn segment_range(range: Range<usize>, n_pieces: usize) -> Vec<Range<usize>> {
+        let segment_len = range.len().div_ceil(n_pieces);
+        let mut pieces: Vec<Range<usize>> = vec![];
+        for t in 0..n_pieces{
+            pieces.push(range.start + t*segment_len .. 
+                        range.start + min((t+1)*segment_len, range.len())); // Final segments may be empty. Is ok.
+        }
+        pieces
+}
+
 
 #[cfg(test)]
 mod tests {

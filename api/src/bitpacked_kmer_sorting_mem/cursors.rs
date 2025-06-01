@@ -278,11 +278,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
     thread_pool.install(||{
         // Split the merged range 0..n into segments for threads
-        let segment_len = n.div_ceil(n_threads);
-        let mut input_ranges: Vec<Range<usize>> = vec![];
-        for t in 0..n_threads {
-            input_ranges.push(t*segment_len .. min((t+1)*segment_len,n)); // Final segments may be empty. Is ok.
-        }
+        let input_ranges = crate::util::segment_range(0..n, n_threads);
 
         let mut rows = vec![];
         for c in 0..sigma {

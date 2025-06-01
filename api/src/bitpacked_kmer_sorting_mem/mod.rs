@@ -38,7 +38,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("{} distinct k-mers found", n_kmers);
 
         log::info!("Constructing dummy k-mers");
-        let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k);
+        let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k, n_threads);
 
         log::info!("{} Compacting dummies and lengths", n_kmers);
         let dummies_and_lengths = KmersWithLengths{ // This fixes word alignment overhead
