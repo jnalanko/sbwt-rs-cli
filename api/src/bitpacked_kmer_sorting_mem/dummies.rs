@@ -91,7 +91,7 @@ pub fn get_sorted_dummies<const B: usize>(
                     let dest_slice_start = if range.start == char_ranges[c].start {
                         // Make sure the output bitvector slice covers the start even if the first k-mers
                         // do not have predecessors.
-                        0
+                        char_ranges[c].start
                     } else {
                         match sorted_kmers.binary_search_by(|probe| probe.cmp(&cx_start)) {
                             Ok(y) => y,
