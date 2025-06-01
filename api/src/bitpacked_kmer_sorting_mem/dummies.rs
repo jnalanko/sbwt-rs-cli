@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::bitpacked_kmer_sorting_mem::cursors::find_first_starting_with;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
@@ -72,10 +74,10 @@ pub fn get_sorted_dummies<const B: usize>(
     thread_pool.install(||{
 
 
-        let char_slices: Vec<&[LongKmer::<B>]> = (0..sigma).map(|c|{
+        let char_ranges: Vec<Range<usize>> = (0..sigma).map(|c|{
             let start = find_first_starting_with(sorted_kmers, c as u8);
             let end = find_first_starting_with(sorted_kmers, c as u8 + 1);
-            &sorted_kmers[start..end]
+            start..end
         }).collect();
         
         let mut pieces = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
@@ -84,15 +86,14 @@ pub fn get_sorted_dummies<const B: usize>(
             let input_ranges = crate::util::segment_range(0..sorted_kmers.len(), n_threads);
             let char_pieces: Vec<bitvec::vec::BitVec::<u64, Lsb0>> = input_ranges.into_par_iter().map(|range| {
                 if !range.is_empty() {
-                    let char_slice = char_slices[c]; // The outputs are for these k-mers
                     let x_start = sorted_kmers[range.start];
                     let cx_start = x_start.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c as u8);
-                    let dest_slice_start = if range.start == 0 {
+                    let dest_slice_start = if range.start == char_ranges[c].start {
                         // Make sure the output bitvector slice covers the start even if the first k-mers
                         // do not have predecessors.
                         0
                     } else {
-                        match char_slice.binary_search_by(|probe| probe.cmp(&cx_start)) {
+                        match sorted_kmers.binary_search_by(|probe| probe.cmp(&cx_start)) {
                             Ok(y) => y,
                             Err(y) => y,
                         }
