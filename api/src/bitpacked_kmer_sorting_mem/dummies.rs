@@ -106,7 +106,7 @@ pub fn get_sorted_dummies<const B: usize>(
                             Err(y) => y,
                         }
                     } else {
-                        sorted_kmers.len()
+                        char_ranges[c].end
                     };
 
                     get_has_predecessor_marks(&sorted_kmers[range], &sorted_kmers[dest_slice_start..dest_slice_end], k, c as u8) 
