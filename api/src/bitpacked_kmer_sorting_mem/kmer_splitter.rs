@@ -337,7 +337,11 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     let mut bin_concat = Vec::<LongKmer::<B>>::new();
 
     log::info!("Concatenating k-mer bins");
-    // Concat bins. Each of them is sorted, and they are bucketed by the first 3-mer in order, so the concatenation is sorted.
+    // Concat bins. Each of them is sorted, and they are bucketed by the first 3-mer 
+    // in order, so the concatenation is sorted. This is single-threaded so this 
+    // takes a while. We could multithread this part, but then we need to allocate
+    // space for the concatenation up front, which up to doubles the space if we don't
+    // do any extra trick to save space.
     for bin in bins {
         bin_concat.extend(bin.iter());
     }
