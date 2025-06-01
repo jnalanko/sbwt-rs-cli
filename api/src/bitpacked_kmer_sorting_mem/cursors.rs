@@ -1,25 +1,179 @@
 use bitvec::order::Lsb0;
-use bitvec::prelude;
 use rand::AsByteSliceMut;
 use simple_sds_sbwt::ops::Push;
-use simple_sds_sbwt::raw_vector::AccessRaw;
 use simple_sds_sbwt::serialize::Serialize;
 use std::cmp::min;
 use std::io::Cursor;
 use std::io::Read;
 use std::ops::Range;
-use crate::kmer::Kmer;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
-use crate::util::parallel_bitvec_concat;
 
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
-use rayon::prelude::ParallelSlice;
 
-use super::dummies::get_ith_merged_kmer;
-use super::dummies::KmerDummyMergeSlice;
 use super::dummies::KmersWithLengths;
+
+pub struct KmerDummyMergeSlice<'a, const B: usize> {
+    all_dummies: &'a KmersWithLengths<B>,
+    all_kmers: &'a [LongKmer<B>],
+    dummy_idx: usize,
+    kmer_idx: usize,
+    dummy_range: Range<usize>,
+    kmer_range: Range<usize>,
+    k: usize,
+}
+
+impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
+
+    pub fn len(&self) -> usize {
+        self.dummy_range.len() + self.kmer_range.len()
+    }
+
+    pub fn cur_merged_index(&self) -> usize {
+        self.dummy_idx + self.kmer_idx
+    }
+
+    fn advance_dummy(&mut self) -> (LongKmer<B>, u8) {
+        let x = self.all_dummies.get(self.dummy_idx);
+        self.dummy_idx += 1;
+        x
+    }
+
+    fn advance_kmers(&mut self) -> (LongKmer<B>, u8) {
+        let x = self.all_kmers[self.kmer_idx];
+        self.kmer_idx += 1;
+        (x, self.k as u8)
+    }
+
+    pub fn peek(&mut self) -> Option<(LongKmer<B>, u8)> {
+        // Todo: refactor this logic together with next()
+        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
+            None
+        } else if self.dummy_idx == self.dummy_range.end {
+            Some((self.all_kmers[self.kmer_idx], self.k as u8))
+        } else if self.kmer_idx == self.kmer_range.end {
+            Some(self.all_dummies.get(self.dummy_idx))
+        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
+            Some((self.all_kmers[self.kmer_idx], self.k as u8))
+        } else {
+            Some(self.all_dummies.get(self.dummy_idx))
+        }
+    }
+
+    pub fn next(&mut self) -> Option<(LongKmer<B>, u8)> {
+        if self.dummy_idx == self.dummy_range.end && self.kmer_idx == self.kmer_range.end {
+            None
+        } else if self.dummy_idx == self.dummy_range.end {
+            Some(self.advance_kmers())
+        } else if self.kmer_idx == self.kmer_range.end {
+            Some(self.advance_dummy())
+        } else if (self.all_kmers[self.kmer_idx], self.k as u8) < self.all_dummies.get(self.dummy_idx) {
+            Some(self.advance_kmers())
+        } else {
+            Some(self.advance_dummy())
+        }
+    }
+
+    pub fn new(all_dummies: &'a KmersWithLengths<B>, all_kmers: &'a [LongKmer<B>], merged_range: Range<usize>, k: usize) -> Self {
+        assert!(merged_range.end <= all_dummies.len() + all_kmers.len());
+
+        // Binary search the starts and ends in kmers and dummies.
+
+        let (kmer_start, dummy_start, _) = binary_search_position_in_merged_list(
+            |i| (all_kmers[i], k as u8), 
+            |j| all_dummies.get(j), 
+            merged_range.start, 
+            all_kmers.len(), 
+            all_dummies.len()
+        );
+
+        let (kmer_end, dummy_end, _) = binary_search_position_in_merged_list(
+            |i| (all_kmers[i], k as u8), 
+            |j| all_dummies.get(j), 
+            merged_range.end, 
+            all_kmers.len(), 
+            all_dummies.len()
+        );
+
+        Self {
+            all_dummies, all_kmers, 
+            dummy_idx: dummy_start,
+            kmer_idx: kmer_start,
+            dummy_range: dummy_start..dummy_end,
+            kmer_range: kmer_start..kmer_end,
+            k
+        }
+    }
+}
+
+// log^2(n) time complexity 
+pub fn get_ith_merged_kmer<const B: usize>(all_kmers: &Vec<LongKmer<B>>, all_dummies: &KmersWithLengths<B>, i: usize, k: usize) -> (LongKmer<B>, u8) {
+    let (kmers_idx, dummy_idx, in_kmers) = binary_search_position_in_merged_list(
+        |i| (all_kmers[i], k as u8), 
+        |j| all_dummies.get(j), 
+        i, all_kmers.len(), all_dummies.len());
+
+    if in_kmers {
+        (all_kmers[kmers_idx], k as u8)
+    } else {
+        all_dummies.get(dummy_idx)
+    }
+}
+
+// Assumes the two sorted lists have no duplicates in them or between them.
+// Returns (pos_a, pos_b, take_from_a)
+// Takes O(log^2(n)) time
+pub fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) -> T, Access2: Fn(usize) -> T>(access_a: Access1, access_b: Access2, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
+
+    assert!(target_pos <= len_a + len_b); // One-past the end allowed 
+
+    let pos_in_merged_list = |a_idx: usize| {
+        // Returns the index of a[a_idx] in the merged list of a and b
+        // That is equal to to number of element in a that are smaller than a[a_idx],
+        // and the number of elements in b that are smaller than a[a_idx].
+        // We imagine that a[a_len] is infinity to make that corner case work.
+
+        if a_idx == len_a {
+            // All of a and b are smaller than infinity
+            len_a + len_b 
+        } else {
+            let b_count = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(a_idx), len_b);
+            a_idx + b_count
+        }
+
+    };
+
+    // Find the smallest a_idx that is at or after the target position
+    let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, |a_idx| pos_in_merged_list(a_idx) >= target_pos, len_a);
+    if pos_in_merged_list(a_idx) == target_pos {
+        // Bingo. Find the b_idx of the next element in b, that is
+        // the smallest element in b that is larger than a[a_idx]
+        if a_idx == len_a {
+            (len_a, len_b, true) // End
+        } else {
+            let x = access_a(a_idx); 
+            let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > x, len_b);
+            assert_eq!(a_idx + b_idx, target_pos);
+            (a_idx, b_idx, true)
+        }
+    } else {
+        // a[a_idx] is after the target position, and a[a_idx-1] is before it (if exists)
+        // This means that there are a_idx elements from a before the target position.
+        (a_idx, target_pos - a_idx, false)
+    }
+}
+
+pub fn find_first_starting_with<const B: usize>(
+    v: &[LongKmer<B>],
+    c: u8,
+) -> usize {
+    binary_search_leftmost_that_fulfills_pred(
+        |pos| { v[pos] },
+        |kmer: LongKmer::<B>| { kmer.get_from_left(0) >= c },
+        v.len()
+    )
+}
 
 
 // Returns the LCS array.
@@ -210,4 +364,56 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
         (rows, lcs)
     })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use rand::{seq::SliceRandom, Rng, SeedableRng};
+
+    #[test]
+    fn test_binary_search_merged_list() {
+        // Test empty vs empty
+        assert_eq!((0,0,true), super::binary_search_position_in_merged_list(|i| i, |j| j, 0, 0, 0));
+
+        // Random testcases
+        let seed = 1234;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        for rep in 0..100 { // Stress test with 100 random runs
+            let mut v: Vec<usize> = (0..20).collect();
+            v.shuffle(&mut rng);
+            let split_point = if rep == 0 {
+                0 // Test empty v1    
+            } else if rep == 1 {
+                v.len() // Test empty v2
+            } else {
+                // Random split point
+                rng.gen_range(0,v.len()+1)
+            };
+
+            let mut v1 = v[0..split_point].to_vec();
+            let mut v2 = v[split_point..].to_vec();
+            v1.sort();
+            v2.sort();
+
+            let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
+            merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
+            merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
+            merged.sort();
+            let n_merged = merged.len();
+            merged.push((v1.len(), v2.len(), true)); // One past the end. The bit is true to match how the search treats this.
+
+            for query in 0..=n_merged {
+                let mut true_i = 0;
+                let mut true_j = 0;
+                for (_,_,from_a) in &merged[0..query] {
+                    true_i += *from_a as usize;
+                    true_j += !(*from_a) as usize;
+                }
+                let true_from_a = merged[query].2;
+                let (i,j,from_a) = super::binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], query, v1.len(), v2.len());
+                assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
+            }
+        }
+    }
 }
