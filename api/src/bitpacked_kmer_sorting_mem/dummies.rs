@@ -1,3 +1,4 @@
+use crate::bitpacked_kmer_sorting_mem::cursors::find_first_starting_with;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
 
@@ -70,19 +71,31 @@ pub fn get_sorted_dummies<const B: usize>(
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
     thread_pool.install(||{
 
-        let mut rows = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
 
+        let char_slices: Vec<&[LongKmer::<B>]> = (0..sigma).map(|c|{
+            let start = find_first_starting_with(sorted_kmers, c as u8);
+            let end = find_first_starting_with(sorted_kmers, c as u8 + 1);
+            &sorted_kmers[start..end]
+        }).collect();
+        
+        let mut pieces = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
         log::info!("Identifying k-mers without predecessors");
         for c in 0..sigma {
             let input_ranges = crate::util::segment_range(0..sorted_kmers.len(), n_threads);
-            let pieces = input_ranges.into_par_iter().map(|range| {
+            let char_pieces: Vec<bitvec::vec::BitVec::<u64, Lsb0>> = input_ranges.into_par_iter().map(|range| {
                 if !range.is_empty() {
-                    let source_slice = &sorted_kmers[range.clone()];
+                    let char_slice = char_slices[c]; // The outputs are for these k-mers
                     let x_start = sorted_kmers[range.start];
                     let cx_start = x_start.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c as u8);
-                    let dest_slice_start = match sorted_kmers.binary_search_by(|probe| probe.cmp(&cx_start)) {
-                        Ok(y) => y,
-                        Err(y) => y,
+                    let dest_slice_start = if range.start == 0 {
+                        // Make sure the output bitvector slice covers the start even if the first k-mers
+                        // do not have predecessors.
+                        0
+                    } else {
+                        match char_slice.binary_search_by(|probe| probe.cmp(&cx_start)) {
+                            Ok(y) => y,
+                            Err(y) => y,
+                        }
                     };
                     let dest_slice_end = if range.end < sorted_kmers.len() {
                         let x_end = sorted_kmers[range.end]; 
@@ -95,25 +108,19 @@ pub fn get_sorted_dummies<const B: usize>(
                         sorted_kmers.len()
                     };
 
-                    get_has_predecessor_marks(source_slice, &sorted_kmers[dest_slice_start..dest_slice_end], k, c as u8) 
+                    get_has_predecessor_marks(&sorted_kmers[range], &sorted_kmers[dest_slice_start..dest_slice_end], k, c as u8) 
                 } else {
                     bitvec::vec::BitVec::<u64,Lsb0>::new()
                 }
             }).collect();
-            let row = crate::util::parallel_bitvec_concat(pieces);
-            rows.push(row);
+
+            pieces.extend(char_pieces.into_iter());
         }
 
-        // Bitwise-or the rows together
-        let mut rows_iter = rows.into_iter();
-        let mut row = rows_iter.next().unwrap();
-        for other in rows_iter {
-            assert_eq!(row.len(), other.len());
-            row |= other;
-        }
+        let has_prececessor = crate::util::parallel_bitvec_concat(pieces);
 
         log::info!("Constructing dummy k-mers");
-        let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = row.iter_zeros().par_bridge().map(|x| {
+        let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = has_prececessor.iter_zeros().par_bridge().map(|x| {
             let mut prefix = sorted_kmers[x];
             (0..k).collect::<Vec<usize>>().iter().map(|i| {
                 let len = k - i - 1;
