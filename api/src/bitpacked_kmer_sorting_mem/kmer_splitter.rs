@@ -316,6 +316,15 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         if !bin.is_empty() {
             let label = &bin.first().unwrap().to_string()[0..BIN_PREFIX_LEN];
             log::info!("Sorting bin {} of size {}", label, bin.len());
+
+            // Sort the bin. Here if dedup_batches is enabled, we could instead
+            // merge sorted runs using a min-heap data structure, but then we need
+            // extra auxiliary space, up to 2x the total space. We could also use
+            // the standard stable sort, which is said to perform well on partially
+            // sorted inputs, but that also needs auxiliary space. At this point space
+            // is critical because this is likely near the space peak of the whole
+            // algorithm. So we use an unstable sort, which is fast in practice and
+            // does not require any extra space.
             bin.sort_unstable();
             bin.dedup();
             bin.shrink_to_fit();
