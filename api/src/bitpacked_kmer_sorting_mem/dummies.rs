@@ -88,7 +88,7 @@ pub fn get_sorted_dummies<const B: usize>(
                 if !range.is_empty() {
                     let x_start = sorted_kmers[range.start];
                     let cx_start = x_start.copy_set_from_left(k-1, 0).right_shifted(1).copy_set_from_left(0, c as u8);
-                    let dest_slice_start = if range.start == char_ranges[c].start {
+                    let dest_slice_start = if range.start == 0 {
                         // Make sure the output bitvector slice covers the start even if the first k-mers
                         // do not have predecessors.
                         char_ranges[c].start
