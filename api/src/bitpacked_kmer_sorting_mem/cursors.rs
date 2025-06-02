@@ -189,6 +189,7 @@ pub fn build_lcs_array<const B: usize>(
     assert!(k < u16::MAX as usize);
     //assert!(kmers.len() > 0);
 
+    log::info!("Computing LCS values");
 
     let full_slice = KmerDummyMergeSlice::new(&dummies, &kmers, 0..(kmers.len()+dummies.len()), k);
 
@@ -208,6 +209,7 @@ pub fn build_lcs_array<const B: usize>(
 
 
     // Compress into log(k) bits per element
+    log::info!("Compressing LCS array to log(k) bits per element");
     let bitwidth = 64 - (k as u64 - 1).leading_zeros();
     let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(full_slice.len(), bitwidth as usize).unwrap();
     compressed_lcs.push(0); // lcs[0] = 0 by definition
