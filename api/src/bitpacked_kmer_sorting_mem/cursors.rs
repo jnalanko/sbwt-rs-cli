@@ -107,7 +107,7 @@ impl<'a, const B:usize> KmerDummyMergeSlice<'a, B> {
 }
 
 // log^2(n) time complexity 
-pub fn get_ith_merged_kmer<const B: usize>(all_kmers: &Vec<LongKmer<B>>, all_dummies: &KmersWithLengths<B>, i: usize, k: usize) -> (LongKmer<B>, u8) {
+pub fn get_ith_merged_kmer<const B: usize>(all_kmers: &[LongKmer<B>], all_dummies: &KmersWithLengths<B>, i: usize, k: usize) -> (LongKmer<B>, u8) {
     let (kmers_idx, dummy_idx, in_kmers) = binary_search_position_in_merged_list(
         |i| (all_kmers[i], k as u8), 
         |j| all_dummies.get(j), 
@@ -180,36 +180,50 @@ pub fn find_first_starting_with<const B: usize>(
 // This means that the peak memory is high, but we have the k-mers in memory anyway, so it's not so bad
 // TODO: compute the compressed LCS directly. 
 pub fn build_lcs_array<const B: usize>(
-    mut merged_slice: KmerDummyMergeSlice<B>,
-    k: usize,
+    kmers: &[LongKmer<B>],
+    dummies: &KmersWithLengths<B>,
+    k: usize, n_threads: usize
 ) -> simple_sds_sbwt::int_vector::IntVector {
     // LCS values are between 0 and k-1
     assert!(k > 0);
     assert!(k < u16::MAX as usize);
     //assert!(kmers.len() > 0);
 
-    let bitwidth = 64 - (k as u64 - 1).leading_zeros();
 
-    let mut non_compressed_lcs = Vec::<u16>::with_capacity(merged_slice.len());
-    non_compressed_lcs.push(0);
-    let (mut prev_kmer, mut prev_len) = merged_slice.next().unwrap();
+    let full_slice = KmerDummyMergeSlice::new(&dummies, &kmers, 0..(kmers.len()+dummies.len()), k);
 
-    while let Some((kmer, len)) = merged_slice.next() {
-        let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
-        non_compressed_lcs.push(lcp_value as u16);
-        (prev_kmer, prev_len) = (kmer,len);
-    }
+    // We start the segmentation from 1 so that we always have a previous k-mer to compare against
+    let segments = crate::util::segment_range(1..full_slice.len(), n_threads);
+    let lcs_pieces: Vec<Vec<u16>> = segments.into_par_iter().map(|range| {
+        let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer(kmers, dummies, range.start - 1, k); // range.start >= 1 so this is ok
+        let mut subslice = KmerDummyMergeSlice::new(&dummies, &kmers, range.clone(), k);
+        let mut lcs_piece = Vec::<u16>::with_capacity(range.len());
+        while let Some((kmer, len)) = subslice.next() {
+            let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
+            lcs_piece.push(lcp_value as u16);
+            (prev_kmer, prev_len) = (kmer,len);
+        }
+        lcs_piece
+    }).collect();
+
 
     // Compress into log(k) bits per element
-    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(merged_slice.len(), bitwidth as usize).unwrap();
-    for x in non_compressed_lcs {
-        compressed_lcs.push(x as u64);
+    let bitwidth = 64 - (k as u64 - 1).leading_zeros();
+    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(full_slice.len(), bitwidth as usize).unwrap();
+    compressed_lcs.push(0); // lcs[0] = 0 by definition
+    for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
+        compressed_lcs.extend(piece);
     }
+
     compressed_lcs
 }
 
 /// Assumes both input vector have no duplicates, and any
 /// pair (kmer, len) exists in only one of the inputs.
+#[allow(dead_code)] 
+// Dead code: Could be useful later because if we can spend some memory to do the concenation
+// then we might it might speed up the SBWT rows construction because then the merge logic happens only
+// once here and then it's easy to scan for the SBWT rows.
 pub fn merge_kmers_and_dummies<const B: usize>(
     mut kmers: Vec<LongKmer<B>>,
     dummies: Vec<(LongKmer<B>, u8)>,
@@ -342,7 +356,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
 
         let lcs = if build_lcs {
             // LCS values are between 0 and k-1
-            Some(build_lcs_array(KmerDummyMergeSlice::new(&dummies, &kmers, 0..n, k), k))
+            Some(build_lcs_array(&kmers, &dummies, k, n_threads))
         } else {
             None
         };
