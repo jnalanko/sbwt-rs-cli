@@ -73,7 +73,6 @@ pub fn get_sorted_dummies<const B: usize>(
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
     thread_pool.install(||{
 
-
         let char_ranges: Vec<Range<usize>> = (0..sigma).map(|c|{
             let start = find_first_starting_with(sorted_kmers, c as u8);
             let end = find_first_starting_with(sorted_kmers, c as u8 + 1);
@@ -120,7 +119,7 @@ pub fn get_sorted_dummies<const B: usize>(
 
         let has_prececessor = crate::util::parallel_bitvec_concat(pieces);
 
-        log::info!("Constructing dummy k-mers");
+        log::info!("Building dummy k-mer strings");
         let colex_pieces  = crate::util::segment_range(0..has_prececessor.len(), n_threads);
         let required_dummies_pieces: Vec<Vec<(LongKmer::<B>, u8)>> = colex_pieces.into_par_iter().map(|range| {
             let mut dummies = Vec::<(LongKmer<B>, u8)>::new();
