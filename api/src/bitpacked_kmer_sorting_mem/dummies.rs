@@ -121,14 +121,22 @@ pub fn get_sorted_dummies<const B: usize>(
         let has_prececessor = crate::util::parallel_bitvec_concat(pieces);
 
         log::info!("Constructing dummy k-mers");
-        let mut required_dummies: Vec::<(LongKmer::<B>, u8)> = has_prececessor.iter_zeros().par_bridge().map(|x| {
-            let mut prefix = sorted_kmers[x];
-            (0..k).collect::<Vec<usize>>().iter().map(|i| {
-                let len = k - i - 1;
-                prefix = prefix.left_shifted(1);
-                (prefix, len as u8)
-            }).collect::<Vec<(LongKmer::<B>, u8)>>()
-        }).flatten().collect();
+        let colex_pieces  = crate::util::segment_range(0..has_prececessor.len(), n_threads);
+        let required_dummies_pieces: Vec<Vec<(LongKmer::<B>, u8)>> = colex_pieces.into_par_iter().map(|range| {
+            let mut dummies = Vec::<(LongKmer<B>, u8)>::new();
+            for rel_colex in has_prececessor[range.clone()].iter_zeros() {
+                let mut prefix = sorted_kmers[range.start + rel_colex];
+                for i in 0..k {
+                    let len = k - i - 1;
+                    prefix = prefix.left_shifted(1);
+                    dummies.push((prefix, len as u8))
+                }
+            }
+            dummies
+        }).collect();
+
+        // Concatenate pieces
+        let mut required_dummies = required_dummies_pieces.into_iter().fold(vec![], |mut acc, v| {acc.extend(v); acc});
 
         // We always assume that the empty k-mer exists. This assumption is reflected in the C-array
         // later, which adds one "ghost dollar" count to all counts.
