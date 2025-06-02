@@ -1,10 +1,5 @@
 use bitvec::order::Lsb0;
-use rand::AsByteSliceMut;
 use simple_sds_sbwt::ops::Push;
-use simple_sds_sbwt::serialize::Serialize;
-use std::cmp::min;
-use std::io::Cursor;
-use std::io::Read;
 use std::ops::Range;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
@@ -191,13 +186,13 @@ pub fn build_lcs_array<const B: usize>(
 
     log::info!("Computing LCS values");
 
-    let full_slice = KmerDummyMergeSlice::new(&dummies, &kmers, 0..(kmers.len()+dummies.len()), k);
+    let full_slice = KmerDummyMergeSlice::new(dummies, kmers, 0..(kmers.len()+dummies.len()), k);
 
     // We start the segmentation from 1 so that we always have a previous k-mer to compare against
     let segments = crate::util::segment_range(1..full_slice.len(), n_threads);
     let lcs_pieces: Vec<Vec<u16>> = segments.into_par_iter().map(|range| {
         let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer(kmers, dummies, range.start - 1, k); // range.start >= 1 so this is ok
-        let mut subslice = KmerDummyMergeSlice::new(&dummies, &kmers, range.clone(), k);
+        let mut subslice = KmerDummyMergeSlice::new(dummies, kmers, range.clone(), k);
         let mut lcs_piece = Vec::<u16>::with_capacity(range.len());
         while let Some((kmer, len)) = subslice.next() {
             let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
