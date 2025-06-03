@@ -552,6 +552,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
     let out_path = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
 
     // Open output file (open early to fail early if there is a problem)
     let mut out = BufWriter::new(File::create(out_path).unwrap());
@@ -584,7 +585,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     }
 
     log::info!("Computing the merge interleaving");
-    let interl = MergeInterleaving::new(&index1, &index2, n_threads);
+    let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the merge interleaving");
     let merged = SbwtIndex::<SubsetMatrix>::merge(index1, index2, interl, lut_len, n_threads);
     log::info!("Serializing to {}", out_path.display());
@@ -598,6 +599,7 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
     let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
 
     // Read sbwts
     let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
@@ -617,7 +619,7 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     let SbwtIndexVariant::SubsetMatrix(index1) = index1;
     let SbwtIndexVariant::SubsetMatrix(index2) = index2;
 
-    let interl = MergeInterleaving::new(&index1, &index2, n_threads);
+    let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
 
     let intersection = interl.intersection_size();
     let union = interl.union_size();
@@ -732,6 +734,11 @@ fn main() {
                 .long("output")
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("low-ram")
+                .help("Enable optimizations to reduce peak RAM at the expense of slower running time.")
+                .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
@@ -864,6 +871,11 @@ fn main() {
                 .help("The second SBWT index file")
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("low-ram")
+                .help("Enable optimizations to reduce peak RAM at the expense of slower running time.")
+                .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
