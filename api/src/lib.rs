@@ -135,6 +135,7 @@ mod bitpacked_kmer_sorting_mem;
 mod tempfile;
 mod util;
 mod kmer;
+mod compact_int_vector;
 
 pub mod dbg;
 pub mod benchmark;
