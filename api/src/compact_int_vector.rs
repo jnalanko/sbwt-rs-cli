@@ -1,3 +1,7 @@
+use std::cmp::min;
+
+use num::Integer;
+
 
 fn get_int<const BIT_WIDTH: usize>(data: &[u64], i: usize) -> usize {
     let bit_idx = i * BIT_WIDTH; 
@@ -96,8 +100,27 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         set_int::<BIT_WIDTH>(&mut self.data, i, x)
     }
 
-    fn split_to_mut_ranges(&mut self, n_ranges: usize) -> CompactIntVectorMutSlice<BIT_WIDTH> {
-        unimplemented!();
+    fn split_to_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+
+        let n_words = self.data.len();
+
+        // Smallest number of words that fits an array of elements exactly
+        let word_unit = 64_usize.lcm(&BIT_WIDTH) / 64;
+
+        let n_word_units = n_words.div_ceil(word_unit);
+        let n_word_units_in_piece = n_word_units.div_ceil(n_ranges);
+        let n_words_in_piece = n_word_units_in_piece * word_unit;
+
+        let mut tail = self.data.as_mut_slice();
+        let mut pieces = Vec::<CompactIntVectorMutSlice<BIT_WIDTH>>::with_capacity(n_ranges);
+        for _ in 0..n_ranges {
+            let (head, new_tail) = tail.split_at_mut(min(n_words_in_piece, tail.len()));
+            let head_len = head.len();
+            pieces.push(CompactIntVectorMutSlice{data: head, n_elements: head_len});
+            tail = new_tail;
+        }
+
+        pieces
     }
 
     fn len(&self) -> usize {
