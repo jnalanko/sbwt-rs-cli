@@ -112,6 +112,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     // Initializes all elements to zeros
     fn new(len: usize) -> CompactIntVector<BIT_WIDTH> {
         assert!(BIT_WIDTH > 0);
+        assert!(BIT_WIDTH < 64); // Not sure if 64 would work because 1 << 64 overflows
         CompactIntVector{data: vec![0_u64; (len * BIT_WIDTH).div_ceil(64)], n_elements: len}
     }
 }
