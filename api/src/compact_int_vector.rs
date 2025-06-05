@@ -111,12 +111,21 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         let n_word_units_in_piece = n_word_units.div_ceil(n_ranges);
         let n_words_in_piece = n_word_units_in_piece * word_unit;
 
+        let mut rem_elements = self.len();
         let mut tail = self.data.as_mut_slice();
         let mut pieces = Vec::<CompactIntVectorMutSlice<BIT_WIDTH>>::with_capacity(n_ranges);
         for _ in 0..n_ranges {
             let (head, new_tail) = tail.split_at_mut(min(n_words_in_piece, tail.len()));
             let head_len = head.len();
-            pieces.push(CompactIntVectorMutSlice{data: head, n_elements: head_len});
+            let head_n_elements = if new_tail.len() > 0 {
+                assert!(head_len % BIT_WIDTH == 0);
+                head_len / BIT_WIDTH // Full block of elements
+            } else {
+                rem_elements // All the rest
+            };
+            assert!(new_tail.len() == 0 || head_len % BIT_WIDTH == 0);
+            pieces.push(CompactIntVectorMutSlice{data: head, n_elements: head_n_elements});
+            rem_elements -= head_n_elements;
             tail = new_tail;
         }
 
@@ -179,6 +188,7 @@ mod tests {
         }
 
         for i in 0..v.len() {
+            dbg!(v.get(i));
             assert_eq!(v.get(i), i % maxval);
         }
 
