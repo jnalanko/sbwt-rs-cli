@@ -121,8 +121,8 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
             let (head, new_tail) = tail.split_at_mut(min(n_words_in_piece, tail.len()));
             let head_len = head.len();
             let head_n_elements = if new_tail.len() > 0 {
-                assert!(head_len % BIT_WIDTH == 0);
-                head_len / BIT_WIDTH // Full block of elements
+                assert!((head_len*64) % BIT_WIDTH == 0);
+                head_len*64 / BIT_WIDTH // Full block of elements
             } else {
                 rem_elements // All the rest
             };
@@ -132,7 +132,6 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         }
 
         assert!(rem_elements == 0);
-        dbg!(&pieces);
 
         pieces
     }
