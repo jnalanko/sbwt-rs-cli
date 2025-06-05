@@ -54,11 +54,13 @@ fn set_int<const BIT_WIDTH: usize>(data: &mut [u64], i: usize, x: usize) {
     }
 }
 
+#[derive(Debug, Clone)]
 struct CompactIntVector<const BIT_WIDTH: usize> {
     data: Vec<u64>,
     n_elements: usize,
 }
 
+#[derive(Debug)]
 struct CompactIntVectorMutSlice<'a, const BIT_WIDTH: usize> {
     data: &'a mut [u64],
     n_elements: usize,
@@ -100,6 +102,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         set_int::<BIT_WIDTH>(&mut self.data, i, x)
     }
 
+    #[allow(clippy::len_zero)]
     fn split_to_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
 
         let n_words = self.data.len();
@@ -123,11 +126,13 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
             } else {
                 rem_elements // All the rest
             };
-            assert!(new_tail.len() == 0 || head_len % BIT_WIDTH == 0);
             pieces.push(CompactIntVectorMutSlice{data: head, n_elements: head_n_elements});
             rem_elements -= head_n_elements;
             tail = new_tail;
         }
+
+        assert!(rem_elements == 0);
+        dbg!(&pieces);
 
         pieces
     }
