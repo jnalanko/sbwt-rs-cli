@@ -28,6 +28,7 @@ impl CompactIntVector {
     }
 
     fn set(&mut self, i: usize, x: usize) {
+        assert!(x <= self.max_allowed_value());
         let bit_idx = i * self.bit_width; 
         let word_idx = bit_idx / 64;
         let word_offset = bit_idx % 64; // Index of the least sigfinicant bit of the bitslice that is updated
@@ -48,7 +49,7 @@ impl CompactIntVector {
 
             let mask2 = (1_u64 << n_bits2) - 1;
             let clearmask2 = !mask2;
-            let setmask2 = (x as u64 & mask2);
+            let setmask2 = x as u64 >> n_bits1;
 
             self.data[word_idx + 1] &= clearmask2; // Clear the bits
             self.data[word_idx + 1] |= setmask2; // Set the bits
