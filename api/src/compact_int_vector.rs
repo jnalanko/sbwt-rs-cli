@@ -6,6 +6,7 @@ struct CompactIntVector<const BIT_WIDTH: usize> {
 
 impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     fn get(&self, i: usize) -> usize {
+        debug_assert!(i < self.len());
         let bit_idx = i * BIT_WIDTH; 
         let word_idx = bit_idx / 64;
         let word_offset = bit_idx % 64; // Index of the least sigfinicant bit of the bitslice that is updated
@@ -17,6 +18,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
 
             let n_bits1 = 64 - word_offset; // All of the highest-order bits in the first word
             let n_bits2 = BIT_WIDTH - n_bits1; // Rest of the bits from the start of the second word
+            debug_assert!(n_bits1 + n_bits2 == BIT_WIDTH);
 
             let x1 = self.data[word_idx] >> word_offset; // Tail of the first word
             let x2 = self.data[word_idx + 1] & ((1_u64 << n_bits2) - 1); // Head of the second word
@@ -26,7 +28,8 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     }
 
     fn set(&mut self, i: usize, x: usize) {
-        assert!(x <= self.max_allowed_value());
+        debug_assert!(i < self.len());
+        debug_assert!(x <= self.max_allowed_value());
         let bit_idx = i * BIT_WIDTH; 
         let word_idx = bit_idx / 64;
         let word_offset = bit_idx % 64; // Index of the least sigfinicant bit of the bitslice that is updated
