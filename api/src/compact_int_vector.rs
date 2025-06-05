@@ -5,7 +5,7 @@ fn get_int<const BIT_WIDTH: usize>(data: &[u64], i: usize) -> usize {
     let word_offset = bit_idx % 64; // Index of the least sigfinicant bit of the bitslice that is updated
     if word_offset + BIT_WIDTH <= 64 { // Int fits in this word
         let mask = (1_u64 << BIT_WIDTH) - 1;
-        let bits = (data[word_idx] & (mask << word_offset)) >> word_offset;
+        let bits = (data[word_idx] >> word_offset) & mask;
         bits as usize
     } else { // Combine bits from two words
 
@@ -96,7 +96,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         set_int::<BIT_WIDTH>(&mut self.data, i, x)
     }
 
-    fn split_to_mut_ranges(&mut self, n_ranges: usize) {
+    fn split_to_mut_ranges(&mut self, n_ranges: usize) -> CompactIntVectorMutSlice<BIT_WIDTH> {
         unimplemented!();
     }
 
