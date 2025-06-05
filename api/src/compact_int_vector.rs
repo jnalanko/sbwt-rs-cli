@@ -1,24 +1,22 @@
-use std::mem::uninitialized;
 
-struct CompactIntVector {
+struct CompactIntVector<const BIT_WIDTH: usize > {
     data: Vec<u64>,
     n_elements: usize,
-    bit_width: usize, // needs to be less than 64
 }
 
-impl CompactIntVector {
+impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     fn get(&self, i: usize) -> usize {
-        let bit_idx = i * self.bit_width; 
+        let bit_idx = i * BIT_WIDTH; 
         let word_idx = bit_idx / 64;
         let word_offset = bit_idx % 64; // Index of the least sigfinicant bit of the bitslice that is updated
-        if word_offset + self.bit_width <= 64 { // Int fits in this word
-            let mask = (1_u64 << self.bit_width) - 1;
+        if word_offset + BIT_WIDTH <= 64 { // Int fits in this word
+            let mask = (1_u64 << BIT_WIDTH) - 1;
             let bits = (self.data[word_idx] & (mask << word_offset)) >> word_offset;
             bits as usize
         } else { // Combine bits from two words
 
             let n_bits1 = 64 - word_offset; // All of the highest-order bits in the first word
-            let n_bits2 = self.bit_width - n_bits1; // Rest of the bits from the start of the second word
+            let n_bits2 = BIT_WIDTH - n_bits1; // Rest of the bits from the start of the second word
 
             let x1 = self.data[word_idx] >> word_offset; // Tail of the first word
             let x2 = self.data[word_idx + 1] & ((1_u64 << n_bits2) - 1); // Head of the second word
@@ -29,16 +27,16 @@ impl CompactIntVector {
 
     fn set(&mut self, i: usize, x: usize) {
         assert!(x <= self.max_allowed_value());
-        let bit_idx = i * self.bit_width; 
+        let bit_idx = i * BIT_WIDTH; 
         let word_idx = bit_idx / 64;
         let word_offset = bit_idx % 64; // Index of the least sigfinicant bit of the bitslice that is updated
-        if word_offset + self.bit_width <= 64 { // Int fits in this word
-            let mask = (1_u64 << self.bit_width) - 1;
+        if word_offset + BIT_WIDTH <= 64 { // Int fits in this word
+            let mask = (1_u64 << BIT_WIDTH) - 1; // Hopefully computed at compile time
             self.data[word_idx] &= !(mask << word_offset); // Clear the bits
             self.data[word_idx] |= (x as u64) << word_offset ; // Set new bits
         } else { // Combine bits from two words
             let n_bits1 = 64 - word_offset; // All of the highest-order bits in the first word
-            let n_bits2 = self.bit_width - n_bits1; // Rest of the bits from the start of the second word
+            let n_bits2 = BIT_WIDTH - n_bits1; // Rest of the bits from the start of the second word
 
             let mask1 = (1_u64 << n_bits1) - 1;
             let clearmask1 = !(mask1 << word_offset);
@@ -64,13 +62,15 @@ impl CompactIntVector {
         self.n_elements
     }
 
+    // Hopefully this compiles to just a constant
     fn max_allowed_value(&self) -> usize {
-        ((1_u64 << self.bit_width) - 1) as usize
+        ((1_u64 << BIT_WIDTH) - 1) as usize
     }
 
-    fn new(len: usize, bit_width: usize) -> CompactIntVector {
-        assert!(bit_width > 0);
-        CompactIntVector{data: vec![0_u64; (len * bit_width).div_ceil(64)], n_elements: len, bit_width}
+    // Initializes all elements to zeros
+    fn new(len: usize) -> CompactIntVector<BIT_WIDTH> {
+        assert!(BIT_WIDTH > 0);
+        CompactIntVector{data: vec![0_u64; (len * BIT_WIDTH).div_ceil(64)], n_elements: len}
     }
 }
 
@@ -80,10 +80,11 @@ mod tests {
 
     #[test]
     fn set_and_get() {
-        let width = 5; // Does not divide 64 so we get elements spanning two words
         let len = 300;
 
-        let mut v = CompactIntVector::new(len, width);
+        // Bit width 5 does not divide 64 so we get elements
+        // spanning two words.
+        let mut v = CompactIntVector::<5>::new(len);
         for i in 0..v.len() {
             v.set(i, i % v.max_allowed_value()); 
         }
