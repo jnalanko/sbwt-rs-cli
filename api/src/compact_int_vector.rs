@@ -159,4 +159,28 @@ mod tests {
             assert_eq!(v.get(i), x) ;
         }
     }
+
+    #[test]
+    fn split_to_mut_ranges() {
+        let len = 300;
+
+        // Bit width 5 does not divide 64 so we get elements
+        // spanning two words.
+        let mut v = CompactIntVector::<5>::new(len);
+        let maxval = v.max_allowed_value();
+
+        let pieces = v.split_to_mut_ranges(100);
+        let mut x = 0_usize;
+        for mut r in pieces {
+            for i in 0..r.len() {
+                r.set(i, x);
+                x = (x + 1) % maxval;
+            }
+        }
+
+        for i in 0..v.len() {
+            assert_eq!(v.get(i), i % maxval);
+        }
+
+    }
 }
