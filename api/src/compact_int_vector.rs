@@ -43,7 +43,7 @@ impl CompactIntVector {
 
     fn new(len: usize, bit_width: usize) -> CompactIntVector {
         assert!(bit_width > 0);
-        CompactIntVector{data: vec![0_u64; len.div_ceil(64)], n_elements: len, bit_width}
+        CompactIntVector{data: vec![0_u64; (len * bit_width).div_ceil(64)], n_elements: len, bit_width}
     }
 }
 
@@ -62,6 +62,5 @@ mod tests {
             let x = i % v.max_allowed_value();
             assert_eq!(v.get(i), x) ;
         }
-
     }
 }
