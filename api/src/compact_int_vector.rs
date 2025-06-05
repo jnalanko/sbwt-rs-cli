@@ -55,10 +55,34 @@ struct CompactIntVector<const BIT_WIDTH: usize> {
     n_elements: usize,
 }
 
-struct CompactIntVectorSlice<'a, const BIT_WIDTH: usize> {
-    data: &'a [u64],
+struct CompactIntVectorMutSlice<'a, const BIT_WIDTH: usize> {
+    data: &'a mut [u64],
     n_elements: usize,
 }
+
+impl<const BIT_WIDTH: usize> CompactIntVectorMutSlice<'_, BIT_WIDTH> {
+
+    fn get(&self, i: usize) -> usize {
+        debug_assert!(i < self.len());
+        get_int::<BIT_WIDTH>(self.data, i)
+    }
+
+    fn set(&mut self, i: usize, x: usize) {
+        debug_assert!(i < self.len());
+        debug_assert!(x <= self.max_allowed_value());
+        set_int::<BIT_WIDTH>(self.data, i, x)
+    }
+
+    fn len(&self) -> usize {
+        self.n_elements
+    }
+
+    // Hopefully this compiles to just a constant
+    fn max_allowed_value(&self) -> usize {
+        ((1_u64 << BIT_WIDTH) - 1) as usize
+    }
+}
+
 
 impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     fn get(&self, i: usize) -> usize {
