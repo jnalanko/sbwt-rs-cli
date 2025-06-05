@@ -1,5 +1,5 @@
 
-struct CompactIntVector<const BIT_WIDTH: usize > {
+struct CompactIntVector<const BIT_WIDTH: usize> {
     data: Vec<u64>,
     n_elements: usize,
 }
