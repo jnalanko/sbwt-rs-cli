@@ -636,14 +636,30 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         });
     }
 
-    // A version of [SbwtIndex::push_all_labels_forward] that stores the labels as
-    // compact integer vectors with elements {0,1, ..., 4}. The symbol 0 is the "dollar" and
-    // symbols 1,2,3,4 are A,C,G and T.
-    // (see the documentation of [SbwtIndex::push_all_labels_forward].
-    //pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) 
-    //where Self: Sync {
-    //    todo!();
-    //}
+    /// A version of [SbwtIndex::push_all_labels_forward] that stores the labels as
+    /// compact integer vectors with elements {0,1, ..., 4}. The symbol 0 is the "dollar" and
+    /// symbols 1,2,3,4 are A,C,G and T.
+    /// (see the documentation of [SbwtIndex::push_all_labels_forward].
+    pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) 
+    where Self: Sync {
+
+        todo!();
+
+        // Ranges in the concatenation of the rows in the SBTW matrix
+        let input_concat_ranges = crate::util::segment_range(0 .. self.n_sets() * DNA_ALPHABET.len(), n_threads);
+
+        // Split char ranges to exclusive mutable pieces
+        let mut output_ranges: Vec<Range<usize>> = vec![];
+        let mut chars_seen_so_far = 0_usize;
+        for concat_r in input_concat_ranges.iter() {
+            // We need to know the number of one-bits in this range.
+            let edge_count = 0; // TODO
+            output_ranges.push(1 + chars_seen_so_far .. 1 + chars_seen_so_far + edge_count); // +1 is the dollar at the start
+        }
+
+        assert!(output_ranges.last().unwrap().end == self.n_sets() * DNA_ALPHABET.len());
+        
+    }
 
 
     /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).

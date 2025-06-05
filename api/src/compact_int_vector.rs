@@ -102,8 +102,40 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         set_int::<BIT_WIDTH>(&mut self.data, i, x)
     }
 
+    /// IMPORTANT: this requires that the range lengths are multiples of lcm(BIT_WIDTH, 64) / BIT_WIDTH,
+    /// except possibly the last nonzero one, and that the range lengths sum to self.len(). You can use
+    /// [CompactIntVector::split_to_approx_even_mut_ranges] if you just want roughly even pieces.
     #[allow(clippy::len_zero)]
-    fn split_to_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+    fn split_to_mut_ranges(&mut self, range_lengths: &[usize]) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+        assert!(!range_lengths.is_empty());
+
+        // Validate range lengths.
+        // The last nonempty piece may be of any length.
+        let elements_unit = 64.lcm(&BIT_WIDTH) / BIT_WIDTH; // This many elements fit exactly in one word
+        let mut nonzero_seen = false;
+        for &len in range_lengths.iter().rev() {
+            assert!(!nonzero_seen || len % elements_unit == 0);
+            nonzero_seen |= len > 0;
+        }
+        assert!(range_lengths.iter().sum::<usize>() == self.n_elements);
+
+        // Input ranges are valid
+
+        let n_ranges = range_lengths.len();
+        let mut tail = self.data.as_mut_slice();
+        let mut pieces = Vec::<CompactIntVectorMutSlice<BIT_WIDTH>>::with_capacity(n_ranges);
+        for &num_elements in range_lengths {
+            let num_words = (num_elements * BIT_WIDTH).div_ceil(64); // There might be a remainder on the last nonzero piece
+            let (head, new_tail) = tail.split_at_mut(num_words);
+            pieces.push(CompactIntVectorMutSlice{data: head, n_elements: num_elements});
+            tail = new_tail;
+        }
+
+        pieces
+    }
+
+    #[allow(clippy::len_zero)]
+    fn split_to_approx_even_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
 
         let n_words = self.data.len();
 
@@ -114,26 +146,18 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         let n_word_units_in_piece = n_word_units.div_ceil(n_ranges);
         let n_words_in_piece = n_word_units_in_piece * word_unit;
 
+        assert!(n_words_in_piece*64 % BIT_WIDTH == 0);
+        let n_elements_in_piece = n_words_in_piece*64 / BIT_WIDTH;
+
+        let mut piece_lengths = Vec::<usize>::with_capacity(n_ranges); // In elements
         let mut rem_elements = self.len();
-        let mut tail = self.data.as_mut_slice();
-        let mut pieces = Vec::<CompactIntVectorMutSlice<BIT_WIDTH>>::with_capacity(n_ranges);
         for _ in 0..n_ranges {
-            let (head, new_tail) = tail.split_at_mut(min(n_words_in_piece, tail.len()));
-            let head_len = head.len();
-            let head_n_elements = if new_tail.len() > 0 {
-                assert!((head_len*64) % BIT_WIDTH == 0);
-                head_len*64 / BIT_WIDTH // Full block of elements
-            } else {
-                rem_elements // All the rest
-            };
-            pieces.push(CompactIntVectorMutSlice{data: head, n_elements: head_n_elements});
-            rem_elements -= head_n_elements;
-            tail = new_tail;
+            let len = min(n_elements_in_piece, rem_elements);
+            piece_lengths.push(len);
+            rem_elements -= len;
         }
 
-        assert!(rem_elements == 0);
-
-        pieces
+        self.split_to_mut_ranges(&piece_lengths)
     }
 
     fn len(&self) -> usize {
@@ -182,7 +206,7 @@ mod tests {
         let mut v = CompactIntVector::<5>::new(len);
         let maxval = v.max_allowed_value();
 
-        let pieces = v.split_to_mut_ranges(100);
+        let pieces = v.split_to_approx_even_mut_ranges(100);
         let mut x = 0_usize;
         for mut r in pieces {
             for i in 0..r.len() {
