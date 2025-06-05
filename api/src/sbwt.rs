@@ -641,7 +641,12 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     // rank r, and character c, return (r, j), where j is the index of c in the alphabet.
     // If i is equal to the number of outedges, returns (self.n_sets(), DNA_ALPHABET.len()-1)
     fn get_ith_edge(&self, i: usize) -> (usize, usize) {
-        // Binary search etc
+        crate::util::binary_search_leftmost_that_fulfills_pred(|j| j, |probe| {
+            let char_idx = probe / self.n_sets();
+            let node_colex = probe % self.n_sets();
+            self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) > i 
+            // -1 is for the dollar.
+        }, self.n_sets()*DNA_ALPHABET.len());
         todo!();
     }
 
@@ -652,7 +657,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) 
     where Self: Sync {
 
-        let output_char_ranges = labels_out.split_to_approx_even_mut_ranges(n_threads);
+        let mut output_char_ranges = labels_out.split_to_approx_even_mut_ranges(n_threads);
         // The first output range is special because labels_out[0] has to be written a '$'.
 
         // Tuples (start_colex_rank, start_char_idx, end_colex_rank, end_char_idx)
@@ -675,7 +680,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         assert_eq!(output_char_ranges.len(), input_edge_ranges.len());
 
         for t in 0..n_threads {
-            push_labels_forward_compact(input_edge_ranges[t], output_char_ranges[t]);
+            self.push_labels_forward_compact(input_edge_ranges[t], labels_in, &mut output_char_ranges[t]);
         }
     }
 
@@ -691,18 +696,25 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             output_char_range.set(0,0); // The "dollar"
         }
 
+        let advance = |node_colex: &mut usize, outedge_c: &mut usize| {
+            *node_colex += 1;
+            if *node_colex == self.n_sets() {
+                *node_colex = 0;
+                *outedge_c += 1;
+            }
+        };
+
         let mut node_colex = r_s;
         let mut outedge_c = c_s;
 
         let mut n_pushed = has_dollar as usize; // Skip over dollar if we have it
-        while !(node_colex == r_e && outedge_c == c_e) {
+        while (node_colex, outedge_c) != (r_e, c_e) {
             output_char_range.set(n_pushed, input_chars.get(node_colex));
             n_pushed += 1;
 
-            node_colex += 1;
-            if node_colex == self.n_sets() {
-                node_colex = 0;
-                outedge_c += 1;
+            advance(&mut node_colex, &mut outedge_c);
+            while (node_colex, outedge_c) != (r_e, c_e) && !self.sbwt.set_contains(node_colex, outedge_c as u8) {
+                advance(&mut node_colex, &mut outedge_c);
             }
         }
     }
