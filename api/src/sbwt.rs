@@ -22,6 +22,7 @@ use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
 use crate::util;
+use crate::util::segment_range;
 use crate::util::ACGT_TO_0123;
 use crate::util::DNA_ALPHABET;
 use crate::merge::MergeInterleaving;
@@ -636,6 +637,14 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         });
     }
 
+    // Internal helper function. If the i-th outedge leaves from node with colex
+    // rank r, and character c, return (r, j), where j is the index of c in the alphabet.
+    // If i is equal to the number of outedges, returns (self.n_sets(), DNA_ALPHABET.len()-1)
+    fn get_ith_edge(&self, i: usize) -> (usize, usize) {
+        // Binary search etc
+        todo!();
+    }
+
     /// A version of [SbwtIndex::push_all_labels_forward] that stores the labels as
     /// compact integer vectors with elements {0,1, ..., 4}. The symbol 0 is the "dollar" and
     /// symbols 1,2,3,4 are A,C,G and T.
@@ -643,22 +652,59 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) 
     where Self: Sync {
 
-        todo!();
+        let output_char_ranges = labels_out.split_to_approx_even_mut_ranges(n_threads);
+        // The first output range is special because labels_out[0] has to be written a '$'.
 
-        // Ranges in the concatenation of the rows in the SBTW matrix
-        let input_concat_ranges = crate::util::segment_range(0 .. self.n_sets() * DNA_ALPHABET.len(), n_threads);
+        // Tuples (start_colex_rank, start_char_idx, end_colex_rank, end_char_idx)
+        // Exclusive ends
+        let mut input_edge_ranges: Vec<(usize, usize, usize, usize)> = vec![];
+        let mut edges_so_far = 0_usize;
+        for r in output_char_ranges.iter() {
+            let input_range_len = if edges_so_far == 0 {
+                assert!(r.len() > 0);
+                r.len() - 1 // No incoming edge to the first node 
+            } else {
+                r.len()
+            };
+            let (r_s, c_s) = self.get_ith_edge(edges_so_far);
+            let (r_e, c_e) = self.get_ith_edge(edges_so_far + input_range_len);
+            edges_so_far += input_range_len;
+            input_edge_ranges.push((r_s, c_s, r_e, c_e));
+        } 
 
-        // Split char ranges to exclusive mutable pieces
-        let mut output_ranges: Vec<Range<usize>> = vec![];
-        let mut chars_seen_so_far = 0_usize;
-        for concat_r in input_concat_ranges.iter() {
-            // We need to know the number of one-bits in this range.
-            let edge_count = 0; // TODO
-            output_ranges.push(1 + chars_seen_so_far .. 1 + chars_seen_so_far + edge_count); // +1 is the dollar at the start
+        assert_eq!(output_char_ranges.len(), input_edge_ranges.len());
+
+        for t in 0..n_threads {
+            push_labels_forward_compact(input_edge_ranges[t], output_char_ranges[t]);
+        }
+    }
+
+    /// Internal function. A compact version of [push_labels_forward].
+    pub(crate) fn push_labels_forward_compact(&self, input_edge_range: (usize, usize, usize, usize), input_chars: &CompactIntVector<3>, output_char_range: &mut CompactIntVectorMutSlice<3>){
+
+        // Tuple (start_colex_rank, start_char_idx, end_colex_rank, end_char_idx)
+        let (r_s, c_s, r_e, c_e) = input_edge_range;
+
+        let has_dollar = r_s == 0;
+        if has_dollar {
+            assert!(output_char_range.len() > 0);
+            output_char_range.set(0,0); // The "dollar"
         }
 
-        assert!(output_ranges.last().unwrap().end == self.n_sets() * DNA_ALPHABET.len());
-        
+        let mut node_colex = r_s;
+        let mut outedge_c = c_s;
+
+        let mut n_pushed = has_dollar as usize; // Skip over dollar if we have it
+        while !(node_colex == r_e && outedge_c == c_e) {
+            output_char_range.set(n_pushed, input_chars.get(node_colex));
+            n_pushed += 1;
+
+            node_colex += 1;
+            if node_colex == self.n_sets() {
+                node_colex = 0;
+                outedge_c += 1;
+            }
+        }
     }
 
 

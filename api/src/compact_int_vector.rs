@@ -68,35 +68,35 @@ pub struct CompactIntVectorMutSlice<'a, const BIT_WIDTH: usize> {
 
 impl<const BIT_WIDTH: usize> CompactIntVectorMutSlice<'_, BIT_WIDTH> {
 
-    fn get(&self, i: usize) -> usize {
+    pub fn get(&self, i: usize) -> usize {
         debug_assert!(i < self.len());
         get_int::<BIT_WIDTH>(self.data, i)
     }
 
-    fn set(&mut self, i: usize, x: usize) {
+    pub fn set(&mut self, i: usize, x: usize) {
         debug_assert!(i < self.len());
         debug_assert!(x <= self.max_allowed_value());
         set_int::<BIT_WIDTH>(self.data, i, x)
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.n_elements
     }
 
     // Hopefully this compiles to just a constant
-    fn max_allowed_value(&self) -> usize {
+    pub fn max_allowed_value(&self) -> usize {
         ((1_u64 << BIT_WIDTH) - 1) as usize
     }
 }
 
 
 impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
-    fn get(&self, i: usize) -> usize {
+    pub fn get(&self, i: usize) -> usize {
         debug_assert!(i < self.len());
         get_int::<BIT_WIDTH>(&self.data, i)
     }
 
-    fn set(&mut self, i: usize, x: usize) {
+    pub fn set(&mut self, i: usize, x: usize) {
         debug_assert!(i < self.len());
         debug_assert!(x <= self.max_allowed_value());
         set_int::<BIT_WIDTH>(&mut self.data, i, x)
@@ -106,7 +106,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     /// except possibly the last nonzero one, and that the range lengths sum to self.len(). You can use
     /// [CompactIntVector::split_to_approx_even_mut_ranges] if you just want roughly even pieces.
     #[allow(clippy::len_zero)]
-    fn split_to_mut_ranges(&mut self, range_lengths: &[usize]) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+    pub fn split_to_mut_ranges(&mut self, range_lengths: &[usize]) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
         assert!(!range_lengths.is_empty());
 
         // Validate range lengths.
@@ -135,7 +135,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     }
 
     #[allow(clippy::len_zero)]
-    fn split_to_approx_even_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+    pub fn split_to_approx_even_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
 
         let n_words = self.data.len();
 
@@ -160,17 +160,17 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
         self.split_to_mut_ranges(&piece_lengths)
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.n_elements
     }
 
     // Hopefully this compiles to just a constant
-    fn max_allowed_value(&self) -> usize {
+    pub fn max_allowed_value(&self) -> usize {
         ((1_u64 << BIT_WIDTH) - 1) as usize
     }
 
     // Initializes all elements to zeros
-    fn new(len: usize) -> CompactIntVector<BIT_WIDTH> {
+    pub fn new(len: usize) -> CompactIntVector<BIT_WIDTH> {
         assert!(BIT_WIDTH > 0);
         assert!(BIT_WIDTH < 64); // Not sure if 64 would work because 1 << 64 overflows
         CompactIntVector{data: vec![0_u64; (len * BIT_WIDTH).div_ceil(64)], n_elements: len}
