@@ -16,6 +16,8 @@ use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use simple_sds_sbwt::serialize::Serialize;
 
+use crate::compact_int_vector::CompactIntVector;
+use crate::compact_int_vector::CompactIntVectorMutSlice;
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
@@ -633,6 +635,16 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             });
         });
     }
+
+    // A version of [SbwtIndex::push_all_labels_forward] that stores the labels as
+    // compact integer vectors with elements {0,1, ..., 4}. The symbol 0 is the "dollar" and
+    // symbols 1,2,3,4 are A,C,G and T.
+    // (see the documentation of [SbwtIndex::push_all_labels_forward].
+    //pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) 
+    //where Self: Sync {
+    //    todo!();
+    //}
+
 
     /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).
     /// Output: writes the input labels to the output ranges. Read the code for details. 

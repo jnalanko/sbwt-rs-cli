@@ -55,13 +55,13 @@ fn set_int<const BIT_WIDTH: usize>(data: &mut [u64], i: usize, x: usize) {
 }
 
 #[derive(Debug, Clone)]
-struct CompactIntVector<const BIT_WIDTH: usize> {
+pub struct CompactIntVector<const BIT_WIDTH: usize> {
     data: Vec<u64>,
     n_elements: usize,
 }
 
 #[derive(Debug)]
-struct CompactIntVectorMutSlice<'a, const BIT_WIDTH: usize> {
+pub struct CompactIntVectorMutSlice<'a, const BIT_WIDTH: usize> {
     data: &'a mut [u64],
     n_elements: usize,
 }
