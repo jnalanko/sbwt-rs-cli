@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::io::Read;
 use std::ops::Range;
 
 use bitvec::prelude::*;
@@ -32,6 +33,40 @@ pub struct MergeInterleaving {
     pub is_leader: BitVec,
 }
 
+trait ReadOnlyIntVector {
+    fn get(&self, i: usize) -> usize;
+    fn init(len: usize) -> Self;
+    fn len(&self, ) -> usize;
+}
+
+impl ReadOnlyIntVector for Vec<u8> {
+    fn get(&self, i: usize) -> usize {
+        self[i] as usize
+    }
+
+    fn init(len: usize) -> Self {
+        vec![0_u8; len] 
+    }
+
+    fn len(&self) -> usize {
+        self.len() 
+    }
+}
+
+impl ReadOnlyIntVector for CompactIntVector<3> {
+    fn get(&self, i: usize) -> usize {
+        self.get(i) as usize
+    }
+
+    fn init(len: usize) -> Self {
+        Self::new(len)
+    }
+
+    fn len(&self) -> usize {
+        self.len() 
+    }
+}
+
 enum CharVector {
     ByteAlphabet(Vec<u8>),
     Compact(CompactIntVector<3>) // 3 bits per symbol for alphabet $,A,C,G,T
@@ -55,7 +90,6 @@ impl CharVector{
 }
 
 impl MergeInterleaving {
-
 
     /// optimize_peak_ram enables optimizations to reduce the RAM peak at the expense of running time.
     pub fn new<SS: SubsetSeq + Send + Sync>(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, optimize_peak_ram: bool, n_threads: usize) -> MergeInterleaving {
@@ -113,14 +147,14 @@ impl MergeInterleaving {
 
                 if round != k-1 {
                     log::debug!("Pushing labels forward in the SBWT graph");
-                    if let (ByteAlphabet(c1), ByteAlphabet(c2), Some(ByteAlphabet(temp1)), Some(ByteAlphabet(temp2))) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
+                    if let (ByteAlphabet(mut c1), ByteAlphabet(mut c2), Some(ByteAlphabet(mut temp1)), Some(ByteAlphabet(mut temp2))) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // High memory mode
-                        index1.push_all_labels_forward(&c1, temp1, n_threads);
+                        index1.push_all_labels_forward(&c1, &mut temp1, n_threads);
                         std::mem::swap(&mut c1, &mut temp1);
 
-                        index2.push_all_labels_forward(&c2, temp2, n_threads);
+                        index2.push_all_labels_forward(&c2, &mut temp2, n_threads);
                         std::mem::swap(&mut c2, &mut temp2);
-                    } else if let (Compact(c1), Compact(c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
+                    } else if let (Compact(mut c1), Compact(mut c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // Low memory mode
                         let mut temp1 = CompactIntVector::<3>::new(chars1.len());
                         index1.push_all_labels_forward_compact(&c1, &mut temp1, n_threads);
@@ -212,23 +246,17 @@ fn leading_zeros(s: &BitSlice) -> usize {
 // Returns the number of c in the beginning.
 // Falls back to binary search for long sequences
 #[inline]
-fn run_length_in_sorted_seq(seq: &[u8], c: u8) -> usize {
-    if seq.is_empty() {
+fn run_length_in_sorted_seq<V: ReadOnlyIntVector + Send + Sync>(seq: &V, range: Range<usize>, c: u8) -> usize {
+    if range.is_empty() {
         return 0;
     }
-    if seq.len() > 200 {
+    if range.len() > 200 {
         // Binary search the first element that is larger than c
-        seq.binary_search_by(|&x| {
-            if x > c {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            }
-        }).unwrap_err() // Is always Err because we never return Ordering::Equal
+        crate::util::binary_search_leftmost_that_fulfills_pred(|i| i, |i| seq.get(i+range.start) as u8 > c, range.len())
     } else {
         // Linear scan
         let mut i = 0;
-        while i < seq.len() && seq[i] == c {
+        while i < range.len() && seq.get(range.start + i) as u8 == c {
             i += 1;
         }
         i
@@ -251,7 +279,7 @@ fn zero_extend(v: &mut BitVec, howmany: usize) {
 // Yeah I know it's got a lot of arguments but it's an internal helper and collecting the arguments
 // into bigger structs would not really make it much clearer and would just increase the number of lines of code. 
 #[allow(clippy::too_many_arguments)] 
-fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, last_round: bool) 
+fn refine_piece<V: ReadOnlyIntVector + Send + Sync>(s1: &BitVec, s2: &BitVec, chars1: &V, chars2: &V, mut c1_i: usize, mut c2_i: usize, s1_range: Range<usize>, s2_range: Range<usize>, last_round: bool) 
 -> (BitVec, BitVec, Option<BitVec>) {
 
     let mut out1 = bitvec::bitvec![u64, Lsb0;];
@@ -276,12 +304,12 @@ fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i
 
         let mut is_leader = true;
         while c1_i < c1_end || c2_i < c2_end {
-            let c1 = if c1_i == c1_end { u8::MAX } else { chars1[c1_i] };
-            let c2 = if c2_i == c2_end { u8::MAX } else { chars2[c2_i] };
+            let c1 = if c1_i == c1_end { u8::MAX } else { chars1.get(c1_i) as u8 };
+            let c2 = if c2_i == c2_end { u8::MAX } else { chars2.get(c2_i) as u8 };
             let c = min(c1,c2);
 
-            let r1 = run_length_in_sorted_seq(&chars1[c1_i..c1_end], c);
-            let r2 = run_length_in_sorted_seq(&chars2[c2_i..c2_end], c);
+            let r1 = run_length_in_sorted_seq(chars1, c1_i..c1_end, c);
+            let r2 = run_length_in_sorted_seq(chars2, c2_i..c2_end, c);
 
             if last_round {
                 // We know that r1 and r2 are at most 1 -> no need to have a full unary code.
@@ -330,7 +358,7 @@ fn refine_piece(s1: &BitVec, s2: &BitVec, chars1: &[u8], chars2: &[u8], mut c1_i
 // On the also round the function also returns the leader bit vector, which marks
 // the smallest k-mer in each group of k-mers with the same suffix of length (k-1).
 // This function runs in parallel, so a rayon thread pool must be initialized.
-fn refine_segmentation(s1: BitVec, s2: BitVec, chars1: &[u8], chars2: &[u8], input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
+fn refine_segmentation<V: ReadOnlyIntVector + Send + Sync>(s1: BitVec, s2: BitVec, chars1: &V, chars2: &V, input_pieces: Vec<(usize, usize, Range<usize>, Range<usize>)>, last_round: bool) -> (BitVec, BitVec, Option<BitVec>) {
     let output_pieces: Vec<(BitVec, BitVec, Option<BitVec>)> = input_pieces.par_iter().map(|piece| {
         let (c1_i, c2_1, s1_range, s2_range) = piece;
         refine_piece(&s1, &s2, chars1, chars2, *c1_i, *c2_1, s1_range.clone(), s2_range.clone(), last_round)
