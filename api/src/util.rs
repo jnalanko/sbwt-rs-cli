@@ -278,6 +278,22 @@ pub(crate) fn segment_range(range: Range<usize>, n_pieces: usize) -> Vec<Range<u
         pieces
 }
 
+#[cfg(test)]
+pub(crate) fn gen_random_dna_string(len: usize, seed: u64) -> Vec<u8> {
+    use rand_chacha::rand_core::{RngCore, SeedableRng};
+
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(1234);
+    (0..len).map(|_| { 
+        match rng.next_u64() % 4 {
+            0 => b'A',
+            1 => b'C',
+            2 => b'G',
+            3 => b'T',
+            _ => panic!("Impossible")
+        }
+    }).collect()
+}
+
 
 #[cfg(test)]
 mod tests {

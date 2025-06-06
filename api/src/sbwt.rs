@@ -1012,6 +1012,8 @@ impl PrefixLookupTable {
 #[cfg(test)]
 mod tests {
 
+    use rand_chacha::rand_core::{RngCore, SeedableRng};
+
     use crate::builder::{BitPackedKmerSorting, SbwtIndexBuilder};
 
     #[cfg(feature = "bpks-mem")]
@@ -1222,9 +1224,59 @@ mod tests {
 
     }
 
+    #[test]
+    fn test_push_all_labels_forward() {
+
+        // We need a big enough input so that the work splitting in the compact version
+        // of push_labels_forward has more than one independent piece.
+        let input_seq = crate::util::gen_random_dna_string(2000, 123);
+
+        let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(5).run_from_slices(vec![input_seq.as_slice()].as_slice());
+
+        let mut in_labels = crate::util::gen_random_dna_string(sbwt.n_sets(), 345);
+        in_labels[100] = b'$'; // Put in a dollar in the middle for fun
+
+        let mut out_labels = vec![0_u8; sbwt.n_sets()];
+        sbwt.push_all_labels_forward(&in_labels, out_labels.as_mut_slice(), 3);
+
+        // Correct labels for the random strings with seeds 123 (input_seq) and 345 (in_labels)
+        let correct_out_labels = b"$CGGACTATTGTGAATTCCGCGGTCT$CCGAGGTGGTGCATACGCTGTGCACTTAGAGTATTACTGGTCCGCCATACGCCAGGTGCCAATTGGTACGCGGTACTAATGCGGCCGGACGTGCTATCTAATACTACGATAACAAGGCAAATGGTTTAAACATTGTGGTATAATTATCAATTGGTTCCGAGGTTGGGTTTCGCCAACTGTCCTCGAGCTAACCGAGTGTTTCGCTATGCAATTCCCGTTC$CCGAGGGTGGTGCTATACGCTGTGCCACTTAAATGTATTCTTGGTCCGGCCATAGGAGGTGCAATTGTACGGGTGACTATGCGCGCGGACGTTGCTATGCTATATCTCTGACTTAACAGGCAAATGTAAACATTGTGGTATAATATATCAGTTGGTTCCGGAGGTTGGGTGTTTCGCCAACTGTCTCGAGCGTAAACCGATGTTTCGGACTATTGTGCAATCGTGTTCT$CCGAGGGTGGTGCAATACGCTGTGCCACAGAATGTATTCTTGTCCGGCCATACGCCGAGGTCAATTGGTAGCGGTGACAATGCGCGCCGGACGTGCTAGCTTATCTACTGACTTACAAGAGCAAATGGTTTACTTGGTAAATAATCAATTGGTCCGGAGGTGGGTTCGCCAACTTCCTGACAAACCGATGTTCGGCTTTGGCAATTCCGCGGTTCT$CGAGGGTGTGCATATCGCTGTCCCTTAGATGATACTTGGCCGGCTACGCCGAGGTGCCATGGTACCGGTGTAATGCGCGCGGAGTTCTATCTAATACTACTGACTAACAAGAGCAAATGGTTAAACATTGTGGTATAATATATCAAGTTGGTCGGAGGTTGGGTGTTCCCAACTGTCCTCGGCGTAAACCGAGTGTT".to_vec();
+
+        assert_eq!(out_labels, correct_out_labels);
+
+        let mut in_labels_compact = CompactIntVector::<3>::new(in_labels.len());
+        for (i, c) in in_labels.iter().enumerate() {
+            let c2 = match c {
+                b'$' => 0,
+                b'A' => 1,
+                b'C' => 2,
+                b'G' => 3,
+                b'T' => 4,
+                _ => panic!("Should be impossible")
+            };
+            in_labels_compact.set(i,c2);
+        }
+
+        let mut out_labels_compact = CompactIntVector::<3>::new(in_labels_compact.len());
+        sbwt.push_all_labels_forward_compact(&in_labels_compact, &mut out_labels_compact, 3);
+
+        for i in 0..out_labels_compact.len() {
+            let c = match out_labels_compact.get(i) {
+                0 => b'$',
+                1 => b'A',
+                2 => b'C',
+                3 => b'G',
+                4 => b'T',
+                _ => panic!("Should be impossible")
+            };
+            assert_eq!(c, correct_out_labels[i]);
+        }
+    }
+
+
     ///////////////////////////////////////////////////
     //
-    // Same tests for bitpacked k-mer sorting in memory
+    // Tests for bitpacked k-mer sorting in memory
     //
     ///////////////////////////////////////////////////
 
@@ -1349,4 +1401,5 @@ mod tests {
         assert_eq!(kmers1, kmers2);
 
     }
+
 }
