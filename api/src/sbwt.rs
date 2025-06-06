@@ -772,6 +772,22 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         last
     } 
 
+    /// Build the last column of the SBWT matrix.
+    pub fn build_last_column_compact(&self) -> CompactIntVector<3> {
+        let mut last = CompactIntVector::<3>::new(self.n_sets());
+        last.set(0, 0); // The "dollar"
+        let mut cur_idx = 1_usize;
+        for c_i in 0..self.alphabet().len(){
+            let count = self.sbwt().rank(c_i as u8, self.n_sets());
+            for _ in 0..count {
+                last.set(cur_idx, c_i+1);
+                cur_idx += 1;
+            }
+        }
+        assert_eq!(cur_idx, self.n_sets());
+        last
+    } 
+
     // Internal function: marks the first k-mer of every (k-1)-suffix group.
     pub(crate) fn mark_k_minus_1_mers(&self, n_threads: usize) -> bitvec::vec::BitVec 
     where Self: Sync {
