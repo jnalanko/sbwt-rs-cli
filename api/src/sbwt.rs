@@ -707,9 +707,11 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         let mut node_colex = r_s;
         let mut outedge_c = c_s;
+        assert!(self.sbwt.set_contains(node_colex, outedge_c as u8));
 
         let mut n_pushed = has_dollar as usize; // Skip over dollar if we have it
         while (node_colex, outedge_c) != (r_e, c_e) {
+            eprintln!("{} {} {} {}", node_colex, outedge_c, n_pushed, output_char_range.len());
             output_char_range.set(n_pushed, input_chars.get(node_colex));
             n_pushed += 1;
 
