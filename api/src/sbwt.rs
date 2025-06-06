@@ -643,7 +643,6 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     fn get_ith_edge(&self, i: usize) -> (usize, usize) {
         assert!(i <= self.n_sets() * DNA_ALPHABET.len());
         let j = crate::util::binary_search_leftmost_that_fulfills_pred(|j| j, |probe| {
-            dbg!(probe);
             let (char_idx, node_colex) = if probe+1 == self.n_sets() * DNA_ALPHABET.len() {
                 // This needs to be a special case because otherwise the binary search
                 // will try rank on char |DNA_ALPHABET| at colex position 0, but that
