@@ -142,7 +142,15 @@ impl MergeInterleaving {
                 let pieces = (0..n_threads).map(|i| (p1[i].0, p2[i].0, p1[i].1.clone(), p2[i].1.clone())).collect();
 
                 log::debug!("Refining segmentation");
-                let new_arrays = refine_segmentation(s1, s2, &chars1, &chars2, pieces, round == k-1);
+                let new_arrays = match (chars1, chars2) {
+                    (ByteAlphabet(c1), ByteAlphabet(c2)) => {
+                        refine_segmentation(s1, s2, &c1, &c2, pieces, round == k-1)
+                    },
+                    (Compact(c1), Compact(c2)) => {
+                        refine_segmentation(s1, s2, &c1, &c2, pieces, round == k-1)
+                    },
+                    _ => panic!("Programmer messed up")
+                };
                 (s1, s2, leader_bits) = new_arrays;
 
                 if round != k-1 {
