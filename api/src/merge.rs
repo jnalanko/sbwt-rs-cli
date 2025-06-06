@@ -114,7 +114,6 @@ impl MergeInterleaving {
                 if round != k-1 {
                     log::debug!("Pushing labels forward in the SBWT graph");
                     if let (ByteAlphabet(c1), ByteAlphabet(c2), Some(ByteAlphabet(temp1)), Some(ByteAlphabet(temp2))) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
-                    if let (Some(buf1), Some(buf2)) = (&mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // High memory mode
                         index1.push_all_labels_forward(&c1, temp1, n_threads);
                         std::mem::swap(&mut c1, &mut temp1);
@@ -123,15 +122,15 @@ impl MergeInterleaving {
                         std::mem::swap(&mut c2, &mut temp2);
                     } else if let (Compact(c1), Compact(c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // Low memory mode
-                        let mut temp1 = CharVector::init_compact(chars1.len()) ;
-                        index1.push_all_labels_forward_compact(&chars1, &mut buf1, n_threads);
-                        std::mem::swap(&mut chars1, &mut buf1);
-                        drop(buf1);
+                        let mut temp1 = CompactIntVector::<3>::new(chars1.len());
+                        index1.push_all_labels_forward_compact(&c1, &mut temp1, n_threads);
+                        std::mem::swap(&mut c1, &mut &mut temp1);
+                        drop(temp1);
 
-                        let mut temp2 = CharVector::init_compact(chars2.len()) ;
-                        index2.push_all_labels_forward(&chars2, &mut buf2, n_threads);
-                        std::mem::swap(&mut chars2, &mut buf2);
-                        drop(buf2)
+                        let mut temp2 = CompactIntVector::<3>::new(chars2.len());
+                        index2.push_all_labels_forward_compact(&c2, &mut temp2, n_threads);
+                        std::mem::swap(&mut c2, &mut &mut temp2);
+                        drop(temp2)
                     } else {
                         panic!("Programmer messed up");
                     }
