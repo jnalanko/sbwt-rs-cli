@@ -11,6 +11,7 @@ use byteorder::ReadBytesExt;
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
 use rand::AsByteSliceMut;
+use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
@@ -670,7 +671,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) 
     where Self: Sync {
 
-        let mut output_char_ranges = labels_out.split_to_approx_even_mut_ranges(n_threads);
+        let output_char_ranges = labels_out.split_to_approx_even_mut_ranges(n_threads);
         // The first output range is special because labels_out[0] has to be written a '$'.
 
         // Tuples (start_colex_rank, start_char_idx, end_colex_rank, end_char_idx)
@@ -692,9 +693,9 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         assert_eq!(output_char_ranges.len(), input_edge_ranges.len());
 
-        for t in 0..n_threads {
-            self.push_labels_forward_compact(input_edge_ranges[t], labels_in, &mut output_char_ranges[t], t == 0);
-        }
+        output_char_ranges.into_par_iter().enumerate().for_each(|(i, mut out)| {
+            self.push_labels_forward_compact(input_edge_ranges[i], labels_in, &mut out, i == 0);
+        })
     }
 
     /// Internal function. A compact version of [push_labels_forward].

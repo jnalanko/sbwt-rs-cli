@@ -584,7 +584,7 @@ fn merge_command(matches: &clap::ArgMatches) {
         log::warn!("Using length {} for the merged index", lut_len); 
     }
 
-    log::info!("Computing the merge interleaving");
+    log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the merge interleaving");
     let merged = SbwtIndex::<SubsetMatrix>::merge(index1, index2, interl, lut_len, n_threads);
