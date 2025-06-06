@@ -644,7 +644,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         let j = crate::util::binary_search_leftmost_that_fulfills_pred(|j| j, |probe| {
             let char_idx = probe / self.n_sets();
             let node_colex = probe % self.n_sets();
-            self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) > i 
+            self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) >= i 
             // -1 is for the dollar.
         }, self.n_sets()*DNA_ALPHABET.len());
         (j / self.n_sets(), j % self.n_sets())
@@ -675,6 +675,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             let (r_e, c_e) = self.get_ith_edge(edges_so_far + input_range_len);
             edges_so_far += input_range_len;
             input_edge_ranges.push((r_s, c_s, r_e, c_e));
+            eprintln!("{} {} {} {}", r_s, c_s, r_e, c_e);
         } 
 
         assert_eq!(output_char_ranges.len(), input_edge_ranges.len());
