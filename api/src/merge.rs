@@ -5,6 +5,7 @@ use bitvec::prelude::*;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
+use crate::compact_int_vector::CompactIntVector;
 use crate::subsetseq::*;
 use crate::sbwt::*;
 
@@ -31,11 +32,35 @@ pub struct MergeInterleaving {
     pub is_leader: BitVec,
 }
 
+enum CharVector {
+    ByteAlphabet(Vec<u8>),
+    Compact(CompactIntVector<3>) // 3 bits per symbol for alphabet $,A,C,G,T
+}
+
+impl CharVector{
+    fn len(&self) -> usize {
+        match self {
+            Self::ByteAlphabet(v) => v.len(),
+            Self::Compact(v) => v.len(),
+        }
+    }
+
+    fn init_with_byte_alphabet(len: usize) -> CharVector {
+        CharVector::ByteAlphabet(vec![0; len])
+    }
+
+    fn init_compact(len: usize) -> CharVector {
+        CharVector::Compact(CompactIntVector::<3>::new(len))
+    }
+}
+
 impl MergeInterleaving {
 
 
     /// optimize_peak_ram enables optimizations to reduce the RAM peak at the expense of running time.
     pub fn new<SS: SubsetSeq + Send + Sync>(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, optimize_peak_ram: bool, n_threads: usize) -> MergeInterleaving {
+
+        use CharVector::*;
 
         let k = index1.k();
         assert_eq!(k, index2.k());
@@ -56,13 +81,19 @@ impl MergeInterleaving {
             s1.push(true);
             s2.push(true);
 
-            let mut chars1 = index1.build_last_column();
-            let mut chars2 = index2.build_last_column();
-
-            // Temporary buffers for pushing labels forward. If optimize_ram is enabled, we reallocate
-            // these buffers at each iteration to minimize the peak memory.
-            let mut temp_char_buf_1 = if optimize_peak_ram { None } else { Some(vec![0u8; chars1.len()]) };
-            let mut temp_char_buf_2 = if optimize_peak_ram { None } else { Some(vec![0u8; chars2.len()]) };
+            let (mut chars1, mut chars2, mut temp_char_buf_1, mut temp_char_buf_2 ) = if optimize_peak_ram {
+                (Compact(index1.build_last_column_compact()), 
+                 Compact(index2.build_last_column_compact()),
+                 None, // Temp buffers allocated on demand
+                 None  // Temp buffers allocated on demand
+                )
+            } else {
+                (ByteAlphabet(index1.build_last_column()), 
+                 ByteAlphabet(index2.build_last_column()),
+                 Some(CharVector::init_with_byte_alphabet(index1.n_sets())),
+                 Some(CharVector::init_with_byte_alphabet(index2.n_sets()))
+                )
+            };
 
             for round in 0..k {
                 log::info!("Round {}/{}", round+1, k);
@@ -82,24 +113,27 @@ impl MergeInterleaving {
 
                 if round != k-1 {
                     log::debug!("Pushing labels forward in the SBWT graph");
+                    if let (ByteAlphabet(c1), ByteAlphabet(c2), Some(ByteAlphabet(temp1)), Some(ByteAlphabet(temp2))) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                     if let (Some(buf1), Some(buf2)) = (&mut temp_char_buf_1, &mut temp_char_buf_2) {
-                        // Reuse existing buffers
-                        index1.push_all_labels_forward(&chars1, buf1, n_threads);
-                        std::mem::swap(&mut chars1, buf1);
+                        // High memory mode
+                        index1.push_all_labels_forward(&c1, temp1, n_threads);
+                        std::mem::swap(&mut c1, &mut temp1);
 
-                        index2.push_all_labels_forward(&chars2, buf2, n_threads);
-                        std::mem::swap(&mut chars2, buf2);
-                    } else {
-                        // Allocate new buffers buffers on demand
-                        let mut buf1 = vec![0u8; chars1.len()];
-                        index1.push_all_labels_forward(&chars1, &mut buf1, n_threads);
+                        index2.push_all_labels_forward(&c2, temp2, n_threads);
+                        std::mem::swap(&mut c2, &mut temp2);
+                    } else if let (Compact(c1), Compact(c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
+                        // Low memory mode
+                        let mut temp1 = CharVector::init_compact(chars1.len()) ;
+                        index1.push_all_labels_forward_compact(&chars1, &mut buf1, n_threads);
                         std::mem::swap(&mut chars1, &mut buf1);
                         drop(buf1);
 
-                        let mut buf2 = vec![0u8; chars2.len()];
+                        let mut temp2 = CharVector::init_compact(chars2.len()) ;
                         index2.push_all_labels_forward(&chars2, &mut buf2, n_threads);
                         std::mem::swap(&mut chars2, &mut buf2);
                         drop(buf2)
+                    } else {
+                        panic!("Programmer messed up");
                     }
                 }
             }
