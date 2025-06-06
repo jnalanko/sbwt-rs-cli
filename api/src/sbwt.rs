@@ -641,13 +641,14 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     // rank r, and character c, return (r, j), where j is the index of c in the alphabet.
     // If i is equal to the number of outedges, returns (self.n_sets(), DNA_ALPHABET.len()-1)
     fn get_ith_edge(&self, i: usize) -> (usize, usize) {
-        if i == self.n_sets() * DNA_ALPHABET.len() {
-            // This needs to be a species case because otherwise the binary search
-            // above will try rank on char |DNA_ALPHABET| at colex position 0, but that
-            // character does not exist.
-            return (self.n_sets(), DNA_ALPHABET.len()-1); // One past the end of the row of the last character
-        }
+        assert!(i <= self.n_sets() * DNA_ALPHABET.len());
         let j = crate::util::binary_search_leftmost_that_fulfills_pred(|j| j, |probe| {
+            if probe+1 == self.n_sets() * DNA_ALPHABET.len() {
+                // This needs to be a special case because otherwise the binary search
+                // will try rank on char |DNA_ALPHABET| at colex position 0, but that
+                // character does not exist.
+                return true;
+            }
             let char_idx = (probe+1) / self.n_sets();
             let node_colex = (probe+1) % self.n_sets();
             self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) > i 
