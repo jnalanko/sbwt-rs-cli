@@ -3,6 +3,7 @@ use std::io::Read;
 use std::ops::Range;
 
 use bitvec::prelude::*;
+use byteorder::ReadBytesExt;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
@@ -36,7 +37,8 @@ pub struct MergeInterleaving {
 trait ReadOnlyIntVector {
     fn get(&self, i: usize) -> usize;
     fn init(len: usize) -> Self;
-    fn len(&self, ) -> usize;
+    fn len(&self) -> usize;
+    fn dollar_symbol() -> usize;
 }
 
 impl ReadOnlyIntVector for Vec<u8> {
@@ -51,6 +53,10 @@ impl ReadOnlyIntVector for Vec<u8> {
     fn len(&self) -> usize {
         self.len() 
     }
+
+    fn dollar_symbol() -> usize {
+        b'$' as usize
+    }
 }
 
 impl ReadOnlyIntVector for CompactIntVector<3> {
@@ -64,6 +70,10 @@ impl ReadOnlyIntVector for CompactIntVector<3> {
 
     fn len(&self) -> usize {
         self.len() 
+    }
+
+    fn dollar_symbol() -> usize {
+        0
     }
 }
 
@@ -142,12 +152,12 @@ impl MergeInterleaving {
                 let pieces = (0..n_threads).map(|i| (p1[i].0, p2[i].0, p1[i].1.clone(), p2[i].1.clone())).collect();
 
                 log::debug!("Refining segmentation");
-                let new_arrays = match (chars1, chars2) {
+                let new_arrays = match (&chars1, &chars2) {
                     (ByteAlphabet(c1), ByteAlphabet(c2)) => {
-                        refine_segmentation(s1, s2, &c1, &c2, pieces, round == k-1)
+                        refine_segmentation(s1, s2, c1, c2, pieces, round == k-1)
                     },
                     (Compact(c1), Compact(c2)) => {
-                        refine_segmentation(s1, s2, &c1, &c2, pieces, round == k-1)
+                        refine_segmentation(s1, s2, c1, c2, pieces, round == k-1)
                     },
                     _ => panic!("Programmer messed up")
                 };
@@ -155,23 +165,23 @@ impl MergeInterleaving {
 
                 if round != k-1 {
                     log::debug!("Pushing labels forward in the SBWT graph");
-                    if let (ByteAlphabet(mut c1), ByteAlphabet(mut c2), Some(ByteAlphabet(mut temp1)), Some(ByteAlphabet(mut temp2))) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
+                    if let (ByteAlphabet(ref mut c1), ByteAlphabet(ref mut c2), Some(ByteAlphabet(ref mut temp1)), Some(ByteAlphabet(ref mut temp2))) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // High memory mode
-                        index1.push_all_labels_forward(&c1, &mut temp1, n_threads);
-                        std::mem::swap(&mut c1, &mut temp1);
+                        index1.push_all_labels_forward(c1, temp1, n_threads);
+                        std::mem::swap(c1, temp1);
 
-                        index2.push_all_labels_forward(&c2, &mut temp2, n_threads);
-                        std::mem::swap(&mut c2, &mut temp2);
-                    } else if let (Compact(mut c1), Compact(mut c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
+                        index2.push_all_labels_forward(&c2, temp2, n_threads);
+                        std::mem::swap(c2, temp2);
+                    } else if let (Compact(ref mut c1), Compact(ref mut c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // Low memory mode
-                        let mut temp1 = CompactIntVector::<3>::new(chars1.len());
-                        index1.push_all_labels_forward_compact(&c1, &mut temp1, n_threads);
-                        std::mem::swap(&mut c1, &mut &mut temp1);
+                        let mut temp1 = CompactIntVector::<3>::new(c1.len());
+                        index1.push_all_labels_forward_compact(c1, &mut temp1, n_threads);
+                        std::mem::swap(c1, &mut temp1);
                         drop(temp1);
 
-                        let mut temp2 = CompactIntVector::<3>::new(chars2.len());
-                        index2.push_all_labels_forward_compact(&c2, &mut temp2, n_threads);
-                        std::mem::swap(&mut c2, &mut &mut temp2);
+                        let mut temp2 = CompactIntVector::<3>::new(c2.len());
+                        index2.push_all_labels_forward_compact(c2, &mut temp2, n_threads);
+                        std::mem::swap(c2, &mut temp2);
                         drop(temp2)
                     } else {
                         panic!("Programmer messed up");
@@ -185,37 +195,18 @@ impl MergeInterleaving {
             let leader_bits = leader_bits.unwrap(); // Computed in the last round
             log::debug!("Number of suffix groups: {}", leader_bits.count_ones());
 
-            assert_eq!(s1.len(), s2.len());
-            let merged_len = s1.len();
-
             // Identify dummies in the merged SBWT
 
             log::debug!("Marking dummy nodes");
-            let piece_len = merged_len.div_ceil(n_threads);
-            let merged_piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_len)).collect();
-            let s1_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| s1[range.clone()].count_ones()).collect();
-            let s2_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| s2[range.clone()].count_ones()).collect();
-            let is_dummy_pieces = (0..n_threads).into_par_iter().map(|thread_idx| {
-                let colex_range = &merged_piece_ranges[thread_idx];
-                let mut is_dummy_bits = bitvec![u64, Lsb0 ;];
-                is_dummy_bits.resize(colex_range.len(), false);
-
-                let mut c1_idx: usize = s1_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
-                let mut c2_idx: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
-                for colex in colex_range.clone() {
-                    let d1 = s1[colex] && c1_idx < chars1.len() && chars1[c1_idx] == b'$';
-                    let d2 = s2[colex] && c2_idx < chars2.len() && chars2[c2_idx] == b'$';
-
-                    let rel_colex = colex - colex_range.start;
-                    is_dummy_bits.set(rel_colex, d1 || d2); 
-
-                    c1_idx += s1[colex] as usize;
-                    c2_idx += s2[colex] as usize;
-                }
-                is_dummy_bits 
-            }).collect();
-
-            let is_dummy = crate::util::parallel_bitvec_concat(is_dummy_pieces);
+            let is_dummy = match (chars1, chars2) {
+                (ByteAlphabet(c1), ByteAlphabet(c2)) => {
+                    mark_dummy_nodes(&s1, &s2, &c1, &c2, n_threads)
+                },
+                (Compact(c1), Compact(c2)) => {
+                    mark_dummy_nodes(&s1, &s2, &c1, &c2, n_threads)
+                },
+                _ => panic!("Programmer messed up")
+            };
 
             log::info!("Number of dummies: {}", is_dummy.count_ones());
 
@@ -242,6 +233,38 @@ impl MergeInterleaving {
         }
         ans
     }
+}
+
+fn mark_dummy_nodes<V: ReadOnlyIntVector + Send + Sync>(s1: &BitVec, s2: &BitVec, chars1: &V, chars2: &V, n_threads: usize) -> BitVec {
+    assert_eq!(s1.len(), s2.len());
+    let merged_len = s1.len();
+
+    let piece_len = merged_len.div_ceil(n_threads);
+    let merged_piece_ranges: Vec<Range<usize>> = (0..n_threads).map(|t| t*piece_len..min((t+1)*piece_len, merged_len)).collect();
+    let s1_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| s1[range.clone()].count_ones()).collect();
+    let s2_piece_popcounts: Vec<usize> = merged_piece_ranges.par_iter().map(|range| s2[range.clone()].count_ones()).collect();
+    let is_dummy_pieces = (0..n_threads).into_par_iter().map(|thread_idx| {
+        let colex_range = &merged_piece_ranges[thread_idx];
+        let mut is_dummy_bits = bitvec![u64, Lsb0 ;];
+        is_dummy_bits.resize(colex_range.len(), false);
+
+        let mut c1_idx: usize = s1_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
+        let mut c2_idx: usize = s2_piece_popcounts[..thread_idx].iter().sum(); // Skip over previous pieces
+        for colex in colex_range.clone() {
+            let d1 = s1[colex] && c1_idx < chars1.len() && chars1.get(c1_idx) == V::dollar_symbol();
+            let d2 = s2[colex] && c2_idx < chars2.len() && chars2.get(c2_idx) == V::dollar_symbol();
+
+            let rel_colex = colex - colex_range.start;
+            is_dummy_bits.set(rel_colex, d1 || d2); 
+
+            c1_idx += s1[colex] as usize;
+            c2_idx += s2[colex] as usize;
+        }
+        is_dummy_bits 
+    }).collect();
+
+    crate::util::parallel_bitvec_concat(is_dummy_pieces)
+
 }
 
 // Assumes there is at least one 1-bit
