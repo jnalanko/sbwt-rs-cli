@@ -632,8 +632,12 @@ mod tests {
 
         let inter_high_ram = MergeInterleaving::new(&sbwt1, &sbwt2, false, 3); // No RAM optimization
         let inter_low_ram = MergeInterleaving::new(&sbwt1, &sbwt2, true, 3); // With RAM optimization
+        let inter_high_ram_1_thread = MergeInterleaving::new(&sbwt1, &sbwt2, false, 1);
+        let inter_low_ram_1_thread = MergeInterleaving::new(&sbwt1, &sbwt2, true, 1);
 
         assert_eq!(inter_high_ram, inter_low_ram);
+        assert_eq!(inter_high_ram, inter_high_ram_1_thread);
+        assert_eq!(inter_high_ram, inter_low_ram_1_thread);
 
         let sbwt_merged = SbwtIndex::merge(sbwt1, sbwt2, inter_high_ram, 4, 3);
 
