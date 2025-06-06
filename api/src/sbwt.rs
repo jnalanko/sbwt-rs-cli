@@ -688,23 +688,22 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             let (r_e, c_e) = self.get_ith_edge(edges_so_far + input_range_len);
             edges_so_far += input_range_len;
             input_edge_ranges.push((r_s, c_s, r_e, c_e));
-            eprintln!("{} {} {} {}", r_s, c_s, r_e, c_e);
         } 
 
         assert_eq!(output_char_ranges.len(), input_edge_ranges.len());
 
         for t in 0..n_threads {
-            self.push_labels_forward_compact(input_edge_ranges[t], labels_in, &mut output_char_ranges[t]);
+            self.push_labels_forward_compact(input_edge_ranges[t], labels_in, &mut output_char_ranges[t], t == 0);
         }
     }
 
     /// Internal function. A compact version of [push_labels_forward].
-    pub(crate) fn push_labels_forward_compact(&self, input_edge_range: (usize, usize, usize, usize), input_chars: &CompactIntVector<3>, output_char_range: &mut CompactIntVectorMutSlice<3>){
+    pub(crate) fn push_labels_forward_compact(&self, input_edge_range: (usize, usize, usize, usize), input_chars: &CompactIntVector<3>, output_char_range: &mut CompactIntVectorMutSlice<3>, first_input_range: bool){
 
         // Tuple (start_colex_rank, start_char_idx, end_colex_rank, end_char_idx)
         let (r_s, c_s, r_e, c_e) = input_edge_range;
 
-        let has_dollar = r_s == 0;
+        let has_dollar = first_input_range; 
         if has_dollar {
             assert!(output_char_range.len() > 0);
             output_char_range.set(0,0); // The "dollar"
@@ -712,7 +711,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         let advance = |node_colex: &mut usize, outedge_c: &mut usize| {
             *node_colex += 1;
-            if *node_colex == self.n_sets() {
+            if *node_colex == self.n_sets() && *outedge_c + 1 < DNA_ALPHABET.len() {
+                // Wrap to the next SBWT matrix row
                 *node_colex = 0;
                 *outedge_c += 1;
             }
@@ -724,7 +724,6 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         let mut n_pushed = has_dollar as usize; // Skip over dollar if we have it
         while (node_colex, outedge_c) != (r_e, c_e) {
-            eprintln!("{} {} {} {}", node_colex, outedge_c, n_pushed, output_char_range.len());
             output_char_range.set(n_pushed, input_chars.get(node_colex));
             n_pushed += 1;
 
