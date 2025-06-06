@@ -14,6 +14,7 @@ use crate::sbwt::*;
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;
 type BitSlice = bitvec::slice::BitSlice<u64, Lsb0>;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeInterleaving {
     // Has one bit per colex position in the merged SBWT
     // s1[i] is 1 iff this k-mer is in the first SBWT
@@ -501,6 +502,8 @@ fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(
 #[cfg(test)]
 mod tests {
 
+    use crate::{BitPackedKmerSorting, SbwtIndexBuilder};
+
     use super::*;
 
     #[test]
@@ -609,5 +612,41 @@ mod tests {
         
     }
 
+    #[test]
+    fn test_merge() {
 
+        let k = 5;
+
+        // We need a big enough input so that the work splitting in the compact version
+        // of push_labels_forward has more than one independent piece.
+        let input_seq_1 = crate::util::gen_random_dna_string(1000, 42);
+
+        // We need a big enough input so that the work splitting in the compact version
+        // of push_labels_forward has more than one independent piece.
+        let input_seq_2 = crate::util::gen_random_dna_string(1000, 5235);
+
+        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).run_from_slices(vec![input_seq_1.as_slice()].as_slice());
+        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).run_from_slices(vec![input_seq_2.as_slice()].as_slice());
+
+        let (sbwt_both, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).run_from_slices(vec![input_seq_1.as_slice(), input_seq_2.as_slice()].as_slice());
+
+        let inter_high_ram = MergeInterleaving::new(&sbwt1, &sbwt2, false, 3); // No RAM optimization
+        let inter_low_ram = MergeInterleaving::new(&sbwt1, &sbwt2, true, 3); // With RAM optimization
+
+        assert_eq!(inter_high_ram, inter_low_ram);
+
+        let sbwt_merged = SbwtIndex::merge(sbwt1, sbwt2, inter_high_ram, 4, 3);
+
+        // Can't compare directly to sbwt_both because the dummies may differ
+        // -> Dump k-mers and remove dummies
+
+        let spectrum_true = sbwt_both.reconstruct_padded_spectrum(3);
+        let spectrum_merged = sbwt_merged.reconstruct_padded_spectrum(3);
+
+        let true_kmers: Vec<&[u8]> = spectrum_true.chunks(k).filter(|kmer| !kmer.contains(&b'$')).collect();
+        let merged_kmers : Vec<&[u8]> = spectrum_merged.chunks(k).filter(|kmer| !kmer.contains(&b'$')).collect();
+
+        assert_eq!(true_kmers, merged_kmers);
+
+    }
 }
