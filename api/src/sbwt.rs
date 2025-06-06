@@ -655,7 +655,12 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) > i
             // -1 is for the dollar.
         }, self.n_sets()*DNA_ALPHABET.len());
-        (j % self.n_sets(), j / self.n_sets())
+
+        if j == self.n_sets() * DNA_ALPHABET.len() {
+            (self.n_sets(), DNA_ALPHABET.len()-1) // Due to the same special case as in the search 
+        } else {
+            (j % self.n_sets(), j / self.n_sets())
+        }
     }
 
     /// A version of [SbwtIndex::push_all_labels_forward] that stores the labels as
