@@ -728,6 +728,8 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
                 advance(&mut node_colex, &mut outedge_c);
             }
         }
+
+        assert_eq!(n_pushed, output_char_range.len());
     }
 
 
