@@ -28,7 +28,7 @@ pub(crate) fn write_bytes<W: std::io::Write>(out: &mut W, bytes: &[u8]) -> std::
 // Return the index of the answer, or n if does not exist
 pub(crate) fn binary_search_leftmost_that_fulfills_pred<T, Access: Fn(usize) -> T, Pred: Fn(T) -> bool>(access: Access, pred: Pred, n: usize) -> usize {
     let mut ans = n;
-    let mut step = n;
+    let mut step = n.next_power_of_two();
     while step > 0 {
         while ans as isize - step as isize >= 0 && pred(access(ans-step)) {
             ans -= step;

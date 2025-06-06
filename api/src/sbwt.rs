@@ -642,7 +642,9 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     // If i is equal to the number of outedges, returns (self.n_sets(), DNA_ALPHABET.len()-1)
     fn get_ith_edge(&self, i: usize) -> (usize, usize) {
         assert!(i <= self.n_sets() * DNA_ALPHABET.len());
+        eprintln!("Searching for {}", i);
         let j = crate::util::binary_search_leftmost_that_fulfills_pred(|j| j, |probe| {
+            dbg!(probe);
             if probe+1 == self.n_sets() * DNA_ALPHABET.len() {
                 // This needs to be a special case because otherwise the binary search
                 // will try rank on char |DNA_ALPHABET| at colex position 0, but that
@@ -651,10 +653,12 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             }
             let char_idx = (probe+1) / self.n_sets();
             let node_colex = (probe+1) % self.n_sets();
-            self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) > i 
+            let res = self.C[char_idx] - 1 + self.sbwt.rank(char_idx as u8, node_colex) > i;
+            dbg!(self.n_sets(), res);
+            res
             // -1 is for the dollar.
         }, self.n_sets()*DNA_ALPHABET.len());
-        (j / self.n_sets(), j % self.n_sets())
+        (j % self.n_sets(), j / self.n_sets())
     }
 
     /// A version of [SbwtIndex::push_all_labels_forward] that stores the labels as
