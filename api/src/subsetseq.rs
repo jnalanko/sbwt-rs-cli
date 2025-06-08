@@ -1,6 +1,7 @@
 //! A module for representing a sequence of subsets of an alphabet, with support for rank and select queries
 //! on the elements of the subsets.
 
+use bitvec::order::Lsb0;
 use simple_sds_sbwt::bit_vector::*;
 use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::ops::*;
@@ -62,6 +63,11 @@ pub trait SubsetSeq{
 
     /// Returns true if the set at index `set_idx` contains the character.
     fn set_contains(&self, set_idx: usize, character: u8) -> bool;
+
+    /// Returns the index of the next set from set_idx (possibly set_idx itself) 
+    /// that contains character c, or None if does not exist.
+    /// The index set_idx can be from 0 to self.len().
+    fn next_set_with_char(&self, set_idx: usize, c: u8) -> Option<usize>;
 
     /// Writes the subset sequence to the given writer.
     /// The sequence can be loaded later back with [`SubsetSeq::load`].
@@ -199,6 +205,13 @@ impl SubsetSeq for SubsetMatrix{
             }
         }
     }
+
+    fn next_set_with_char(&self, set_idx: usize, c: u8) -> Option<usize> {
+        // Use the bitvec crate on the raw data of the row
+        let bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(self.rows[c as usize].as_ref().as_ref());
+        let off = bv[set_idx..].first_one()?;
+        Some(set_idx + off)
+    }
 }
 
 /// Formats the subset matrix as an ASCII bit matrix of 0s and 1s, where row i
@@ -232,5 +245,24 @@ mod tests {
         sm.serialize(&mut buf).unwrap();
         let sm2 = SubsetMatrix::load(&mut buf.as_slice()).unwrap();
         assert_eq!(sm, sm2);
+    }
+
+    #[test]
+    fn next_set_with_char(){
+        let sets: Vec<Vec<u8>> = vec![vec![1,2,3], vec![0,2], vec![0,1,3,4], vec![], vec![0,1,2]];
+        let sm = SubsetMatrix::new(sets, 5);
+        assert_eq!(sm.next_set_with_char(0,0), Some(1));
+        assert_eq!(sm.next_set_with_char(0,1), Some(0));
+        assert_eq!(sm.next_set_with_char(0,2), Some(0));
+        assert_eq!(sm.next_set_with_char(0,3), Some(0));
+        assert_eq!(sm.next_set_with_char(0,4), Some(2));
+
+        assert_eq!(sm.next_set_with_char(3,0), Some(4));
+        assert_eq!(sm.next_set_with_char(3,1), Some(4));
+        assert_eq!(sm.next_set_with_char(3,2), Some(4));
+        assert_eq!(sm.next_set_with_char(3,3), None);
+        assert_eq!(sm.next_set_with_char(3,4), None);
+
+        assert_eq!(sm.next_set_with_char(5,0), None); // One past the end
     }
 }
