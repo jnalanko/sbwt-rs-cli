@@ -710,27 +710,31 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             output_char_range.set(0,0); // The "dollar"
         }
 
-        let advance = |node_colex: &mut usize, outedge_c: &mut usize| {
-            *node_colex += 1;
-            if *node_colex == self.n_sets() && *outedge_c + 1 < DNA_ALPHABET.len() {
-                // Wrap to the next SBWT matrix row
-                *node_colex = 0;
-                *outedge_c += 1;
-            }
-        };
-
-        let mut node_colex = r_s;
-        let mut outedge_c = c_s;
-        assert!(self.sbwt.set_contains(node_colex, outedge_c as u8));
 
         let mut n_pushed = has_dollar as usize; // Skip over dollar if we have it
-        while (node_colex, outedge_c) != (r_e, c_e) {
-            output_char_range.set(n_pushed, input_chars.get(node_colex));
-            n_pushed += 1;
+        for c in c_s..=c_e {
+            let mut colex = if c == c_s {
+                assert!(self.sbwt.set_contains(r_s, c as u8));
+                r_s
+            } else {
+                match self.sbwt.next_set_with_char(0, c as u8) {
+                    Some(i) => i,
+                    None => break
+                }
+            };
+            let colex_end = if c == c_e {
+                r_e
+            } else {
+                self.n_sets()
+            };
 
-            advance(&mut node_colex, &mut outedge_c);
-            while (node_colex, outedge_c) != (r_e, c_e) && !self.sbwt.set_contains(node_colex, outedge_c as u8) {
-                advance(&mut node_colex, &mut outedge_c);
+            while colex < colex_end {
+                output_char_range.set(n_pushed, input_chars.get(colex));
+                n_pushed += 1;
+                colex = match self.sbwt.next_set_with_char(colex+1, c as u8) {
+                    Some(i) => i,
+                    None => break // End of row
+                }
             }
         }
 
