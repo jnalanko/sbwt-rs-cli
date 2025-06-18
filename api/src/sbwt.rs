@@ -703,6 +703,10 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         // Tuple (start_colex_rank, start_char_idx, end_colex_rank, end_char_idx)
         let (r_s, c_s, r_e, c_e) = input_edge_range;
+        if (r_s, c_s) == (r_e, c_e) {
+            return; // Empty input range -> nothing to do
+            // If we don't return here then one of the asserts below will fail.
+        }
 
         let has_dollar = first_input_range; 
         if has_dollar {
