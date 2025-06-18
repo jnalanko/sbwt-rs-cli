@@ -1267,17 +1267,17 @@ mod tests {
 
         // We need a big enough input so that the work splitting in the compact version
         // of push_labels_forward has more than one independent piece.
-        let input_seq = crate::util::gen_random_dna_string(2000, 123);
+        let input_seq = crate::util::gen_random_dna_string(2000, 1234);
 
         let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(5).run_from_slices(vec![input_seq.as_slice()].as_slice());
 
-        let mut in_labels = crate::util::gen_random_dna_string(sbwt.n_sets(), 345);
+        let mut in_labels = crate::util::gen_random_dna_string(sbwt.n_sets(), 1234);
         in_labels[100] = b'$'; // Put in a dollar in the middle for fun
 
         let mut out_labels = vec![0_u8; sbwt.n_sets()];
         sbwt.push_all_labels_forward(&in_labels, out_labels.as_mut_slice(), 3);
 
-        // Correct labels for the random strings with seeds 123 (input_seq) and 345 (in_labels)
+        // Correct labels for the random strings with seeds 1234 (input_seq) and 1234 (in_labels)
         let correct_out_labels = b"$CGGACTATTGTGAATTCCGCGGTCT$CCGAGGTGGTGCATACGCTGTGCACTTAGAGTATTACTGGTCCGCCATACGCCAGGTGCCAATTGGTACGCGGTACTAATGCGGCCGGACGTGCTATCTAATACTACGATAACAAGGCAAATGGTTTAAACATTGTGGTATAATTATCAATTGGTTCCGAGGTTGGGTTTCGCCAACTGTCCTCGAGCTAACCGAGTGTTTCGCTATGCAATTCCCGTTC$CCGAGGGTGGTGCTATACGCTGTGCCACTTAAATGTATTCTTGGTCCGGCCATAGGAGGTGCAATTGTACGGGTGACTATGCGCGCGGACGTTGCTATGCTATATCTCTGACTTAACAGGCAAATGTAAACATTGTGGTATAATATATCAGTTGGTTCCGGAGGTTGGGTGTTTCGCCAACTGTCTCGAGCGTAAACCGATGTTTCGGACTATTGTGCAATCGTGTTCT$CCGAGGGTGGTGCAATACGCTGTGCCACAGAATGTATTCTTGTCCGGCCATACGCCGAGGTCAATTGGTAGCGGTGACAATGCGCGCCGGACGTGCTAGCTTATCTACTGACTTACAAGAGCAAATGGTTTACTTGGTAAATAATCAATTGGTCCGGAGGTGGGTTCGCCAACTTCCTGACAAACCGATGTTCGGCTTTGGCAATTCCGCGGTTCT$CGAGGGTGTGCATATCGCTGTCCCTTAGATGATACTTGGCCGGCTACGCCGAGGTGCCATGGTACCGGTGTAATGCGCGCGGAGTTCTATCTAATACTACTGACTAACAAGAGCAAATGGTTAAACATTGTGGTATAATATATCAAGTTGGTCGGAGGTTGGGTGTTCCCAACTGTCCTCGGCGTAAACCGAGTGTT".to_vec();
 
         assert_eq!(out_labels, correct_out_labels);
