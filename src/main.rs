@@ -105,6 +105,7 @@ fn build_command(matches: &clap::ArgMatches){
     let infile = matches.get_one::<std::path::PathBuf>("input").unwrap();
     let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
     let build_lcs = matches.get_flag("build-lcs");
+    let build_select = matches.get_flag("build-select");
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
@@ -125,7 +126,7 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
     let algorithm = BitPackedKmerSorting::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
-    let (sbwt, lcs) = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algorithm).build_lcs(build_lcs).precalc_length(precalc_length).run(reader);
+    let (sbwt, lcs) = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algorithm).build_lcs(build_lcs).build_select_support(build_select).precalc_length(precalc_length).run(reader);
     let end_time = std::time::Instant::now();
     log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
 
@@ -747,6 +748,11 @@ fn main() {
                 .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
                 .short('l')
                 .long("build-lcs")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("build-select")
+                .help("Build with select support.")
+                .long("build-select")
                 .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("k")
