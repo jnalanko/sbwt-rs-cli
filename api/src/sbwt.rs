@@ -1,7 +1,6 @@
 //! The [SbwtIndex] data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder).
 
 use std::cmp::min;
-use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::ops::Range;
@@ -10,7 +9,6 @@ use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
-use rand::AsByteSliceMut;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
@@ -23,7 +21,6 @@ use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
 use crate::subsetseq::*;
 use crate::util;
-use crate::util::segment_range;
 use crate::util::ACGT_TO_0123;
 use crate::util::DNA_ALPHABET;
 use crate::merge::MergeInterleaving;
@@ -1054,7 +1051,7 @@ impl PrefixLookupTable {
 #[cfg(test)]
 mod tests {
 
-    use rand_chacha::rand_core::{RngCore, SeedableRng};
+    
 
     use crate::builder::{BitPackedKmerSorting, SbwtIndexBuilder};
 

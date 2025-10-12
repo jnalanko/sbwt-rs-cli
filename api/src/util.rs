@@ -7,12 +7,9 @@ use std::ops::Range;
 
 use bitvec::prelude::*;
 use rayon::iter::ParallelBridge;
-use simple_sds_sbwt::bit_vector::BitVector;
-use simple_sds_sbwt::ops::Select;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
-use simple_sds_sbwt::raw_vector::AccessRaw;
 use simple_sds_sbwt::serialize::Serialize;
 
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;

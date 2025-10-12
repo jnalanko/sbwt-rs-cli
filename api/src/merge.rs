@@ -1,9 +1,7 @@
 use std::cmp::min;
-use std::io::Read;
 use std::ops::Range;
 
 use bitvec::prelude::*;
-use byteorder::ReadBytesExt;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
