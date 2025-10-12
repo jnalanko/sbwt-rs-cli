@@ -13,7 +13,6 @@ use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use simple_sds_sbwt::serialize::Serialize;
 
 use crate::compact_int_vector::CompactIntVector;
 use crate::compact_int_vector::CompactIntVectorMutSlice;

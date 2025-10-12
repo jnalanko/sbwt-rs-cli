@@ -8,7 +8,6 @@ use std::ops::Range;
 use bitvec::prelude::*;
 use rayon::iter::ParallelBridge;
 use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use simple_sds_sbwt::serialize::Serialize;
 
