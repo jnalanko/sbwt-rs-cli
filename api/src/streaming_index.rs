@@ -1,5 +1,8 @@
 //! A streaming query index that uses right extensions and left contractions to find matches.
 
+use std::ops::Range;
+
+use crate::streaming_index;
 use crate::subsetseq::*;
 use crate::sbwt::*;
 use rayon::iter::IndexedParallelIterator;
@@ -26,7 +29,9 @@ pub trait ContractLeft {
 }
 
 /// An index that uses right extensions and left contractions to find matches in a streaming fashion.
-#[derive(Clone, Eq, PartialEq, Debug)]
+/// The Copy trait is implemented because this struct contains only references to components of the
+/// index, so it can be copied around cheaply.
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct StreamingIndex<'a, E: ExtendRight, C: ContractLeft> {
     extend_right: &'a E,
     contract_left: &'a C,
@@ -192,6 +197,7 @@ impl LcsArray {
 
 }
 
+
 impl<E: ExtendRight, C: ContractLeft> StreamingIndex<'_, E, C>{
 
     /// Returns an array A of length `query.len()`, where A\[i\] is a pair (d, I) where d is the length of the shortest suffix
@@ -244,34 +250,85 @@ impl<E: ExtendRight, C: ContractLeft> StreamingIndex<'_, E, C>{
     /// The algorithm is described in the paper [Finimizers: Variable-length bounded-frequency minimizers for k-mer sets](https://doi.org/10.1101/2024.02.19.580943).
     #[allow(non_snake_case)]
     pub fn matching_statistics(&self, query: &[u8]) -> Vec<(usize, std::ops::Range<usize>)> {
-        let mut d = 0_usize;
-        let mut MS = vec![(0_usize, 0..0); query.len()];
-        let mut I = 0..self.n;
-        for i in 0..query.len() {
-            if !crate::util::is_dna(query[i]) {
-                // Invalid character. Attempting to right-extend would panic, and anyway
-                // we would need to contract all the way to the empty string, and that would
-                // take a long time with the current LCS-scanning implementation.
-                // So, we just reset the interval to the interval of the empty string.
-                I = 0..self.n;
-                d = 0;
-            } else {
-                let mut Ic = self.extend_right.extend_right(I.clone(), query[i]);
-                while d > 0 && Ic.is_empty() {
-                    I = self.contract_left.contract_left(I, d-1);
-                    d -= 1;
-                    Ic = self.extend_right.extend_right(I.clone(), query[i]);
-                }
-                if !Ic.is_empty() {
-                    I = Ic;
-                    d = std::cmp::min(self.k, d+1);
-                }
-            }
-            MS[i] = (d, I.clone());
-        }
-        MS
+        let iter = self.matching_statistics_iter(&query);
+        iter.collect()
     }
 
+    /// Runs one step of the matching statistic algorithm. To run the whole
+    /// algorithm, use [StreamingIndex::matching_statistics]`.
+    /// c: the next character
+    /// I: the current colex interval
+    /// d: the current match length
+    /// Returns the new match length and new colex interval
+    fn matching_statistics_update_step(&self, c: u8, mut I: Range<usize>, mut d: usize) -> (usize, Range<usize>) {
+        if !crate::util::is_dna(c) { // Invalid character. Attempting to right-extend would panic, and anyway
+            // we would need to contract all the way to the empty string, and that would
+            // take a long time with the current LCS-scanning implementation.
+            // So, we just reset the interval to the interval of the empty string.
+            (0, 0..self.n)
+        } else {
+            let mut Ic = self.extend_right.extend_right(I.clone(), c);
+            while d > 0 && Ic.is_empty() {
+                I = self.contract_left.contract_left(I, d-1);
+                d -= 1;
+                Ic = self.extend_right.extend_right(I.clone(), c);
+            }
+            if !Ic.is_empty() {
+                I = Ic;
+                d = std::cmp::min(self.k, d+1);
+            } else {
+                // Ic can be empty if d=0 and the extension still fails.
+                // In this case character c is not in the index at all, so
+                // I should be set to the interval of the empty string.
+                // In that case, I is already correct here, so we do not
+                // need to do anything. TODO: is this case covered by tests?
+            } 
+            (d, I)
+        }
+    }
+
+    // Return an iterator producing values of matching statistics
+    pub fn matching_statistics_iter<'a,'b>(&'a self, query: &'b[u8]) -> MatchingStatisticsIterator<'a, 'b, E, C> {
+        MatchingStatisticsIterator { 
+            colex_range: 0..self.n, 
+            match_len: 0, 
+            query_pos: 0,
+            streaming_index: StreamingIndex { 
+                extend_right: self.extend_right, 
+                contract_left: self.contract_left, 
+                n: self.n, k: self.k 
+            },
+            query 
+        }
+    }
+
+}
+
+pub struct MatchingStatisticsIterator<'a, 'b, E: ExtendRight, C: ContractLeft> {
+    // Algorithm state
+    pub colex_range: Range<usize>,
+    pub match_len: usize,
+    pub query_pos: usize,
+
+    // Index
+    pub streaming_index: StreamingIndex<'a, E, C>,
+
+    // Query
+    pub query: &'b [u8],
+}
+
+impl<'a, 'b, E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'a, 'b, E, C> {
+    type Item = (usize, Range<usize>); // Left, colex interval
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.query_pos < self.query.len() {
+            (self.match_len, self.colex_range) = self.streaming_index.matching_statistics_update_step(self.query[self.query_pos], self.colex_range.clone(), self.match_len);
+            self.query_pos += 1;
+            Some((self.match_len, self.colex_range.clone()))
+        } else {
+            None // End of iteration
+        }
+    }
 }
 
 #[cfg(test)]
