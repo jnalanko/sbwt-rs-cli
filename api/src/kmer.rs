@@ -198,6 +198,8 @@ pub struct KmerIterator<'a, const B: usize> {
 }
 
 impl<'a, const B: usize> KmerIterator<'a, B> {
+
+    #[allow(dead_code)]
     pub fn new(seq: &'a [u8], k: usize) -> KmerIterator<'a, B>{
         Self{seq, cur_kmer: LongKmer::from_u64_data([0; B]), first_iteration: true, next_seq_pos: 0, cur_len: 0, k}
     }

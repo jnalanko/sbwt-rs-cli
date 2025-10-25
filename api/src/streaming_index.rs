@@ -2,7 +2,6 @@
 
 use std::ops::Range;
 
-use crate::streaming_index;
 use crate::subsetseq::*;
 use crate::sbwt::*;
 use rayon::iter::IndexedParallelIterator;

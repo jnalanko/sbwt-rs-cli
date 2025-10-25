@@ -35,6 +35,8 @@ pub struct MergeInterleaving {
 
 trait ReadOnlyIntVector {
     fn get(&self, i: usize) -> usize;
+
+    #[allow(dead_code)]
     fn init(len: usize) -> Self;
     fn len(&self) -> usize;
     fn dollar_symbol() -> usize;
@@ -82,6 +84,7 @@ enum CharVector {
 }
 
 impl CharVector{
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         match self {
             Self::ByteAlphabet(v) => v.len(),
@@ -93,6 +96,7 @@ impl CharVector{
         CharVector::ByteAlphabet(vec![0; len])
     }
 
+    #[allow(dead_code)]
     fn init_compact(len: usize) -> CharVector {
         CharVector::Compact(CompactIntVector::<3>::new(len))
     }

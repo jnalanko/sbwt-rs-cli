@@ -23,6 +23,7 @@ impl<const B: usize> KmersWithLengths<B> {
 
     // Returns the index of the first k-mer that starts with c,
     // self.len() if not found.
+    #[allow(dead_code)]
     pub fn first_that_starts_with(&self, c: u8) -> usize {
         binary_search_leftmost_that_fulfills_pred(
             |i| self.get(i), 

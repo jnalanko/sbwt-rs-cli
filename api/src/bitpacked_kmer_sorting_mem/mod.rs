@@ -4,8 +4,6 @@ mod dummies;
 mod kmer_splitter;
 mod cursors;
 
-use std::cmp::max;
-
 use dummies::KmersWithLengths;
 use kmer_splitter::get_bitpacked_sorted_distinct_kmers;
 
