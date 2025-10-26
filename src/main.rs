@@ -526,6 +526,12 @@ fn index_stats_command(matches: &clap::ArgMatches) {
             println!("Lookup table prefix length {}", sbwt.get_lookup_table().prefix_length);
             println!("Number of k-mers: {}", sbwt.n_kmers());
             println!("Number of sbwt sets: {}", sbwt.n_sets());
+
+            let total_set_size: usize =
+                (0..sbwt.alphabet().len())
+                .map(|c| sbwt.sbwt().rank(c as u8, sbwt.n_sets()))
+                .sum();
+            println!("Total size of sets: {}", total_set_size);
         }
     };
 }
