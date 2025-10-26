@@ -507,6 +507,29 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: 
     }
 }
 
+fn index_stats_command(matches: &clap::ArgMatches) {
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+
+    // Read sbwt
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let cpp_format = matches.get_flag("load-cpp-format");
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
+
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            println!("k: {}", sbwt.k());
+            println!("Lookup table prefix length {}", sbwt.get_lookup_table().prefix_length);
+            println!("Number of k-mers: {}", sbwt.n_kmers());
+            println!("Number of sbwt sets: {}", sbwt.n_sets());
+        }
+    };
+}
+
 fn dump_unitigs_command(matches: &clap::ArgMatches) {
 
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
@@ -831,6 +854,16 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("index-stats")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("index")
+                .help("SBWT index file")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+        )
         .subcommand(clap::Command::new("matching-statistics")
             .arg_required_else_help(true)
             .arg(clap::Arg::new("index")
@@ -987,6 +1020,7 @@ fn main() {
         Some(("benchmark", sub_matches)) => benchmark_command(sub_matches),
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
+        Some(("index-stats", sub_matches)) => index_stats_command(sub_matches),
         _ => unreachable!(),
     }
     
