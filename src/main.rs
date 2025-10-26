@@ -5,6 +5,8 @@ use std::io::stdout;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use sbwt::dbg::Dbg;
 use sbwt::*;
 use sbwt::benchmark;
@@ -507,8 +509,30 @@ fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: 
     }
 }
 
+fn sbwt_set_size_distribution(index: &SbwtIndex<SubsetMatrix>, n_threads: usize) -> Vec<usize> {
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+    let sigma = index.alphabet().len();
+    let sbwt = index.sbwt();
+    thread_pool.install(|| {
+        (0..index.n_sets()).into_par_iter().map(|i| sbwt.subset_size(i))
+        .fold(
+            || vec![0_usize; sigma+1], // Counts of sizes 0..sigma
+            |mut acc, count| {acc[count] += 1; acc}
+        )
+        .reduce(|| vec![0_usize; sigma+1], |mut acc, v| {
+            // Sum up the counts vectors
+            for i in 0..=sigma {
+                acc[i] += v[i];
+            }
+            acc
+        })
+    })
+}
+
 fn index_stats_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let compute_size_distribution = matches.get_flag("size-distribution");
 
     // Read sbwt
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
@@ -527,11 +551,13 @@ fn index_stats_command(matches: &clap::ArgMatches) {
             println!("Number of k-mers: {}", sbwt.n_kmers());
             println!("Number of sbwt sets: {}", sbwt.n_sets());
 
-            let total_set_size: usize =
-                (0..sbwt.alphabet().len())
-                .map(|c| sbwt.sbwt().rank(c as u8, sbwt.n_sets()))
-                .sum();
-            println!("Total size of sets: {}", total_set_size);
+            if compute_size_distribution {
+                let v = sbwt_set_size_distribution(&sbwt, n_threads);
+                println!("Sbwt set size distribution: ");
+                for (i, x) in v.into_iter().enumerate() {
+                    println!("{i}: {x}");
+                }
+            }
         }
     };
 }
@@ -868,6 +894,13 @@ fn main() {
                 .long("index")
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("size-distribution")
+                .help("Compute the size distribution of SBWT sets")
+                .short('s')
+                .long("size-distribution")
+                .required(true)
+                .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
