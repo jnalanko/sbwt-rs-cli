@@ -553,9 +553,10 @@ fn index_stats_command(matches: &clap::ArgMatches) {
 
             if compute_size_distribution {
                 let v = sbwt_set_size_distribution(&sbwt, n_threads);
+                let total: usize = v.iter().sum();
                 println!("Sbwt set size distribution: ");
                 for (i, x) in v.into_iter().enumerate() {
-                    println!("{i}: {x}");
+                    println!("{i}: {x} ({}%)", x as f64 / total as f64);
                 }
             }
         }
