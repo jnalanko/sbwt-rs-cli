@@ -556,7 +556,7 @@ fn index_stats_command(matches: &clap::ArgMatches) {
                 let total: usize = v.iter().sum();
                 println!("Sbwt set size distribution: ");
                 for (i, x) in v.into_iter().enumerate() {
-                    println!("{i}: {x} ({}%)", x as f64 / total as f64 * 100.0);
+                    println!("{i}: {x} ({:.2}%)", x as f64 / total as f64 * 100.0);
                 }
             }
         }
