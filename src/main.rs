@@ -2,6 +2,7 @@ use std::cmp::max;
 use std::fs::File;
 use std::io;
 use std::io::stdout;
+use std::io::BufRead;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
@@ -19,6 +20,52 @@ struct MySeqReader {
 impl sbwt::SeqStream for MySeqReader {
     fn stream_next(&mut self) -> Option<&[u8]> {
         self.inner.read_next().unwrap().map(|rec| rec.seq)
+    }
+}
+
+struct MyMultiFileSeqReader {
+    paths: Vec<PathBuf>,
+    next_idx: usize,
+    current: Option<jseqio::reader::DynamicFastXReader>,
+
+    // Need to copy sequences to a local buffer because we can't return references
+    // into the current reader because it may be freed while the caller still holds a reference.
+    local_buf: Vec<u8>, 
+}
+
+impl MyMultiFileSeqReader {
+    fn new(paths: Vec<PathBuf>) -> Self {
+        Self {
+            paths,
+            next_idx: 0,
+            current: None,
+            local_buf: vec![]
+        }
+    }
+}
+
+impl sbwt::SeqStream for MyMultiFileSeqReader {
+    fn stream_next(&mut self) -> Option<&[u8]> {
+        loop {
+            if let Some(current) = &mut self.current {
+                if let Some(rec) = current.read_next().unwrap() {
+                    self.local_buf.clear();
+                    self.local_buf.extend_from_slice(rec.seq);
+                    return Some(&self.local_buf);
+                } else {
+                    self.current = None; // Finished current file
+                }
+            }
+
+            // Open next file if available
+            if self.next_idx < self.paths.len() {
+                let path = &self.paths[self.next_idx];
+                self.next_idx += 1;
+                self.current = Some(jseqio::reader::DynamicFastXReader::from_file(path).unwrap());
+            } else {
+                return None; // No more files
+            }
+        }
     }
 }
 
@@ -98,10 +145,42 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
 
 }
 
+enum InputMode {
+    SingleFile(PathBuf),
+    FileList(PathBuf),
+}
+
+fn read_lines(path: &PathBuf) -> Vec<PathBuf> {
+    let file = File::open(path).unwrap();
+    let reader = io::BufReader::new(file);
+    let mut paths = Vec::<PathBuf>::new();
+    for line in reader.lines() {
+        let line = line.unwrap();
+        paths.push(PathBuf::from(line));
+    }
+    paths
+}
+
+fn run_build_algorithm<A: SbwtConstructionAlgorithm + Default>(builder: SbwtIndexBuilder<A>, input_mode: InputMode) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    match input_mode {
+        InputMode::SingleFile(path_buf) => {
+            let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(&path_buf).unwrap()};
+            builder.run(reader)
+        }
+        InputMode::FileList(path_buf) => {
+            let paths = read_lines(&path_buf);
+            let multi_reader = MyMultiFileSeqReader::new(paths);
+            builder.run(multi_reader)
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 fn build_command(matches: &clap::ArgMatches){
 
-    let infile = matches.get_one::<std::path::PathBuf>("input").unwrap();
+    let infile = matches.get_one::<std::path::PathBuf>("input");
+    let in_listfile = matches.get_one::<std::path::PathBuf>("input-list");
+
     let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
     let build_lcs = matches.get_flag("build-lcs");
     let k = *matches.get_one::<usize>("k").unwrap();
@@ -113,7 +192,13 @@ fn build_command(matches: &clap::ArgMatches){
     let precalc_length = *matches.get_one::<usize>("prefix-precalc-length").unwrap();
     let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
 
-    let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(infile).unwrap()};
+    let input_mode = if let Some(input) = infile {
+        InputMode::SingleFile(input.clone())
+    } else if let Some(input_list) = in_listfile {
+        InputMode::FileList(input_list.clone())
+    } else {
+        panic!("Either --input or --input-list must be given");
+    };
 
     // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
     let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); 
@@ -126,10 +211,12 @@ fn build_command(matches: &clap::ArgMatches){
     let start_time = std::time::Instant::now();
     let (sbwt, lcs) = if in_memory {
         let algo = BitPackedKmerSortingMem::new().mem_gb(mem_gb).dedup_batches(dedup_batches);
-        SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).run(reader)
+        let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length);
+        run_build_algorithm(builder, input_mode)
     } else {
         let algo = BitPackedKmerSorting::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
-        SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).run(reader)
+        let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length);
+        run_build_algorithm(builder, input_mode)
     };
     let end_time = std::time::Instant::now();
     log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
@@ -657,6 +744,12 @@ fn main() {
                 .short('i')
                 .long("input")
                 .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("input-list")
+                .help("A file containing a list of filenames of sequence lines, one per line")
+                .long("input-list")
+                .conflicts_with("input")
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("output-prefix")
