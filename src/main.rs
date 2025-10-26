@@ -899,7 +899,6 @@ fn main() {
                 .help("Compute the size distribution of SBWT sets")
                 .short('s')
                 .long("size-distribution")
-                .required(true)
                 .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("load-cpp-format")
