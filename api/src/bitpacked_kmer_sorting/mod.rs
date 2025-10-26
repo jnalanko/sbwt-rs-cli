@@ -37,6 +37,8 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Total size of deduplicated k-mer bins: {} bytes ({})", n_bytes_after_dedup, human_bytes(n_bytes_after_dedup as f64));
 
         let mut kmers_file = temp_file_manager.create_new_file("kmers-", 10, ".bin");
+
+        log::info!("Concatenating deduplicated bins");
         let concat_space_overhead = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
 
         let concat_space_peak = n_bytes_after_dedup + concat_space_overhead;
