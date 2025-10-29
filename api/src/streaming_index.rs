@@ -45,6 +45,14 @@ impl<'a, SS: SubsetSeq> StreamingIndex<'a, SbwtIndex<SS>, LcsArray> {
     pub fn new(sbwt: &'a SbwtIndex<SS>, lcs: &'a LcsArray) -> Self {
         StreamingIndex{contract_left: lcs, extend_right: sbwt, n: sbwt.n_sets(), k: sbwt.k()}
     }
+
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
+    pub fn sbwt_len(&self) -> usize {
+        self.n
+    }
 }
 
 /// An array that stores the lengths of the longest common suffixes of consecutive k-mers in 
