@@ -90,10 +90,10 @@
 //! 
 //! # Construction algorithms 
 //! 
-//! The crate currently provides one construction algorithm: [bitpacked k-mer sorting][`builder::BitPackedKmerSorting`]. 
-//! This extracts all k-mers in the input, packs each k-mer to 2k bits, and sorts them in parallel. This requires O(nk) time and disk
-//! space, so it is suitable only for small k. There is still a lot of room for optimization in the implementation. 
-//! For larger k, a suffix-array-based construction algorithm is planned.
+//! The crate provides two construction algorithms: a disk-based
+//! [bitpacked k-mer sorting][`builder::BitPackedKmerSorting`] algorithm, and
+//! an [in-memory](`builder::BitPackedKmerSortingMem`) variant that is faster but 
+//! requires more RAM.
 //! 
 //! # Details on the space usage of the index
 //! 
