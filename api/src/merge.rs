@@ -1,4 +1,4 @@
-//!## Merging Two `SbwtIndex` Structures
+//!## Merging two [SbwtIndex] structures.
 //!To merge two `SbwtIndex` structures, follow these steps:
 //!1. **Compute the interleaving plan** . Create a [MergeInterleaving] instance using [MergeInterleaving::new]. This interleaving serves as a blueprint for how the two SBWTs will be merged. It can also be queried to compute the size of the [intersection](MergeInterleaving::intersection_size) or the [union](MergeInterleaving::union_size) of the k-mer sets in the SBWTs.
 //!2. **Execute the merge**. Pass the interleaving and the two SBWTs to the [merge] function.
