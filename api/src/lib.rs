@@ -139,7 +139,6 @@ mod compact_int_vector;
 
 pub mod dbg;
 pub mod benchmark;
-pub mod merge;
 
 mod sdsl_compatibility;
 
@@ -154,6 +153,9 @@ pub use streaming_index::{StreamingIndex, LcsArray};
 
 mod subsetseq;
 pub use subsetseq::*;
+
+mod merge;
+pub use merge::{MergeInterleaving, merge};
 
 pub use unitig_flipper::Orientation;
 pub use util::reverse_complement_in_place;

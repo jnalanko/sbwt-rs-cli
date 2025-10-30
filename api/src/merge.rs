@@ -21,6 +21,7 @@ use crate::sbwt::*;
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;
 type BitSlice = bitvec::slice::BitSlice<u64, Lsb0>;
 
+/// A interleaving plan for [merging](merge) two SBWTs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeInterleaving {
     // Has one bit per colex position in the merged SBWT
