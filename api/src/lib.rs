@@ -31,7 +31,7 @@
 //! let seq_stream = sbwt::SliceSeqStream::new(seqs.as_slice());
 //! let (sbwt, lcs) = SbwtIndexBuilder::new()
 //!     .k(6).n_threads(4).build_lcs(true).add_rev_comp(true)
-//!     .algorithm(BitPackedKmerSorting::new()
+//!     .algorithm(BitPackedKmerSortingDisk::new()
 //!         .mem_gb(2)
 //!         .dedup_batches(false)
 //!         .temp_dir(Path::new("./temp")))

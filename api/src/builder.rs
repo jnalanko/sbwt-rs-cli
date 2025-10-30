@@ -91,7 +91,7 @@ impl BitPackedKmerSortingDisk {
     }
 }
 
-impl SbwtConstructionAlgorithm for BitPackedKmerSorting {
+impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mem_gb = self.mem_gb;
         let dedup_batches = self.dedup_batches;
