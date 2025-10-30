@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.1
+
+New algorithms and performance improvements. This is a major update, but still backward compatible.
+
+* Add an algorithm to merge two SBWTs.
+* Improvements in the parallelism and performance of the in-memory construction algorithm.
+* In-memory construction is no longer behind a feature gate.
+* Rename BitPackedKmerSorting to BitPackedKmerSortingDisk. The old type name works as an alias but is marked as deprecated.
+* Add a streaming matching statistics iterator.
+
 ## v0.4.0
 
 - Added `iter_unitigs_with_callback`. This can break existing code because now `parallel_export_unitigs` also takes the

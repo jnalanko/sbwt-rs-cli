@@ -127,7 +127,7 @@ pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtInd
 
 }
 
-/// Loads an index that was previously serialized either with the C++ API https://github.com/algbio/SBWT,
+/// Loads an index that was previously serialized either with the C++ API <https://github.com/algbio/SBWT>,
 /// or the associated CLI. Supports only version v0.1.
 #[allow(non_snake_case)] // For C-array
 pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std::io::Result<SbwtIndexVariant> {
