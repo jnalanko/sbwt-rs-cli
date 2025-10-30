@@ -294,9 +294,7 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
         }
     }
 
-    /// Returns an iterator that produces values of the matching statistics one by one. Useful for
-    /// streaming over the matching statistics without having to keep the values in memory all at once.
-    /// Using [Iterator::collect] on the iterator will give the same result as calling [Self::matching_statistics].
+    /// Returns a [MatchingStatisticsIterator] for streaming the matching statistics.
     pub fn matching_statistics_iter<'a>(&self, query: &'a [u8]) -> MatchingStatisticsIterator<'index, 'a, E, C> {
         MatchingStatisticsIterator { 
             colex_range: 0..self.n, 
@@ -313,17 +311,20 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
 
 }
 
+/// An iterator that produces values of the matching statistics one by one. Useful for
+/// streaming over the matching statistics without having to keep the values in memory all at once.
+/// Using [Iterator::collect] on the iterator will give the same vector as [StreamingIndex::matching_statistics].
 pub struct MatchingStatisticsIterator<'a, 'b, E: ExtendRight, C: ContractLeft> {
     // Algorithm state
-    pub colex_range: Range<usize>,
-    pub match_len: usize,
-    pub query_pos: usize,
+    colex_range: Range<usize>,
+    match_len: usize,
+    query_pos: usize,
 
     // Index
-    pub streaming_index: StreamingIndex<'a, E, C>,
+    streaming_index: StreamingIndex<'a, E, C>,
 
     // Query
-    pub query: &'b [u8],
+    query: &'b [u8],
 }
 
 impl<'a, 'b, E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'a, 'b, E, C> {
