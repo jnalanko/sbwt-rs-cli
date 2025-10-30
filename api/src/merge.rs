@@ -1,11 +1,3 @@
-//!## Merging two [SbwtIndex] structures.
-//!To merge two `SbwtIndex` structures, follow these steps:
-//!1. **Compute the interleaving plan** . Create a [MergeInterleaving] instance using [MergeInterleaving::new]. This interleaving serves as a blueprint for how the two SBWTs will be merged. It can also be queried to compute the size of the [intersection](MergeInterleaving::intersection_size) or the [union](MergeInterleaving::union_size) of the k-mer sets in the SBWTs.
-//!2. **Execute the merge**. Pass the interleaving and the two SBWTs to the [merge] function.
-//! 
-//!The merge algorithm is an adaptation of the Wheeler graph merge algorithm described in  
-//![*"Buffering updates enables efficient dynamic de Bruijn graphs"* (Alanko et al. 2021)](https://doi.org/10.1016/j.csbj.2021.06.047) ,
-//! tailored specifically for the SBWT.
 
 use std::cmp::min;
 use std::ops::Range;
@@ -21,7 +13,14 @@ use crate::sbwt::*;
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;
 type BitSlice = bitvec::slice::BitSlice<u64, Lsb0>;
 
-/// A interleaving plan for [merging](merge) two SBWTs.
+/// ## An interleaving plan for [merging](merge) two [SbwtIndex] structures.
+///To merge two `SbwtIndex` structures, follow these steps:
+///1. **Compute the interleaving plan** . Create a [MergeInterleaving] instance using [MergeInterleaving::new]. This interleaving serves as a blueprint for how the two SBWTs will be merged. It can also be queried to compute the size of the [intersection](MergeInterleaving::intersection_size) or the [union](MergeInterleaving::union_size) of the k-mer sets in the SBWTs.
+///2. **Execute the merge**. Pass the interleaving and the two SBWTs to the [merge] function.
+/// 
+///The merge algorithm is an adaptation of the Wheeler graph merge algorithm described in  
+///[*"Buffering updates enables efficient dynamic de Bruijn graphs"* (Alanko et al. 2021)](https://doi.org/10.1016/j.csbj.2021.06.047) ,
+/// tailored specifically for the SBWT.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeInterleaving {
     // Has one bit per colex position in the merged SBWT
