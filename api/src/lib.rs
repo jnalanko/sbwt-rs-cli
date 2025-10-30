@@ -47,7 +47,7 @@
 //! let lcs = lcs.unwrap(); // Ok because we used build_lcs(true)
 //! let streaming_index = StreamingIndex::new(&sbwt, &lcs);
 //! let long_query = b"TGATACGTCTTAGTGACTCGTTT";
-//! for (i, (len, range)) in streaming_index.matching_statistics(long_query).iter().enumerate() {
+//! for (i, (len, range)) in streaming_index.matching_statistics_iter(long_query).enumerate() {
 //!     // Kmer ending at long_query[i] exists iff len == k
 //!     println!("Longest match ending at {} has length {} and colex range {:?}", i, len, range);
 //! }
