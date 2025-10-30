@@ -367,6 +367,7 @@ fn merge_sorted_unique_in_place<const B: usize>(a: &mut Vec<LongKmer<B>>, b: Vec
     while i >= 0 && j >= 0 {
         let va = a[i as usize];
         let vb = b[j as usize];
+        #[allow(clippy::comparison_chain)]
         if va > vb {
             a[k as usize] = va;
             i -= 1;
