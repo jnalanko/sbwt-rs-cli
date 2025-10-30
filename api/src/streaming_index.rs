@@ -311,7 +311,7 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
 
 }
 
-/// An iterator that produces values of the matching statistics one by one. Useful for
+/// An iterator that produces values of the matching statistics one by one. Create with [StreamingIndex::matching_statistics_iter()]. Useful for
 /// streaming over the matching statistics without having to keep the values in memory all at once.
 /// Using [Iterator::collect] on the iterator will give the same vector as [StreamingIndex::matching_statistics].
 pub struct MatchingStatisticsIterator<'a, 'b, E: ExtendRight, C: ContractLeft> {
