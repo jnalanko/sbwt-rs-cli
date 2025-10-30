@@ -120,7 +120,7 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
 }
 
 /// A construction algorithm based on sorting of bit-packed k-mers in entirely in RAM.
-/// Faster and scales better with parallelism than [BitPackedKmerSorting], but takes
+/// Faster and scales better with parallelism than [BitPackedKmerSortingDisk], but takes
 /// more RAM.
 #[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
