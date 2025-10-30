@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use sbwt::dbg::Dbg;
 use sbwt::*;
 use sbwt::benchmark;
-use sbwt::merge::MergeInterleaving;
 
 use jseqio::reader::*;
 
@@ -674,7 +673,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the merge interleaving");
-    let merged = merge::merge(index1, index2, interl, lut_len, n_threads);
+    let merged = merge(index1, index2, interl, lut_len, n_threads);
     log::info!("Serializing to {}", out_path.display());
     sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
     log::info!("Finished");
