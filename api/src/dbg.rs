@@ -390,7 +390,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 mod tests {
     use std::io::BufRead;
 
-    use crate::{builder::{BitPackedKmerSorting, SbwtIndexBuilder}, util};
+    use crate::{builder::{BitPackedKmerSortingDisk, SbwtIndexBuilder}, util};
 
     use crate::builder::BitPackedKmerSortingMem;
 
@@ -404,7 +404,7 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
         let mut seqs_copy: Vec<Vec<u8>> = seqs.iter().map(|x| x.to_vec()).collect(); // For verification in the end
 
-        let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
+        let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         sbwt.build_select();
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn finimizer_paper_example_dbg_operations(){
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
-        let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
+        let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         sbwt.build_select();
 
         let lcs = lcs.unwrap();
@@ -559,7 +559,7 @@ mod tests {
         let x2 = seqs[2][0..k].to_vec();
         seqs[2].extend(x2); // Make cyclic
 
-        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
+        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut unitig_ascii_out = Vec::<u8>::new();
@@ -632,7 +632,7 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
+        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(k).build_lcs(true).build_select_support(true).run_from_vecs(seqs.as_slice());
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         

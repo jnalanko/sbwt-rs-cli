@@ -642,7 +642,7 @@ pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtI
 #[cfg(test)]
 mod tests {
 
-    use crate::{BitPackedKmerSorting, SbwtIndexBuilder};
+    use crate::{BitPackedKmerSortingDisk, SbwtIndexBuilder};
 
     use super::*;
 
@@ -765,10 +765,10 @@ mod tests {
         // of push_labels_forward has more than one independent piece.
         let input_seq_2 = crate::util::gen_random_dna_string(1000, 5235);
 
-        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).run_from_slices(vec![input_seq_1.as_slice()].as_slice());
-        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).run_from_slices(vec![input_seq_2.as_slice()].as_slice());
+        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(k).run_from_slices(vec![input_seq_1.as_slice()].as_slice());
+        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(k).run_from_slices(vec![input_seq_2.as_slice()].as_slice());
 
-        let (sbwt_both, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(k).run_from_slices(vec![input_seq_1.as_slice(), input_seq_2.as_slice()].as_slice());
+        let (sbwt_both, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(k).run_from_slices(vec![input_seq_1.as_slice(), input_seq_2.as_slice()].as_slice());
 
         let inter_high_ram = MergeInterleaving::new(&sbwt1, &sbwt2, false, 3); // No RAM optimization
         let inter_low_ram = MergeInterleaving::new(&sbwt1, &sbwt2, true, 3); // With RAM optimization

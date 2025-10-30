@@ -91,7 +91,7 @@
 //! # Construction algorithms 
 //! 
 //! The crate provides two construction algorithms: a disk-based
-//! [bitpacked k-mer sorting][`builder::BitPackedKmerSorting`] algorithm, and
+//! [bitpacked k-mer sorting][`builder::BitPackedKmerSortingDisk`] algorithm, and
 //! an [in-memory](`builder::BitPackedKmerSortingMem`) variant that is faster but 
 //! requires more RAM.
 //! 
@@ -169,7 +169,7 @@ pub use util::SliceSeqStream;
 /// using [SbwtIndexBuilder::run]:
 /// ```ignore
 /// use needletail::Sequence;
-/// use sbwt::BitPackedKmerSorting;
+/// use sbwt::BitPackedKmerSortingDisk;
 /// use sbwt::SbwtIndexBuilder;
 ///
 /// struct FastxStreamer {
@@ -194,7 +194,7 @@ pub use util::SliceSeqStream;
 /// let infile = "sequence.fasta.gz";
 /// let reader = FastxStreamer{inner: needletail::parse_fastx_file(infile).expect("valid path/file"), record: Vec::new()};
 ///
-/// let (sbwt, lcs) = SbwtIndexBuilder::new().k(31).n_threads(4).algorithm(BitPackedKmerSorting::new()).run(reader);
+/// let (sbwt, lcs) = SbwtIndexBuilder::new().k(31).n_threads(4).algorithm(BitPackedKmerSortingDisk::new()).run(reader);
 /// ```
 ///
 pub trait SeqStream{

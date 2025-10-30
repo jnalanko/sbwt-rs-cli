@@ -214,7 +214,7 @@ fn build_command(matches: &clap::ArgMatches){
         let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length);
         run_build_algorithm(builder, input_mode)
     } else {
-        let algo = BitPackedKmerSorting::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
+        let algo = BitPackedKmerSortingDisk::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
         let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length);
         run_build_algorithm(builder, input_mode)
     };

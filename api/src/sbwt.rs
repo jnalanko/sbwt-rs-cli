@@ -919,7 +919,7 @@ mod tests {
 
     
 
-    use crate::builder::{BitPackedKmerSorting, SbwtIndexBuilder};
+    use crate::builder::{BitPackedKmerSortingDisk, SbwtIndexBuilder};
 
     use crate::builder::BitPackedKmerSortingMem;
 
@@ -948,7 +948,7 @@ mod tests {
     fn doc_example() {
         // The example used in the documentation page for SbwtIndex.
         let seqs: Vec<&[u8]> = vec![b"TGTTTG", b"TTGCTAT", b"ACGTAGTATAT", b"TGTAAA"]; 
-        let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).run_from_slices(seqs.as_slice());
         let mut doc_sbwt = vec![vec![b'A',b'T'], vec![b'C'], vec![], vec![b'A'], vec![b'T'], vec![b'T'], vec![b'A',b'G',b'T'], vec![], vec![], vec![b'G'], vec![b'T'], vec![b'T'], vec![b'T'], vec![b'T'], vec![b'C'], vec![b'G'], vec![b'A'], vec![], vec![], vec![b'A'], vec![b'A'], vec![b'A'], vec![b'A',b'T'], vec![b'T'], vec![b'G']];
 
         // ACGT to 0123
@@ -967,7 +967,7 @@ mod tests {
 
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
-        let (mut sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let (mut sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).run_from_slices(seqs.as_slice());
 
         assert_eq!(sbwt.sbwt.len(), 18);
 
@@ -1023,7 +1023,7 @@ mod tests {
     fn serialize_and_load() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
-        let (sbwt, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let (sbwt, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).run_from_slices(seqs.as_slice());
 
         let mut buf = Vec::<u8>::new();
         sbwt.serialize(&mut buf).unwrap();
@@ -1038,7 +1038,7 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGANAAGGAAAGT"];           
         //..................................................^...................
 
-        let (sbwt, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let (sbwt, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).run_from_slices(seqs.as_slice());
 
         let mut buf = Vec::<u8>::new();
         sbwt.serialize(&mut buf).unwrap();
@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn from_subset_seq() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
-        let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(4).run_from_slices(seqs.as_slice());
+        let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).run_from_slices(seqs.as_slice());
         let ss = sbwt_index.sbwt().clone();
         let sbwt_index2 = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss, sbwt_index.n_sets(), sbwt_index.k(), sbwt_index.prefix_lookup_table.prefix_length);
 
@@ -1115,7 +1115,7 @@ mod tests {
 
         let SbwtIndexVariant::SubsetMatrix(cpp_sbwt) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(&data)).unwrap();
 
-        let (rust_sbwt, _lcs) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(3).precalc_length(2).run_from_slices(&[b"ACACTG", b"GCACTAA"]);
+        let (rust_sbwt, _lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(3).precalc_length(2).run_from_slices(&[b"ACACTG", b"GCACTAA"]);
 
         assert_eq!(cpp_sbwt, rust_sbwt);
 
@@ -1135,7 +1135,7 @@ mod tests {
         // of push_labels_forward has more than one independent piece.
         let input_seq = crate::util::gen_random_dna_string(2000, 1234);
 
-        let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSorting>::new().k(5).run_from_slices(vec![input_seq.as_slice()].as_slice());
+        let (sbwt, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(5).run_from_slices(vec![input_seq.as_slice()].as_slice());
 
         let mut in_labels = crate::util::gen_random_dna_string(sbwt.n_sets(), 1234);
         in_labels[100] = b'$'; // Put in a dollar in the middle for fun
