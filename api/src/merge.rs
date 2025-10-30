@@ -1,4 +1,11 @@
-//! Merge two [SbwtIndex] structures. The merge works in two steps. First, compute the [MergeInterleaving] of the two SBWTs with [MergeInterleaving::new]. The interleaving is a sort of a plan for how to execute the merge. To execute the merge, feed the interleaving and the two SBWT to [merge]. The merge algorithm is essentially the Wheeler graph merge algorithm described in [*Buffering updates enables efficient dynamic de Bruijn graphs* (Alanko et al. 2021)](https://doi.org/10.1016/j.csbj.2021.06.047), specialized to the SBWT. 
+//!## Merging Two `SbwtIndex` Structures
+//!To merge two `SbwtIndex` structures, follow these steps:
+//!1. **Compute the interleaving plan** . Create a [MergeInterleaving] instance using [MergeInterleaving::new]. This interleaving serves as a blueprint for how the two SBWTs will be merged. It can also be queried to compute the size of the [intersection](MergeInterleaving::intersection_size) or the [union](MergeInterleaving::union_size) of the k-mer sets in the SBWTs.
+//!2. **Execute the merge**. Pass the interleaving and the two SBWTs to the [merge] function.
+//! 
+//!The merge algorithm is an adaptation of the Wheeler graph merge algorithm described in  
+//![*"Buffering updates enables efficient dynamic de Bruijn graphs"* (Alanko et al. 2021)](https://doi.org/10.1016/j.csbj.2021.06.047) ,
+//! tailored specifically for the SBWT.
 
 use std::cmp::min;
 use std::ops::Range;
@@ -106,7 +113,9 @@ impl CharVector{
 
 impl MergeInterleaving {
 
-    /// optimize_peak_ram enables optimizations to reduce the RAM peak at the expense of running time.
+    /// Computes the merge interleaving between `index1` and `index2`. 
+    /// The `optimize_peak_ram` flag enables optimizations to reduce the RAM peak at the expense of running time.
+    /// `n_threads` is the number of parallel threads.
     pub fn new<SS: SubsetSeq + Send + Sync>(index1: &SbwtIndex::<SS>, index2: &SbwtIndex<SS>, optimize_peak_ram: bool, n_threads: usize) -> MergeInterleaving {
 
         use CharVector::*;
@@ -219,6 +228,7 @@ impl MergeInterleaving {
         })
     }
 
+    /// Number of k-mers in the intersection of the two SBWTs.
     pub fn intersection_size(&self) -> usize {
         assert_eq!(self.s1.len(), self.s2.len());
         let mut ans = 0_usize;
@@ -229,6 +239,7 @@ impl MergeInterleaving {
         ans
     }
 
+    /// Number of k-mers in the union of the two SBWTs.
     pub fn union_size(&self) -> usize {
         assert_eq!(self.s1.len(), self.s2.len());
         let mut ans = 0_usize;
