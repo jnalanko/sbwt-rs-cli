@@ -49,13 +49,19 @@ pub trait SbwtConstructionAlgorithm {
 /// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
 #[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct BitPackedKmerSorting{
+pub struct BitPackedKmerSortingDisk{
     mem_gb: usize,
     dedup_batches: bool,
     temp_dir: std::path::PathBuf,
 }
 
-impl BitPackedKmerSorting {
+#[deprecated(
+    since = "0.4.0", 
+    note = "With the introduction of BitPackedKmerSortingMem, the old struct BitPackedKmerSorting has been renamed to BitPackedKmerSortingDisk."
+)]
+pub type BitPackedKmerSorting = BitPackedKmerSortingDisk;
+
+impl BitPackedKmerSortingDisk {
 
     /// Initializes the algorithm with default settings:
     /// - 4 GB of memory.
