@@ -113,7 +113,9 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSorting {
     }
 }
 
-/// A construction algorithm based on sorting of bit-packed k-mers in memory.
+/// A construction algorithm based on sorting of bit-packed k-mers in entirely in RAM.
+/// Faster and scales better with parallelism than [BitPackedKmerSorting], but takes
+/// more RAM.
 #[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BitPackedKmerSortingMem{
