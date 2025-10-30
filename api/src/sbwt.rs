@@ -926,7 +926,6 @@ mod tests {
 
     use crate::builder::{BitPackedKmerSorting, SbwtIndexBuilder};
 
-    #[cfg(feature = "bpks-mem")]
     use crate::builder::BitPackedKmerSortingMem;
 
     use super::*;
@@ -1192,7 +1191,6 @@ mod tests {
 
     #[test_log::test]
     #[allow(non_snake_case)]
-    #[cfg(feature = "bpks-mem")]
     fn doc_example_mem() {
         // The example used in the documentation page for SbwtIndex.
         let seqs: Vec<&[u8]> = vec![b"TGTTTG", b"TTGCTAT", b"ACGTAGTATAT", b"TGTAAA"];
@@ -1211,7 +1209,6 @@ mod tests {
 
     #[test_log::test]
     #[allow(non_snake_case)]
-    #[cfg(feature = "bpks-mem")]
     fn LCS_paper_example_mem() {
 
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
@@ -1269,7 +1266,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "bpks-mem")]
     fn serialize_and_load_mem() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
@@ -1284,7 +1280,6 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    #[cfg(feature = "bpks-mem")]
     fn non_ACGT_mem(){
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGANAAGGAAAGT"];
         //..................................................^...................
@@ -1299,7 +1294,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "bpks-mem")]
     fn from_subset_seq_mem() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
         let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).run_from_slices(seqs.as_slice());

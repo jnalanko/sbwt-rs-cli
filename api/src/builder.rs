@@ -116,13 +116,11 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSorting {
 /// A construction algorithm based on sorting of bit-packed k-mers in memory.
 #[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
-#[cfg(feature = "bpks-mem")]
 pub struct BitPackedKmerSortingMem{
     dedup_batches: bool,
     mem_gb: usize,
 }
 
-#[cfg(feature = "bpks-mem")]
 impl BitPackedKmerSortingMem {
 
     /// Initializes the algorithm with default settings:
@@ -146,7 +144,6 @@ impl BitPackedKmerSortingMem {
     }
 }
 
-#[cfg(feature = "bpks-mem")]
 impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let dedup_batches = self.dedup_batches;

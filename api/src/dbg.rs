@@ -392,7 +392,6 @@ mod tests {
 
     use crate::{builder::{BitPackedKmerSorting, SbwtIndexBuilder}, util};
 
-    #[cfg(feature = "bpks-mem")]
     use crate::builder::BitPackedKmerSortingMem;
 
     use bitvec::prelude::*;
@@ -736,7 +735,6 @@ mod tests {
 
 
     #[test]
-    #[cfg(feature = "bpks-mem")]
     fn finimizer_paper_example_unitig_export_mem(){
         // Note: this test does not cover the cyclic unitig case
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
@@ -766,7 +764,6 @@ mod tests {
 
 
     #[test]
-    #[cfg(feature = "bpks-mem")]
     fn finimizer_paper_example_dbg_operations_mem(){
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
         let (mut sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
@@ -872,7 +869,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "bpks-mem")]
     fn cyclic_unitigs_in_export_mem(){
         use rand_chacha::ChaCha20Rng;
         use rand_chacha::rand_core::SeedableRng;
@@ -948,7 +944,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "bpks-mem")]
     fn randomized_test_mem(){
         use rand_chacha::ChaCha20Rng;
         use rand_chacha::rand_core::SeedableRng;

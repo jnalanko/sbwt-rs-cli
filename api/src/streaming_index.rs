@@ -346,7 +346,6 @@ mod tests {
 
     use crate::builder::BitPackedKmerSorting;
 
-    #[cfg(feature = "bpks-mem")]
     use crate::builder::BitPackedKmerSortingMem;
 
     use super::*;
@@ -455,7 +454,6 @@ mod tests {
 
     #[test_log::test]
     #[allow(non_snake_case)]
-    #[cfg(feature = "bpks-mem")]
     fn LCS_paper_example_mem() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
@@ -495,7 +493,6 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    #[cfg(feature = "bpks-mem")]
     fn finimizer_paper_example_mem(){
 
         // This is a pretty weak test but it's something.
