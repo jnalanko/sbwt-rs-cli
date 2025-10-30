@@ -513,6 +513,7 @@ fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(
 }
 
 
+/// Merge `index1` and `index2` according to `interleaving`. After the merge, a [PrefixLookupTable] with prefix length `new_prefix_lookup_table_length` will be added to new index. The number of threads used in the merge is `n_threads`.
 pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize, n_threads: usize) -> SbwtIndex::<SS> {
     let sigma = crate::util::DNA_ALPHABET.len(); 
     
