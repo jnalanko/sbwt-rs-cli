@@ -257,7 +257,7 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
     /// The algorithm is described in the paper [Finimizers: Variable-length bounded-frequency minimizers for k-mer sets](https://doi.org/10.1101/2024.02.19.580943).
     #[allow(non_snake_case)]
     pub fn matching_statistics(&self, query: &[u8]) -> Vec<(usize, std::ops::Range<usize>)> {
-        let iter = self.matching_statistics_iter(&query);
+        let iter = self.matching_statistics_iter(query);
         iter.collect()
     }
 
@@ -327,7 +327,7 @@ pub struct MatchingStatisticsIterator<'a, 'b, E: ExtendRight, C: ContractLeft> {
     query: &'b [u8],
 }
 
-impl<'a, 'b, E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'a, 'b, E, C> {
+impl<E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'_, '_, E, C> {
     type Item = (usize, Range<usize>); // Left, colex interval
 
     fn next(&mut self) -> Option<Self::Item> {

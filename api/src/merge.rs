@@ -71,7 +71,7 @@ impl ReadOnlyIntVector for Vec<u8> {
 
 impl ReadOnlyIntVector for CompactIntVector<3> {
     fn get(&self, i: usize) -> usize {
-        self.get(i) as usize
+        self.get(i)
     }
 
     fn init(len: usize) -> Self {
@@ -184,7 +184,7 @@ impl MergeInterleaving {
                         index1.push_all_labels_forward(c1, temp1, n_threads);
                         std::mem::swap(c1, temp1);
 
-                        index2.push_all_labels_forward(&c2, temp2, n_threads);
+                        index2.push_all_labels_forward(c2, temp2, n_threads);
                         std::mem::swap(c2, temp2);
                     } else if let (Compact(ref mut c1), Compact(ref mut c2), None, None) = (&mut chars1, &mut chars2, &mut temp_char_buf_1, &mut temp_char_buf_2) {
                         // Low memory mode

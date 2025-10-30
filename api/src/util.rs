@@ -257,7 +257,7 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(bv: bitvec::vec::BitVec<u64, Lsb0>
     header[1] = bv.len().div_ceil(64) as u64;
 
     let header_bytes = bytemuck::cast_slice(&header);
-    let raw_data = bytemuck::cast_slice(&bv.as_raw_slice());
+    let raw_data = bytemuck::cast_slice(bv.as_raw_slice());
     let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
 
     simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()

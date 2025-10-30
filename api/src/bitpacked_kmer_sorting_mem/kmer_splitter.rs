@@ -294,7 +294,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             // Concatenate all to the first piece (TODO: here if the
             // pieces are sorted, we can just merge the runs and the final sort
             // is done also).
-            if pieces.len() == 0 {
+            if pieces.is_empty() {
                 vec![]
             } else {
                 let mut piece_iter = pieces.into_iter();

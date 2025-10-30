@@ -1,17 +1,13 @@
 //! The [SbwtIndex] data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder).
 
-use std::cmp::min;
 use std::io::Read;
 use std::io::Write;
-use std::ops::Range;
-use bitvec::order::Lsb0;
 use byteorder::ReadBytesExt;
 
 use byteorder::LittleEndian;
 use num::traits::ToBytes;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
-use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 
 use crate::compact_int_vector::CompactIntVector;
@@ -22,7 +18,6 @@ use crate::subsetseq::*;
 use crate::util;
 use crate::util::ACGT_TO_0123;
 use crate::util::DNA_ALPHABET;
-use crate::merge::MergeInterleaving;
 
 pub const CARGO_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
