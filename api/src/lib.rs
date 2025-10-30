@@ -150,7 +150,7 @@ mod builder;
 pub use builder::*;
 
 mod streaming_index;
-pub use streaming_index::*;
+pub use streaming_index::{StreamingIndex, LcsArray};
 
 mod subsetseq;
 pub use subsetseq::*;
