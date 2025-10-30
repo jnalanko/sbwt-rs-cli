@@ -13,7 +13,7 @@
 //! taking roughly log(k) bits of space per k-mer. The LCS array also enables the 
 //! computation of [*k-bounded matching statistics*][streaming_index::StreamingIndex::matching_statistics] 
 //! and [*shortest frequency-bounded suffixes*][streaming_index::StreamingIndex::shortest_freq_bound_suffixes]
-//! (both described [here](https://www.biorxiv.org/content/10.1101/2024.02.19.580943v1)) 
+//! (both described [here](https://www.biorxiv.org/content/10.1101/2024.02.19.580943v1)). Two SBWTs can be [merged](merge) efficiently.
 //! Finally, the crate provides an [interface][dbg::Dbg] for traversing the node-centric de Bruijn graph
 //! of the k-mers.
 //! 

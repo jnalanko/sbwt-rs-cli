@@ -294,7 +294,9 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
         }
     }
 
-    // Return an iterator producing values of matching statistics
+    /// Returns an iterator that produces values of the matching statistics one by one. Useful for
+    /// streaming over the matching statistics without having to keep the values in memory all at once.
+    /// Using [Iterator::collect] on the iterator will give the same result as calling [Self::matching_statistics].
     pub fn matching_statistics_iter<'a>(&self, query: &'a [u8]) -> MatchingStatisticsIterator<'index, 'a, E, C> {
         MatchingStatisticsIterator { 
             colex_range: 0..self.n, 
