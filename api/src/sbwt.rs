@@ -737,22 +737,25 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     }
 
 
-    /// Internal function. Takes a range in the SBWT, and a vector of labels (one for each position in the input range).
+    /// Internal function. Takes an input range in the SBWT, and a vector of labels (one for each position in the input range).
     /// Output: writes the input labels to the output ranges. Read the code for details. 
     /// The length of output_ranges[j] must be equal to the number of occurrences of character j in the input range.
-    pub(crate) fn push_labels_forward(&self, labels: &[u8], input_range: std::ops::Range<usize>, mut output_ranges: Vec<&mut[u8]>){
-        assert_eq!(labels.len(), input_range.len());
+    pub(crate) fn push_labels_forward(&self, labels: &[u8], sbwt_input_range: std::ops::Range<usize>, output_ranges: Vec<&mut[u8]>){
+        assert_eq!(labels.len(), sbwt_input_range.len());
         assert_eq!(output_ranges.len(), self.alphabet().len());
+        if sbwt_input_range.is_empty() { return }
 
-        let mut range_offsets = vec![0_usize; output_ranges.len()];
         #[allow(clippy::needless_range_loop)]
-        for i in input_range.clone() {
-            for char_idx in 0..DNA_ALPHABET.len() { // Using the constant DNA_ALPHABET array here to allow loop unrolling
-                if self.sbwt.set_contains(i, char_idx as u8) {
-                    let input_char = labels[i - input_range.start];
-                    output_ranges[char_idx][range_offsets[char_idx]] = input_char;
-                    range_offsets[char_idx] += 1;
-                }
+        for (char_idx, output_slice) in output_ranges.into_iter().enumerate() {
+            let mut output_offset = 0_usize;
+            let mut sbwt_pos = sbwt_input_range.start; // Input range is not empty because we checked for that
+            while let Some(p) = self.sbwt.next_set_with_char(sbwt_pos, char_idx as u8) {
+                if p >= sbwt_input_range.end { break }
+                let input_offset = p - sbwt_input_range.start;
+                sbwt_pos = p+1;
+
+                output_slice[output_offset] = labels[input_offset];
+                output_offset += 1;
             }
         }
     }
