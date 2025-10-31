@@ -748,15 +748,10 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         #[allow(clippy::needless_range_loop)]
         for (char_idx, output_slice) in output_ranges.into_iter().enumerate() {
             let mut output_offset = 0_usize;
-            let mut sbwt_pos = sbwt_input_range.start; // Input range is not empty because we checked for that
-            while let Some(p) = self.sbwt.next_set_with_char(sbwt_pos, char_idx as u8) {
-                if p >= sbwt_input_range.end { break }
-                let input_offset = p - sbwt_input_range.start;
-                sbwt_pos = p+1;
-
-                output_slice[output_offset] = labels[input_offset];
+            self.sbwt.call_on_char_occurrences(sbwt_input_range.clone(), char_idx as u8, |colex| {
+                output_slice[output_offset] = labels[colex - sbwt_input_range.start];
                 output_offset += 1;
-            }
+            });
         }
     }
 

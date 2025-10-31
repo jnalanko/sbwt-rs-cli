@@ -1,7 +1,10 @@
 //! A module for representing a sequence of subsets of an alphabet, with support for rank and select queries
 //! on the elements of the subsets.
 
+use std::ops::Range;
+
 use bitvec::order::Lsb0;
+use bitvec::slice::BitSlice;
 use simple_sds_sbwt::bit_vector::*;
 use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::ops::*;
@@ -76,6 +79,10 @@ pub trait SubsetSeq{
 
     /// Loads a subset sequence that was previously written with [`SubsetSeq::serialize`].
     fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized;
+
+    // Calls the callback on the index of every set that contains character c in the range.
+    // The callback is called in increasing order of set index.
+    fn call_on_char_occurrences<F: FnMut(usize)>(&self, range: Range<usize>, c: u8, callback: F);
 
     /// Build the cumulative sum array C required in [`crate::sbwt::SbwtIndex`].
     fn get_C_array(&self) -> Vec<usize> {
@@ -212,6 +219,15 @@ impl SubsetSeq for SubsetMatrix{
         let off = bv[set_idx..].first_one()?;
         Some(set_idx + off)
     }
+
+    fn call_on_char_occurrences<F: FnMut(usize)>(&self, range: Range<usize>, c: u8, mut callback: F) {
+        let bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(self.rows[c as usize].as_ref().as_ref());
+        let slice = &bv[range.clone()];
+        for i in slice.iter_ones() {
+            callback(range.start + i);
+        }
+    }
+
 }
 
 /// Formats the subset matrix as an ASCII bit matrix of 0s and 1s, where row i
