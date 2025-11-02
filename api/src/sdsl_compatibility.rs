@@ -12,12 +12,11 @@ pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<b
     // The length of the serialized data is padded to a multiple of 64 bits.
     let n_bits_plus_pad = n_bits.div_ceil(64) * 64;
     let n_bytes = n_bits_plus_pad / 8;
+    let n_words = n_bytes / 8;
 
-    let mut raw_bytes = Vec::<u8>::with_capacity(n_bytes as usize);
-    input.read_exact(raw_bytes.as_mut_slice());
-    let raw_words = bytemuck::allocation::try_cast_vec::<u8, u64>(raw_bytes).unwrap();
-    Ok(bitvec::vec::BitVec::<u64, Lsb0>::from_vec(raw_words))
-
+    let mut words: Vec<u64> = vec![0; n_words as usize];
+    input.read_exact(words.as_byte_slice_mut()).unwrap();
+    Ok(bitvec::vec::BitVec::<u64, Lsb0>::from_vec(words))
 }
 
 /// Loads an sdsl::int_vector<0> (width is determined at runtime)
