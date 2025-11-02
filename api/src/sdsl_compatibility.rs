@@ -16,7 +16,10 @@ pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<b
 
     let mut words: Vec<u64> = vec![0; n_words as usize];
     input.read_exact(words.as_byte_slice_mut()).unwrap();
-    Ok(bitvec::vec::BitVec::<u64, Lsb0>::from_vec(words))
+    let mut vec = bitvec::vec::BitVec::<u64, Lsb0>::from_vec(words);
+    assert!(vec.len() >= n_bits as usize);
+    vec.truncate(n_bits as usize); // Trailing zeros are not real elements
+    Ok(vec)
 }
 
 /// Loads an sdsl::int_vector<0> (width is determined at runtime)
