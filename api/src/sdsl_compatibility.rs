@@ -1,5 +1,4 @@
 use bitvec::order::Lsb0;
-use bytemuck::checked::try_cast;
 use byteorder::{LittleEndian, ReadBytesExt};
 use rand::AsByteSliceMut;
 use simple_sds_sbwt::serialize::Serialize;
@@ -8,15 +7,12 @@ use std::io::Read;
 // Loads an sdsl::bit_vector
 pub fn load_sdsl_bit_vector(input: &mut impl std::io::Read) -> std::io::Result<bitvec::vec::BitVec<u64, Lsb0>> {
     // sdsl format is: [number of bits][data]
-
-    // So we need to create a new Read implementation that injects the number of words into the byte stream.
-
     let n_bits = input.read_u64::<LittleEndian>()?;
 
     // The length of the serialized data is padded to a multiple of 64 bits.
     let n_bits_plus_pad = n_bits.div_ceil(64) * 64;
-
     let n_bytes = n_bits_plus_pad / 8;
+
     let mut raw_bytes = Vec::<u8>::with_capacity(n_bytes as usize);
     input.read_exact(raw_bytes.as_mut_slice());
     let raw_words = bytemuck::allocation::try_cast_vec::<u8, u64>(raw_bytes).unwrap();
@@ -74,7 +70,7 @@ mod tests {
 
     use super::*;
     use hex_literal::hex;
-    use simple_sds_sbwt::{ops::{Access, Vector}, raw_vector::AccessRaw};
+    use simple_sds_sbwt::ops::{Access, Vector};
 
     #[test]
     fn test_load_sdsl_bit_vector(){

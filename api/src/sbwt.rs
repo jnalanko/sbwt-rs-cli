@@ -175,10 +175,10 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
         // Ok. Proceed to deserialize. 
 
         log::info!("Reading bit vectors");
-        let A_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
-        let C_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
-        let G_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
-        let T_bits = simple_sds_sbwt::bit_vector::BitVector::from(load_sdsl_bit_vector(input)?);
+        let A_bits = load_sdsl_bit_vector(input)?;
+        let C_bits = load_sdsl_bit_vector(input)?;
+        let G_bits = load_sdsl_bit_vector(input)?;
+        let T_bits = load_sdsl_bit_vector(input)?;
 
         let _A_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
         let _C_rank_support = load_known_width_sdsl_int_vector(input, 64)?; // Ignore: we build our own
