@@ -74,7 +74,7 @@ pub(crate) fn get_C_array(rows: &[bitvec::vec::BitVec::<u64, Lsb0>]) -> Vec<usiz
 }
 
 #[allow(non_snake_case, dead_code)] // C-array is an established convention in BWT indexes
-pub(crate) fn get_C_array_parallel(rawrows: &[simple_sds_sbwt::raw_vector::RawVector], n_threads: usize) -> Vec<usize> {
+pub(crate) fn get_C_array_parallel(rawrows: &[bitvec::vec::BitVec::<u64, Lsb0>], n_threads: usize) -> Vec<usize> {
     let sigma = rawrows.len();
     assert!(sigma > 0);
 
