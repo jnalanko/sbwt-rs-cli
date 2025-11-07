@@ -435,7 +435,7 @@ fn usize_to_ascii(mut x: usize, bytes: &mut[u8; 32]) -> usize {
     byte_idx
 }
 
-fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, queryfile: &std::path::Path, outfile: Option<&std::path::Path>) {
+fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, queryfile: &std::path::Path, outfile: Option<&std::path::Path>, membership_only: bool) {
     let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = outfile.map(|f| std::io::BufWriter::new(std::fs::File::create(f).unwrap()));
     let mut stdout = stdout();
@@ -456,15 +456,35 @@ fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, quer
         let ms_end_time = std::time::Instant::now();
         elapsed_without_io += ms_end_time - ms_start_time;
 
-        // Write out in CSV format
         out_buffer.clear();
-        for (i, (len, _)) in ms.iter().enumerate(){
-            if i > 0 {
-                out_buffer.push(b',');
+        if membership_only {
+            for (len, _) in ms.iter().skip(sbwt.k()-1) {
+                // Skip the first k-1 values to geo the full k-mers
+                if *len == sbwt.k() {
+                   out_buffer.push(b'1'); 
+                } else {
+                   out_buffer.push(b'0'); 
+                }
             }
-            let ascii_length = usize_to_ascii(*len, &mut number_ascii_buffer);
-            out_buffer.extend(&number_ascii_buffer[0..ascii_length]);
+        } else { // Full matching statistics output
+            for (i, (len, colex_range)) in ms.iter().enumerate(){
+                if i > 0 {
+                    out_buffer.push(b',');
+                }
+                out_buffer.push(b'(');
+                let ascii_length = usize_to_ascii(*len, &mut number_ascii_buffer);
+                out_buffer.extend(&number_ascii_buffer[0..ascii_length]);
+                out_buffer.push(b',');
+                let ascii_colex_start_length = usize_to_ascii(colex_range.start, &mut number_ascii_buffer);
+                out_buffer.extend(&number_ascii_buffer[0..ascii_colex_start_length]);
+                out_buffer.push(b'.');
+                out_buffer.push(b'.');
+                let ascii_colex_end_length = usize_to_ascii(colex_range.end, &mut number_ascii_buffer);
+                out_buffer.extend(&number_ascii_buffer[0..ascii_colex_end_length]);
+                out_buffer.push(b')');
+            }
         }
+
         out_buffer.push(b'\n');
 
         match out {
@@ -482,9 +502,11 @@ fn matching_statistics<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: &LcsArray, quer
 
 fn matching_statistics_command(matches: &clap::ArgMatches){
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let lcs_filename = matches.get_one::<std::path::PathBuf>("lcs-file");
     let outfile = matches.get_one::<std::path::PathBuf>("output");
     let queryfile = matches.get_one::<std::path::PathBuf>("query").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let membership_only = matches.get_flag("membership-only");
 
     // Read sbwt
     log::info!("Loading sbwt index from file {}", indexfile.display());
@@ -495,11 +517,18 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
         load_sbwt_index_variant(&mut index_reader).unwrap()
     };
 
-    // Load the lcs array
-    let mut lcsfile = indexfile.clone();
-    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
+    // Load the lcs array either from the given path, or by modifying the
+    // file extension of the sbwt file.
+    let lcsfile = lcs_filename.map(|f| {
+        log::info!("Loading LCS array filename {}", f.display());
+        f.to_owned()
+    }).unwrap_or_else(|| {
+        let mut p = indexfile.clone();
+        p.set_extension("lcs");
+        log::info!("Loading LCS array from default filename {} (use --lcs-file to change)", p.display());
+        p
+    });
 
-    log::info!("Loading LCS array from file {}", lcsfile.display());
     let lcs = match std::fs::File::open(&lcsfile) {
         Ok(f) => {
             let mut lcs_reader = std::io::BufReader::new(f);
@@ -514,7 +543,7 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
     match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| &**v))
+            matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()), membership_only)
         }
     };
 
@@ -932,6 +961,12 @@ fn main() {
                 .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
+            .arg(clap::Arg::new("lcs-file")
+                .help("LCS file (default: if index is at index.sbwt, looks at index.lcs)")
+                .short('l')
+                .long("lcs-file")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
             .arg(clap::Arg::new("query")
                 .help("Query sequences in FASTA or FASTQ format, possibly gzipped")
                 .short('q')
@@ -940,10 +975,16 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("output")
-                .help("Output text file. Prints to stdout if not given.")
+                .help("Output text file. Prints to stdout if not given. The output format is: for each query sequence there is a list of pairs (l_i, a_i..b_i), where l_i is the length of the longest match up to k ending at position i, and a_i..b_i is the colexicographic range of the longest match.")
                 .short('o')
                 .long("output")
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("membership-only")
+                .help("Print only an ascii bitvector B for each query sequence, such that B[i] = 1 iff the i-th k-mer is present in the index.")
+                .short('b')
+                .long("membership-only")
+                .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
