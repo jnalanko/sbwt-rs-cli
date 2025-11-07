@@ -282,7 +282,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
     sigma: usize,
     build_lcs: bool,
     n_threads: usize,
-) -> (Vec<simple_sds_sbwt::raw_vector::RawVector>, Option<simple_sds_sbwt::int_vector::IntVector>) {
+) -> (Vec<bitvec::vec::BitVec::<u64, Lsb0>>, Option<simple_sds_sbwt::int_vector::IntVector>) {
 
     let n = kmers.len() + dummies.len(); // Merged lengths
 
@@ -344,12 +344,6 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
             }).collect();
             rows.push(crate::util::parallel_bitvec_concat(row_pieces));
         }
-
-
-        // Convert rows into simple_sds_sbwt vectors
-        let rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|row| {
-            crate::util::bitvec_to_simple_sds_raw_bitvec(row)
-        }).collect();
 
         let lcs = if build_lcs {
             // LCS values are between 0 and k-1

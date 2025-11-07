@@ -55,7 +55,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         let C: Vec<usize> = crate::util::get_C_array(&rawrows);
 
         log::info!("Building the subset rank structure");
-        let mut subsetseq = SS::new_from_bit_vectors(rawrows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
+        let mut subsetseq = SS::new_from_bit_vectors(rawrows);
         subsetseq.build_rank();
         let n_sets = subsetseq.len();
         let (mut index, lcs) = (SbwtIndex::<SS>::from_components(

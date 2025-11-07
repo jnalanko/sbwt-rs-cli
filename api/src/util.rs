@@ -68,13 +68,13 @@ fn popcounts_to_C_array(popcounts: &[usize]) -> Vec<usize> {
 }
 
 #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
-pub(crate) fn get_C_array(rawrows: &[simple_sds_sbwt::raw_vector::RawVector]) -> Vec<usize> {
-    let popcounts: Vec<usize> = rawrows.iter().map(|row| row.count_ones()).collect(); 
+pub(crate) fn get_C_array(rows: &[bitvec::vec::BitVec::<u64, Lsb0>]) -> Vec<usize> {
+    let popcounts: Vec<usize> = rows.iter().map(|row| row.count_ones()).collect(); 
     popcounts_to_C_array(&popcounts)
 }
 
 #[allow(non_snake_case, dead_code)] // C-array is an established convention in BWT indexes
-pub(crate) fn get_C_array_parallel(rawrows: &[simple_sds_sbwt::raw_vector::RawVector], n_threads: usize) -> Vec<usize> {
+pub(crate) fn get_C_array_parallel(rawrows: &[bitvec::vec::BitVec::<u64, Lsb0>], n_threads: usize) -> Vec<usize> {
     let sigma = rawrows.len();
     assert!(sigma > 0);
 
@@ -261,7 +261,6 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(bv: bitvec::vec::BitVec<u64, Lsb0>
     let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
 
     simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
-
 }
 
 #[allow(dead_code)]

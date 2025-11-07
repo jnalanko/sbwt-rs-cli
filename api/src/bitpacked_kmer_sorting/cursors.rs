@@ -1,6 +1,7 @@
 use std::{io::{BufReader, Seek, Read}, fs::File, path::Path};
 
-use simple_sds_sbwt::{ops::Access, raw_vector::AccessRaw};
+use bitvec::order::Lsb0;
+use simple_sds_sbwt::ops::Access;
 use std::io::SeekFrom;
 use std::cmp::min;
 use crate::kmer::LongKmer;
@@ -226,12 +227,14 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
     n: usize,
     k: usize, 
     sigma: usize,
-    build_lcs: bool) -> (Vec<simple_sds_sbwt::raw_vector::RawVector>, Option<simple_sds_sbwt::int_vector::IntVector>)
+    build_lcs: bool) -> (Vec<bitvec::vec::BitVec::<u64, Lsb0>>, Option<simple_sds_sbwt::int_vector::IntVector>)
 {
 
-    let mut rawrows = Vec::<simple_sds_sbwt::raw_vector::RawVector>::new();
+    let mut rawrows = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
     for _ in 0..sigma {
-        rawrows.push(simple_sds_sbwt::raw_vector::RawVector::with_len(n, false));
+        let mut row = bitvec::vec::BitVec::<u64, Lsb0>::with_capacity(n);
+        row.resize(n, false);
+        rawrows.push(row);
     }
 
     let mut lcs = if build_lcs { 
@@ -273,7 +276,7 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
             }
 
             if char_cursors[c as usize].peek().is_some() && char_cursors[c as usize].peek().unwrap() == kmer_c {
-                rawrows[c as usize].set_bit(kmer_idx, true);
+                rawrows[c as usize].set(kmer_idx, true);
                 char_cursors[c as usize].next();
             }
         }

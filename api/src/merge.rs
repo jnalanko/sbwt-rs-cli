@@ -601,11 +601,7 @@ pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtI
         }
         // Concatenate pieces for each char
         let rows: Vec::<bitvec::vec::BitVec::<u64, Lsb0>> = char_to_piece_list.into_iter().map(crate::util::parallel_bitvec_concat).collect();
-
-        // Load into simple_sds_sbwt vectors
-        let new_rows: Vec<simple_sds_sbwt::raw_vector::RawVector> = rows.into_par_iter().map(|row| {
-            crate::util::bitvec_to_simple_sds_raw_bitvec(row)
-        }).collect();
+        rows
 
         // At this point, there should be exactly merged_length - 1 bits set in new_rows.
         //
@@ -617,8 +613,6 @@ pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtI
         // group in the merged SBWT. The leader has the same (k-1)-suffix as the k-mer which had the outgoing
         // edge to v, so the edge will point to v. There can not be two or more incoming edges because those would have to
         // come from the same suffix group, but each suffix group has each outgoing label at most once (at the leader).
-
-        new_rows
     });
 
     // Create the C array
@@ -626,7 +620,7 @@ pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtI
     let C: Vec<usize> = crate::util::get_C_array_parallel(&new_rows, n_threads);
 
     log::info!("Building the subset rank structure");
-    let mut subsetseq = SS::new_from_bit_vectors(new_rows.into_iter().map(simple_sds_sbwt::bit_vector::BitVector::from).collect());
+    let mut subsetseq = SS::new_from_bit_vectors(new_rows);
     subsetseq.build_rank();
     let n_sets = subsetseq.len();
     let mut index = SbwtIndex::<SS>::from_components(

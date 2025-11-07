@@ -4,11 +4,12 @@
 use std::ops::Range;
 
 use bitvec::order::Lsb0;
-use bitvec::slice::BitSlice;
 use simple_sds_sbwt::bit_vector::*;
 use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::ops::*;
 use simple_sds_sbwt::serialize::*;
+
+use crate::util::bitvec_to_simple_sds_raw_bitvec;
 
 /// This trait represents a sequence of subsets from alphabet {0, 1, ..., sigma-1}, where sigma is the alphabet size.
 /// The trait provides access to the subsets and rank and select queries for the elements inside the subsets.
@@ -24,11 +25,11 @@ pub trait SubsetSeq{
     /// initialized, so if the you need those functions, you need to call [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
     fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self;
 
-    /// Create a new subset sequence from indicator [bit vectors](simple_sds_sbwt::bit_vector::BitVector), where the i-th bit of the j-th bit vector
+    /// Create a new subset sequence from indicator [bit vectors](bitvec::vec::BitVec), where the i-th bit of the j-th bit vector
     /// is 1 if and only if the i-th subset contains the j-th character. The resulting subset sequence has
     /// rank and select support if the provided bit vectors have rank and select support enabled. Otherwise, those
     /// supports need to be initialized by calling [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
-    fn new_from_bit_vectors(vecs: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self;
+    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec::<u64, Lsb0>>) -> Self;
 
     /// Number of sets in the sequence (**not** the total length of the sets).
     fn len(&self) -> usize;
@@ -143,8 +144,12 @@ impl SubsetSeq for SubsetMatrix{
         Ok(Self{rows})
     }
 
-    fn new_from_bit_vectors(rows: Vec<simple_sds_sbwt::bit_vector::BitVector>) -> Self{
-        Self{rows}
+    fn new_from_bit_vectors(rows: Vec<bitvec::vec::BitVec<u64, Lsb0>>) -> Self{
+        Self{rows: rows.into_iter().map(|row| 
+            simple_sds_sbwt::bit_vector::BitVector::from(
+                bitvec_to_simple_sds_raw_bitvec(row))
+            ).collect()
+        }
     }
 
     fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self{
@@ -160,7 +165,7 @@ impl SubsetSeq for SubsetMatrix{
         }
 
         let rows: Vec<BitVector> = rawrows.into_iter().map(BitVector::from).collect();
-        Self::new_from_bit_vectors(rows)
+        Self{rows}
     }
 
     fn build_rank(&mut self) {
