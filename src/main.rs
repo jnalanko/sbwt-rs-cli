@@ -754,6 +754,21 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     println!("Jaccard index: {}", jaccard);
 }
 
+fn stats_command(matches: &clap::ArgMatches) {
+    let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(index_path).unwrap());
+    let SbwtIndexVariant::SubsetMatrix(index) = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
+
+    println!("Number of k-mers: {}", index.n_kmers());
+    println!("Number of sbwt sets: {}", index.n_sets());
+}
+
 fn main() {
 
     let cli = clap::Command::new("sbwt")
@@ -1080,6 +1095,21 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("stats")
+            .about("Print statistics about the index")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("index")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         ;
 
     let matches = cli.get_matches();
@@ -1130,6 +1160,7 @@ fn main() {
         Some(("benchmark", sub_matches)) => benchmark_command(sub_matches),
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
+        Some(("stats", sub_matches)) => stats_command(sub_matches),
         _ => unreachable!(),
     }
     
