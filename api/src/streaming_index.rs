@@ -267,7 +267,7 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
     /// I: the current colex interval
     /// d: the current match length
     /// Returns the new match length and new colex interval
-    fn matching_statistics_update_step(&self, c: u8, mut I: Range<usize>, mut d: usize) -> (usize, Range<usize>) {
+    pub fn matching_statistics_update_step(&self, c: u8, mut I: Range<usize>, mut d: usize) -> (usize, Range<usize>) {
         if !crate::util::is_dna(c) { // Invalid character. Attempting to right-extend would panic, and anyway
             // we would need to contract all the way to the empty string, and that would
             // take a long time with the current LCS-scanning implementation.
