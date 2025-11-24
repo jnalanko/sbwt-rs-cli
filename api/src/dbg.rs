@@ -114,6 +114,8 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                 sbwt.mark_k_minus_1_mers(n_threads)
             }
         };
+
+        log::info!("Marking dummy nodes");
         let dummy_marks = Self::mark_dummies(sbwt);
         Self{sbwt, k_minus_1_marks, dummy_marks}
     }
