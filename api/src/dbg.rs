@@ -381,7 +381,11 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         }
 
         (nodes, label)
-}
+    }
+
+    pub fn is_dummy_colex_position(&self, pos: usize) -> bool {
+        self.dummy_marks[pos]
+    }
 
 }
 
