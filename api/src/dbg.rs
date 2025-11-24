@@ -347,7 +347,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 
     }
 
-    fn is_first_kmer_of_unitig(&self, v: Node) -> bool {
+    pub fn is_first_kmer_of_unitig(&self, v: Node) -> bool {
         if self.indegree(v) > 1 {
             return true;
         }
@@ -361,7 +361,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     // Returns the sequence of nodes and the label of the unitig
     // The out_labels_buf is working space for the function. Don't assume
     // anything about its contents when the function returns.
-    fn walk_unitig_from(&self, mut v: Node, out_labels_buf: &mut Vec<u8>) -> (Vec<Node>, Vec<u8>){
+    pub fn walk_unitig_from(&self, mut v: Node, out_labels_buf: &mut Vec<u8>) -> (Vec<Node>, Vec<u8>){
         let v0 = v;
         let mut nodes = Vec::<Node>::new();
         nodes.push(v);
