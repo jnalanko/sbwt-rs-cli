@@ -1,7 +1,9 @@
 //! de Bruijn graph operations using [SbwtIndex].
 
-use crate::sbwt::SbwtIndex;
+use crate::{atomic_bitmap::AtomicBitmap, sbwt::SbwtIndex};
 use crate::subsetseq::SubsetSeq;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::{Acquire, Release};
 use std::{io::Write, sync::{Arc, Mutex}};
 use rayon::prelude::*;
 use bitvec::bitvec;
@@ -282,10 +284,8 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                 s.spawn(|_| {
                     let start_time = std::time::Instant::now();
 
-                    let unitig_id = 0_usize;
-                    let visited = bitvec![0; self.sbwt.n_sets()];
-
-                    let shared_data = Arc::new(Mutex::new((visited, unitig_id)));
+                    let n_unitigs = AtomicUsize::new(0);
+                    let visited = AtomicBitmap::new(self.sbwt.n_sets());
 
                     log::info!("Iterating acyclic unitigs");
                     self.node_iterator().filter(|&v| self.is_first_kmer_of_unitig(v)).par_bridge().for_each(|v| {
@@ -294,23 +294,21 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                         callback(&nodes, &unitig_string);
 
                         // Mark the nodes as visited
-                        let (visited, unitig_id) = &mut *shared_data.lock().unwrap();
                         for u in nodes {
-                            assert!(!visited[u.id]);
+                            assert!(!visited.get(u.id));
                             visited.set(u.id, true);
                         }
 
-                        *unitig_id += 1;
+                        n_unitigs.fetch_add(1, Release);
                     });
 
                     log::info!("Iterating cyclic unitigs");
 
                     let mut out_labels_buf = Vec::<u8>::new();
-                    let (visited, unitig_id) = &mut *shared_data.lock().unwrap();
 
                     // Only disjoint cyclic unitigs remain
                     for v in self.node_iterator(){
-                        if visited[v.id] {
+                        if visited.get(v.id) {
                             continue;
                         }
 
@@ -318,16 +316,15 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                         let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
                         callback(&nodes, &unitig_string);
                         for u in nodes {
-                            assert!(!visited[u.id]);
+                            assert!(!visited.get(u.id));
                             visited.set(u.id, true);
                         }
 
-                        *unitig_id += 1;
-
+                        n_unitigs.fetch_add(1, Release);
                     }
 
                     let end_time = std::time::Instant::now();
-                    log::info!("Iterated all {} unitigs in {} seconds", unitig_id, (end_time - start_time).as_secs_f64());
+                    log::info!("Iterated all {} unitigs in {} seconds", n_unitigs.load(Acquire), (end_time - start_time).as_secs_f64());
                 });
             });
         });
