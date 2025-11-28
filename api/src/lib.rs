@@ -154,6 +154,8 @@ pub use subsetseq::*;
 mod merge;
 pub use merge::{MergeInterleaving, merge};
 
+mod atomic_bitmap;
+
 pub use unitig_flipper::Orientation;
 pub use util::reverse_complement_in_place;
 pub use util::VecSeqStream;
