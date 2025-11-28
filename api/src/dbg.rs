@@ -288,9 +288,13 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                     let visited = AtomicBitmap::new(self.sbwt.n_sets());
 
                     log::info!("Iterating acyclic unitigs");
-                    self.node_iterator().filter(|&v| self.is_first_kmer_of_unitig(v)).par_bridge().for_each(|v| {
+                    (0..self.sbwt.n_sets())
+                    .into_par_iter()
+                    .filter(|&colex| !self.dummy_marks[colex])
+                    .filter(|&colex| self.is_first_kmer_of_unitig(Node{id: colex}))
+                    .for_each(|colex| {
                         let mut out_labels_buf = Vec::<u8>::new();
-                        let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
+                        let (nodes, unitig_string) = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
                         callback(&nodes, &unitig_string);
 
                         // Mark the nodes as visited
@@ -304,23 +308,29 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 
                     log::info!("Iterating cyclic unitigs");
 
+                    let mut visited = visited.into_bitvec(); // Non-atomic
+
                     let mut out_labels_buf = Vec::<u8>::new();
 
-                    // Only disjoint cyclic unitigs remain
-                    for v in self.node_iterator(){
-                        if visited.get(v.id) {
-                            continue;
+                    // Only disjoint cyclic unitigs remain. There are probably very few of these,
+                    // so single-threaded iteration is ok.
+                    let mut colex = 0_usize;
+                    while colex < self.sbwt.n_sets() {
+                        match visited[colex..].first_zero() {
+                            Some(off) => colex += off,
+                            None => break,
                         }
-
-                        out_labels_buf.clear();
-                        let (nodes, unitig_string) = self.walk_unitig_from(v, &mut out_labels_buf);
-                        callback(&nodes, &unitig_string);
-                        for u in nodes {
-                            assert!(!visited.get(u.id));
-                            visited.set(u.id, true);
+                        if !self.dummy_marks[colex] {
+                            out_labels_buf.clear();
+                            let (nodes, unitig_string) = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
+                            callback(&nodes, &unitig_string);
+                            for u in nodes {
+                                assert!(!visited[u.id]);
+                                visited.set(u.id, true);
+                            }
+                            n_unitigs.fetch_add(1, Release);
                         }
-
-                        n_unitigs.fetch_add(1, Release);
+                        colex += 1;
                     }
 
                     let end_time = std::time::Instant::now();
