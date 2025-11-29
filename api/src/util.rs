@@ -249,7 +249,8 @@ pub(crate) fn split_to_mut_regions(
     result
 }
 
-pub(crate) fn bitvec_to_simple_sds_raw_bitvec(bv: bitvec::vec::BitVec<u64, Lsb0>) -> simple_sds_sbwt::raw_vector::RawVector {
+pub(crate) fn bitvec_to_simple_sds_raw_bitvec(mut bv: bitvec::vec::BitVec::<u64, Lsb0>) -> simple_sds_sbwt::raw_vector::RawVector {
+    // TODO: We really hope that usize equals u64 here, otherwise this this is probably broken.
     // Let's use the deserialization function in simple_sds_sbwt for a raw bitvector.
     // It requires the following header:
     let mut header = [0u64, 0u64]; // bits, words
@@ -257,6 +258,15 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(bv: bitvec::vec::BitVec<u64, Lsb0>
     header[1] = bv.len().div_ceil(64) as u64;
 
     let header_bytes = bytemuck::cast_slice(&header);
+
+    // Make sure the leftover bits in the last word are zeros. Simple-sds
+    // depends on this, but the bitvec crate does not guarantee this!
+    // The undefined padding bytes have broken my code before, so this is
+    // crucial.
+    let original_len = bv.len();
+    bv.resize(original_len.next_multiple_of(64), false);
+    bv.resize(original_len, false);
+
     let raw_data = bytemuck::cast_slice(bv.as_raw_slice());
     let mut data_with_header = Cursor::new(header_bytes).chain(Cursor::new(raw_data));
 
