@@ -243,15 +243,10 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     pub fn follow_inedge(&self, node: Node, i: usize) -> Option<Node>{
         assert!(!self.dummy_marks[node.id]);
         let v = self.sbwt.inverse_lf_step(node.id)?;
-        let vrep = if self.dummy_marks[v] {
-            // We can't use get_representative_k_minus_1_mer here because
-            // that asserts that we're not calling it with a dummy.
-            v
-        } else {
-            self.get_suffix_group_start(v)
-            // ^ This might be unnecessary since inverse_lf_step always takes
-            // us to the smallest k-mer of a suffix group?
-        };
+
+        // Inverse lf step always takes us to a suffix group start
+        let vrep = v;
+
         let end = Self::next_1_bit(&self.k_minus_1_marks, vrep+1);
         let mut non_dummies = 0_usize;
 
