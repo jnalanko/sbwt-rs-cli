@@ -251,9 +251,15 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     pub fn follow_inedge(&self, node: Node, i: usize) -> Option<Node>{
         assert!(!self.dummy_marks[node.id]);
         let v = self.sbwt.inverse_lf_step(node.id)?;
-        if self.dummy_marks[v] { return None; }
-        let v = Node {id: v};
-        let vrep = self.get_representative_k_minus_1_mer(v).id;
+        let vrep = if self.dummy_marks[v] {
+            // We can't use get_representative_k_minus_1_mer here because
+            // that asserts that we're not calling it with a dummy.
+            v
+        } else {
+            self.get_representative_k_minus_1_mer(Node{id: v}).id
+            // ^ This might be unnecessary since inverse_lf_step always takes
+            // us to the smallest k-mer of a suffix group?
+        };
         let end = Self::next_1_bit(&self.k_minus_1_marks, vrep+1);
         let mut non_dummies = 0_usize;
 
@@ -426,7 +432,8 @@ mod tests {
         let (mut sbwt_1, lcs_1) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_1);
         let (mut sbwt_2, lcs_2) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_2);
         let merge_plan = crate::merge::MergeInterleaving::new(&sbwt_1, &sbwt_2, true, 3);
-        let sbwt_merged = crate::merge::merge(sbwt_1, sbwt_2, merge_plan, 0, 3);
+        let mut sbwt_merged = crate::merge::merge(sbwt_1, sbwt_2, merge_plan, 0, 3);
+        sbwt_merged.build_select();
 
         let dbg = Dbg::new(&sbwt_merged, None, 3);
         let v = dbg.get_node(b"TACGTACACA".as_slice()).unwrap();
