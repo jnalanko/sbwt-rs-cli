@@ -412,6 +412,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn indegree_with_redundant_dummy_in_neighbor() {
+        let k = 10;
+        let s1: &[u8] =  b"TACGTACACA";
+        let s2: &[u8] = b"ATACGTACACA";
+        let seqs_1: &[&[u8]] = &[s1];
+        let seqs_2: &[&[u8]] = &[s2];
+        // We will merge SBWTs of these two sequences. The 10-mer TACGTACACA
+        // requires a dummy path in seqs_1, but not in seqs_2. The merged SBWT
+        // will have a dummy in-neighbor and a real in-neighbor. The dummy in-neighbor
+        // should not be counted into the indegree.
+
+        let (mut sbwt_1, lcs_1) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_1);
+        let (mut sbwt_2, lcs_2) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_2);
+        let merge_plan = crate::merge::MergeInterleaving::new(&sbwt_1, &sbwt_2, true, 3);
+        let sbwt_merged = crate::merge::merge(sbwt_1, sbwt_2, merge_plan, 0, 3);
+
+        let dbg = Dbg::new(&sbwt_merged, None, 3);
+        let v = dbg.get_node(b"TACGTACACA".as_slice()).unwrap();
+        assert_eq!(dbg.indegree(v), 1);
+        assert_eq!(dbg.follow_inedge(v, 0).unwrap(), dbg.get_node(b"ATACGTACAC".as_slice()).unwrap());
+    } 
+
+    #[test]
     fn finimizer_paper_example_unitig_export(){
         // Note: this test does not cover the cyclic unitig case
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
