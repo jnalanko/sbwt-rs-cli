@@ -146,7 +146,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// Returns the number of outgoing edges from the given node.
     pub fn outdegree(&self, node: Node) -> usize {
         assert!(!self.dummy_marks[node.id]);
-        self.sbwt.sbwt.subset_size(self.get_suffix_group_start(node))
+        self.sbwt.sbwt.subset_size(self.get_suffix_group_start(node.id))
     }
 
     /// Returns the number of incoming edges to the given node.
@@ -163,16 +163,12 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     }
     
     // Returns the colex rank of the smallest k-mer (possibly dummy)
-    // that has the same suffix of length (k-1) as the given node.
-    fn get_suffix_group_start(&self, node: Node) -> usize {
-        assert!(!self.dummy_marks[node.id]);
-        let mut v = Node{id: node.id};
-
-        // Go to the smallest k-mer that has the same suffix as our node
-        while !self.k_minus_1_marks[v.id] { // index 0 is always marked so we're good
-            v.id -= 1;
+    // that has the same suffix of length (k-1) as the given colex position (possibly dummy)
+    fn get_suffix_group_start(&self, mut colex: usize) -> usize {
+        while !self.k_minus_1_marks[colex] { // index 0 is always marked so we're good
+            colex -= 1;
         }
-        v.id
+        colex
     }
 
     /// For each outgoing edge from the given node, pushes to the output vector a pair
@@ -180,7 +176,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     pub fn push_out_neighbors(&self, node: Node, output: &mut Vec<(Node, u8)>){
         assert!(!self.dummy_marks[node.id]);
 
-        let rep = self.get_suffix_group_start(node);
+        let rep = self.get_suffix_group_start(node.id);
 
         for (i, &c) in self.sbwt.alphabet().iter().enumerate() {
             if self.sbwt.sbwt.set_contains(rep, i as u8) {
@@ -191,12 +187,13 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     }
 
     /// For each incoming edge to the given node, pushes to the output vector a pair
-    /// (v, c), where v is the source node and c is the edge label.
+    /// (v, c), where v is the source node and c is the edge label. The edge label
+    /// will be the same for all in-neighbors because it has to be equal to the
+    /// last character of the destination k-mer.
     pub fn push_in_neighbors(&self, node: Node, output: &mut Vec<(Node, u8)>){
         assert!(!self.dummy_marks[node.id]);
         if let Some(v) = self.sbwt.inverse_lf_step(node.id) { // Predecessor
-            if self.dummy_marks[v] { return; }
-            let vrep = self.get_suffix_group_start(Node{id: v});
+            let vrep = self.get_suffix_group_start(v);
             let end = Self::next_1_bit(&self.k_minus_1_marks, vrep+1);
             let inlabel = self.get_last_character(node);
             (vrep..end).filter(|&i| !self.dummy_marks[i]).for_each(|i|{
@@ -214,7 +211,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// Returns whether the given node has an outgoing edge labeled with `edge_label`.
     pub fn has_outlabel(&self, node: Node, edge_label: u8) -> bool {
         assert!(!self.dummy_marks[node.id]);
-        let rep = self.get_suffix_group_start(node);
+        let rep = self.get_suffix_group_start(node.id);
         let c_idx = self.sbwt.char_idx(edge_label) as u8;
         self.sbwt.sbwt.set_contains(rep, c_idx)
     }
@@ -222,7 +219,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// Pushes the labels of all outgoing edges from the given node to the output vector.
     pub fn push_outlabels(&self, node: Node, output: &mut Vec<u8>) {
         assert!(!self.dummy_marks[node.id]);
-        let rep = self.get_suffix_group_start(node);
+        let rep = self.get_suffix_group_start(node.id);
         self.sbwt.sbwt.append_set_to_buf(rep, output);
         for c in output.iter_mut() { // Map from 0123 to ACGT
             *c = self.sbwt.alphabet()[*c as usize];
@@ -236,7 +233,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         if !self.has_outlabel(node, edge_label) {
             return None;
         }
-        let rep = self.get_suffix_group_start(node);
+        let rep = self.get_suffix_group_start(node.id);
         Some(Node{id: self.sbwt.lf_step(rep, self.sbwt.char_idx(edge_label))})
     }
 
@@ -251,7 +248,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
             // that asserts that we're not calling it with a dummy.
             v
         } else {
-            self.get_suffix_group_start(Node{id: v})
+            self.get_suffix_group_start(v)
             // ^ This might be unnecessary since inverse_lf_step always takes
             // us to the smallest k-mer of a suffix group?
         };
