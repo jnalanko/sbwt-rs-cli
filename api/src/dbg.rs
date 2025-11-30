@@ -163,7 +163,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     }
     
     // Returns the colex rank of the smallest k-mer (possibly dummy)
-    // that has the same suffix as the given node.
+    // that has the same suffix of length (k-1) as the given node.
     fn get_suffix_group_start(&self, node: Node) -> usize {
         assert!(!self.dummy_marks[node.id]);
         let mut v = Node{id: node.id};
