@@ -153,7 +153,11 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     pub fn indegree(&self, node: Node) -> usize {
         assert!(!self.dummy_marks[node.id]);
         match self.follow_inedge(node, 0) {
-            Some(v) => self.k_minus_1_mer_freq(v),
+            Some(v) => {
+                let s = v.id; // This is the smallest non-dummy in-neighbor
+                let e = Self::next_1_bit(&self.k_minus_1_marks, s + 1);
+                e - s
+            },
             None => 0,
         }
     }
@@ -232,17 +236,6 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         }
         let rep = self.get_representative_k_minus_1_mer(node);
         Some(Node{id: self.sbwt.lf_step(rep.id, self.sbwt.char_idx(edge_label))})
-    }
-
-    // Takes in the representative (= colex smallest) node suffixed by the (k-1)-mer
-    // Returns the number of full k-mers that have the same (k-1)-mer suffix as the given
-    // representative (including itself if rep itself is a full k-mer).
-    fn k_minus_1_mer_freq(&self, rep: Node) -> usize {
-        assert!(!self.dummy_marks[rep.id]);
-        assert!(self.k_minus_1_marks[rep.id]);
-        let start = rep.id;
-        let end = Self::next_1_bit(&self.k_minus_1_marks, start+1);
-        self.dummy_marks[start..end].iter().filter(|b| !(**b)).count() // Number of 0-bits in range
     }
 
     /// Follows backward the incoming edge that comes from the i-th smallest k-mer
