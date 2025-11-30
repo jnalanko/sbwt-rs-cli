@@ -434,6 +434,12 @@ mod tests {
         let v = dbg.get_node(b"TACGTACACA".as_slice()).unwrap();
         assert_eq!(dbg.indegree(v), 1);
         assert_eq!(dbg.follow_inedge(v, 0).unwrap(), dbg.get_node(b"ATACGTACAC".as_slice()).unwrap());
+
+        let mut buf = vec![];
+        dbg.push_in_neighbors(v, &mut buf);
+        assert_eq!(buf.len(), 1);
+        assert_eq!(buf.first().unwrap().0, dbg.get_node(b"ATACGTACAC".as_slice()).unwrap());
+        assert_eq!(buf.first().unwrap().1, b'A');
     } 
 
     #[test]
