@@ -278,8 +278,13 @@ pub(crate) fn segment_range(range: Range<usize>, n_pieces: usize) -> Vec<Range<u
     let segment_len = range.len().div_ceil(n_pieces);
     let mut pieces: Vec<Range<usize>> = vec![];
     for t in 0..n_pieces{
-        pieces.push(range.start + t*segment_len .. 
-                    range.start + min((t+1)*segment_len, range.len())); // Final segments may be empty. Is ok.
+        let mut s = range.start + t*segment_len;
+        let mut e = range.start + min((t+1)*segment_len, range.len());
+        if s >= range.end { // Happens e.g. if range.len() == 1 and n_pieces == 10
+            s = range.end;
+            e = range.end;
+        }
+        pieces.push(s..e); // Final segments may be empty. Is ok.
     }
     pieces
 }
