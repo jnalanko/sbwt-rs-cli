@@ -192,10 +192,10 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// last character of the destination k-mer.
     pub fn push_in_neighbors(&self, node: Node, output: &mut Vec<(Node, u8)>){
         assert!(!self.dummy_marks[node.id]);
+        let inlabel = self.get_last_character(node);
         if let Some(v) = self.sbwt.inverse_lf_step(node.id) { // Predecessor
             let vrep = self.get_suffix_group_start(v);
             let end = Self::next_1_bit(&self.k_minus_1_marks, vrep+1);
-            let inlabel = self.get_last_character(node);
             (vrep..end).filter(|&i| !self.dummy_marks[i]).for_each(|i|{
                 output.push((Node{id: i}, inlabel));
             });
@@ -262,7 +262,6 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 
         None
     }
-
 
     // Iterates unitigs in parallel and calls the given callback on each. The callback
     // is given the nodes in the unitig in order, and the string label of the unitig as &[u8].
@@ -350,13 +349,20 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     }
 
     pub fn is_first_kmer_of_unitig(&self, v: Node) -> bool {
-        if self.indegree(v) > 1 {
+        let predecessor = self.sbwt.inverse_lf_step(v.id).unwrap();
+        // ^ Unwrap is okay because v is a Node, so it's not the root of the SBWT tree.
+
+        let mut s = self.get_suffix_group_start(predecessor);
+        let e = Self::next_1_bit(&self.k_minus_1_marks, s+1);
+        if self.dummy_marks[s] { 
+            s += 1 
+        } // Skip over dummy (if there is a dummy predecessor, there can be only one).
+
+        let indegree = e-s;
+        if indegree != 1 {
             return true;
-        }
-        if let Some(u) = self.follow_inedge(v, 0) {
-            self.outdegree(u) > 1
         } else {
-            true
+            return self.outdegree(Node{id: s}) > 1;
         }
     }
 
