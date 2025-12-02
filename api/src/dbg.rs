@@ -264,10 +264,10 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     }
 
     // Iterates unitigs in parallel and calls the given callback on each. The callback
-    // is given the nodes in the unitig in order, and the string label of the unitig as &[u8].
+    // is given the nodes in the unitig in order.
     // The starting point of cyclic unitigs may vary nondeterministically between calls because
     // of parallelism.
-    pub fn iter_unitigs_with_callback<F: Fn(&[Node], &[u8]) + Send + Sync>(&self, callback: F, n_threads: usize){
+    pub fn iter_unitigs_with_callback<F: Fn(&[Node]) + Send + Sync>(&self, callback: F, n_threads: usize){
 
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
@@ -286,8 +286,8 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                     .filter(|&colex| self.is_first_kmer_of_unitig(Node{id: colex}))
                     .for_each(|colex| {
                         let mut out_labels_buf = Vec::<u8>::new();
-                        let (nodes, unitig_string) = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
-                        callback(&nodes, &unitig_string);
+                        let nodes = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
+                        callback(&nodes);
 
                         // Mark the nodes as visited
                         for u in nodes {
@@ -314,8 +314,8 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                         }
                         if !self.dummy_marks[colex] {
                             out_labels_buf.clear();
-                            let (nodes, unitig_string) = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
-                            callback(&nodes, &unitig_string);
+                            let nodes = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
+                            callback(&nodes);
                             for u in nodes {
                                 assert!(!visited[u.id]);
                                 visited.set(u.id, true);
@@ -338,9 +338,11 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         let unitig_id = 0_usize;
         let shared_data = Arc::new(Mutex::new((fasta_out, unitig_id)));
 
-        let write_unitig_callback = move |_ : &[Node], unitig_string: &[u8]| {
+        let write_unitig_callback = move |nodes : &[Node]| {
             let (fasta_out, unitig_id) = &mut *shared_data.lock().unwrap();
-            write!(fasta_out, ">{}\n{}\n", unitig_id, String::from_utf8_lossy(unitig_string)).unwrap();
+            let mut unitig_string = Vec::<u8>::new();
+            self.push_unitig_string(nodes, &mut unitig_string);
+            write!(fasta_out, ">{}\n{}\n", unitig_id, String::from_utf8_lossy(&unitig_string)).unwrap();
             *unitig_id += 1;
         };
 
@@ -366,29 +368,44 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         }
     }
 
-    // Returns the sequence of nodes and the label of the unitig
-    // The out_labels_buf is working space for the function. Don't assume
-    // anything about its contents when the function returns.
-    pub fn walk_unitig_from(&self, mut v: Node, out_labels_buf: &mut Vec<u8>) -> (Vec<Node>, Vec<u8>){
+    /// Computes the unitig string for a unitig represented as a sequence of Nodes.
+    /// You can get this sequence of nodes by calling [Dbg::walk_unitig_from] with
+    /// a node for which [Dbg::is_first_kmer_of_unitig] is true. If the node sequence
+    /// is not a unitig, then the computed string will be the first k-mer, plus the
+    /// last character of every following k-mer.
+    pub fn push_unitig_string(&self, unitig_nodes: &[Node] , out: &mut Vec<u8>) {
+        if unitig_nodes.is_empty() { return }
+
+        self.push_node_kmer(*unitig_nodes.first().unwrap(), out); 
+        // ^ Unwrap is okay because we checked for empty unitig at the start
+
+        for v in &unitig_nodes[1..] {
+            let c = self.sbwt.inlabel(v.id).unwrap();
+            out.push(c);
+        }
+    }
+
+    /// Returns the sequence of nodes and the label of the unitig
+    /// The out_labels_buf is working space for the function. Don't assume
+    /// anything about its contents when the function returns. If you also
+    /// want the string label of the unitig, call [Dbg::push_unitig_string] with 
+    /// the returned Node vector.
+    pub fn walk_unitig_from(&self, mut v: Node, out_labels_buf: &mut Vec<u8>) -> Vec<Node> {
         let v0 = v;
         let mut nodes = Vec::<Node>::new();
         nodes.push(v);
         
-        let mut label = Vec::<u8>::new();
-        self.push_node_kmer(v, &mut label); 
-
         while self.outdegree(v) == 1 {
             out_labels_buf.clear();
             self.push_outlabels(v, out_labels_buf);
             let c = out_labels_buf[0];
             v = self.follow_outedge(v, c).unwrap();
             if v != v0 && self.indegree(v) == 1 {
-                label.push(c);
                 nodes.push(v);
             } else { break; }
         }
 
-        (nodes, label)
+        nodes
     }
 
     pub fn is_dummy_colex_position(&self, pos: usize) -> bool {
