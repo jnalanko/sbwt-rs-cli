@@ -2,7 +2,6 @@ use std::cmp::min;
 
 use num::Integer;
 
-
 fn get_int<const BIT_WIDTH: usize>(data: &[u64], i: usize) -> usize {
     let bit_idx = i * BIT_WIDTH; 
     let word_idx = bit_idx / 64;
@@ -106,7 +105,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     /// except possibly the last nonzero one, and that the range lengths sum to self.len(). You can use
     /// [CompactIntVector::split_to_approx_even_mut_ranges] if you just want roughly even pieces.
     #[allow(clippy::len_zero)]
-    pub fn split_to_mut_ranges(&mut self, range_lengths: &[usize]) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+    pub fn split_to_mut_ranges<'a>(&'a mut self, range_lengths: &[usize]) -> Vec<CompactIntVectorMutSlice<'a, BIT_WIDTH>> {
         assert!(!range_lengths.is_empty());
 
         // Validate range lengths.
@@ -135,7 +134,7 @@ impl<const BIT_WIDTH: usize> CompactIntVector<BIT_WIDTH> {
     }
 
     #[allow(clippy::len_zero)]
-    pub fn split_to_approx_even_mut_ranges(&mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<BIT_WIDTH>> {
+    pub fn split_to_approx_even_mut_ranges<'a>(&'a mut self, n_ranges: usize) -> Vec<CompactIntVectorMutSlice<'a, BIT_WIDTH>> {
 
         let n_words = self.data.len();
 

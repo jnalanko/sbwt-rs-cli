@@ -22,7 +22,7 @@ struct SeqBatch {
 }
 
 impl SeqBatch {
-    fn iter(&self) -> SeqBatchIterator {
+    fn iter<'a>(&'a self) -> SeqBatchIterator<'a> {
         SeqBatchIterator{batch: self, index: 0}
     }
 

@@ -4,11 +4,6 @@ use read_exact::{self, ReadExactExt};
 
 use crate::util::is_dna;
 
-#[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
-pub struct Kmer{
-    data: u64
-}
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum KmerEncodingError{
