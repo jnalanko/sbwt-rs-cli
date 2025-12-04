@@ -741,18 +741,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     /// Output: writes the input labels to the output ranges. Read the code for details. 
     /// The length of output_ranges[j] must be equal to the number of occurrences of character j in the input range.
     pub(crate) fn push_labels_forward(&self, labels: &[u8], sbwt_input_range: std::ops::Range<usize>, output_ranges: Vec<&mut[u8]>){
-        assert_eq!(labels.len(), sbwt_input_range.len());
-        assert_eq!(output_ranges.len(), self.alphabet().len());
-        if sbwt_input_range.is_empty() { return }
-
-        #[allow(clippy::needless_range_loop)]
-        for (char_idx, output_slice) in output_ranges.into_iter().enumerate() {
-            let mut output_offset = 0_usize;
-            self.sbwt.call_on_char_occurrences(sbwt_input_range.clone(), char_idx as u8, |colex| {
-                output_slice[output_offset] = labels[colex - sbwt_input_range.start];
-                output_offset += 1;
-            });
-        }
+        self.sbwt.push_labels_forward(labels, sbwt_input_range, output_ranges);
     }
 
     /// Build the last column of the SBWT matrix.
