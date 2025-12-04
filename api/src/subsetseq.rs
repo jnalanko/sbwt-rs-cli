@@ -318,8 +318,7 @@ where
     }
 
     // --- Middle words: no masking at all ---
-    for w in (start_word + 1)..end_word {
-        let word = words[w];
+    for (w, &word) in words[start_word + 1..end_word].iter().enumerate() {
         if word != 0 {
             scan_word(word, w * 64, &mut cb);
         }
