@@ -439,10 +439,10 @@ mod tests {
         // will have a dummy in-neighbor and a real in-neighbor. The dummy in-neighbor
         // should not be counted into the indegree.
 
-        let (mut sbwt_1, lcs_1) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_1);
-        let (mut sbwt_2, lcs_2) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_2);
+        let (sbwt_1, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_1);
+        let (sbwt_2, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(k).build_lcs(true).run_from_slices(seqs_2);
         let merge_plan = crate::merge::MergeInterleaving::new(&sbwt_1, &sbwt_2, true, 3);
-        let mut sbwt_merged = crate::merge::merge(sbwt_1, sbwt_2, merge_plan, 0, 3);
+        let mut sbwt_merged = crate::merge::merge(Arc::new(sbwt_1), Arc::new(sbwt_2), Arc::new(merge_plan), 0, 3);
         sbwt_merged.build_select();
 
         let dbg = Dbg::new(&sbwt_merged, None, 3);

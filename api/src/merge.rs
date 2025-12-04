@@ -519,8 +519,8 @@ fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(
 /// in the merge is `n_threads`. Indexes are passed in as Arcs because if those are the only existing references,
 /// this function can free the input SBWTs early which lowers the memory peak. Passing as Arc also allows
 /// for use cases where the caller still wants to hold onto the sbwts: in that case dropping the Arcs
-/// here will not free the memory.
-pub fn merge<SS: SubsetSeq + Send + Sync>(index1: Arc<SbwtIndex::<SS>>, index2: Arc<SbwtIndex::<SS>>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize, n_threads: usize) -> SbwtIndex::<SS> {
+/// here will not free the memory. Same goes for the interleaving.
+pub fn merge<SS: SubsetSeq + Send + Sync>(index1: Arc<SbwtIndex::<SS>>, index2: Arc<SbwtIndex::<SS>>, interleaving: Arc<MergeInterleaving>, new_prefix_lookup_table_length: usize, n_threads: usize) -> SbwtIndex::<SS> {
     let sigma = crate::util::DNA_ALPHABET.len(); 
     
     assert!(index1.k() == index2.k());
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(inter_high_ram, inter_high_ram_1_thread);
         assert_eq!(inter_high_ram, inter_low_ram_1_thread);
 
-        let sbwt_merged = merge(sbwt1, sbwt2, inter_high_ram, 4, 3);
+        let sbwt_merged = merge(Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()), Arc::new(inter_high_ram.clone()), 4, 3);
 
         // Can't compare directly to sbwt_both because the dummies may differ
         // -> Dump k-mers and remove dummies
