@@ -318,10 +318,8 @@ where
     }
 
     // --- Middle words: no masking at all ---
-    for (w, &word) in words[start_word + 1..end_word].iter().enumerate() {
-        if word != 0 {
-            scan_word(word, w * 64, &mut cb);
-        }
+    for (rel_idx, &word) in words[start_word + 1..end_word].iter().enumerate() {
+        scan_word(word, (start_word + 1 + rel_idx) * 64, &mut cb);
     }
 
     // --- Last word: mask only the high bits ---
