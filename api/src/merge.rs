@@ -1,6 +1,7 @@
 
 use std::cmp::min;
 use std::ops::Range;
+use std::sync::Arc;
 
 use bitvec::prelude::*;
 use rayon::iter::IntoParallelIterator;
@@ -513,8 +514,13 @@ fn split_to_pieces_par(s: &BitSlice, n_pieces: usize, n_threads: usize) -> Vec<(
 }
 
 
-/// Merge `index1` and `index2` according to `interleaving`. After the merge, a [PrefixLookupTable] with prefix length `new_prefix_lookup_table_length` will be added to new index. The number of threads used in the merge is `n_threads`.
-pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtIndex::<SS>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize, n_threads: usize) -> SbwtIndex::<SS> {
+/// Merge `index1` and `index2` according to `interleaving`. After the merge, a [PrefixLookupTable] with 
+/// prefix length `new_prefix_lookup_table_length` will be added to new index. The number of threads used 
+/// in the merge is `n_threads`. Indexes are passed in as Arcs because if those are the only existing references,
+/// this function can free the input SBWTs early which lowers the memory peak. Passing as Arc also allows
+/// for use cases where the caller still wants to hold onto the sbwts: in that case dropping the Arcs
+/// here will not free the memory.
+pub fn merge<SS: SubsetSeq + Send + Sync>(index1: Arc<SbwtIndex::<SS>>, index2: Arc<SbwtIndex::<SS>>, interleaving: MergeInterleaving, new_prefix_lookup_table_length: usize, n_threads: usize) -> SbwtIndex::<SS> {
     let sigma = crate::util::DNA_ALPHABET.len(); 
     
     assert!(index1.k() == index2.k());
@@ -585,8 +591,8 @@ pub fn merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex::<SS>, index2: SbwtI
             new_rows
         }).collect();
 
-        drop(index1); // Free memory
-        drop(index2); // Free memory
+        drop(index1); // Free memory (if this is the only reference)
+        drop(index2); // Free memory (if this is the only reference)
         drop(interleaving); // Free memory
 
         // Collect pieces for each char ("transpose the Vec<Vec<...>>")
