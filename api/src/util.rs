@@ -493,4 +493,11 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn for_each_one_bit_hand_crafted_edge_cases() {
+        let words: &[u64] = &[0,0,0,u64::MAX,u64::MAX,0,u64::MAX,u64::MAX];
+        check_for_each_one_bit(words, 0..words.len()*64);
+        check_for_each_one_bit(words, 10..words.len()*64-10);
+    }
 }
