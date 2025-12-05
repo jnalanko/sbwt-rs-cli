@@ -362,9 +362,9 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 
         let indegree = e-s;
         if indegree != 1 {
-            return true;
+            true
         } else {
-            return self.outdegree(Node{id: s}) > 1;
+            self.outdegree(Node{id: s}) > 1
         }
     }
 
