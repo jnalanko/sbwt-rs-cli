@@ -426,31 +426,50 @@ mod tests {
         assert_eq!(true_concat, our_concat);
     }
 
+    fn check_for_each_one_bit(words: &[u64], range: Range<usize>) {
+        let bv: bitvec::vec::BitVec::<u64, Lsb0> = bitvec::vec::BitVec::from_vec(words.to_vec());
+        let true_bits: Vec<usize> = bv.iter_ones().filter(|b| range.contains(b)).collect();
+
+        let mut our_bits = Vec::<usize>::new();
+        for_each_one_bit(words, range, |i| our_bits.push(i));
+
+        assert_eq!(true_bits, our_bits);
+    }
+
     #[test]
     fn for_each_one_bit_zero_word() {
         let words = [0_u64];
-        let true_bits: Vec<usize> = bitvec![0; 64].iter_ones().collect();
-        let mut our_bits = Vec::<usize>::new();
-        for_each_one_bit(&words, 0..64, |i| our_bits.push(i));
-        assert_eq!(true_bits, our_bits);
+        check_for_each_one_bit(&words, 0..64);
     }
 
     #[test]
     fn for_each_one_bit_empty() {
         let words = [u64::MAX, u64::MAX, u64::MAX];
-        let true_bits: Vec<usize> = vec![];
 
         for s in 0..64*3 {
-            let mut our_bits = Vec::<usize>::new();
-            for_each_one_bit(&words, s..s, |i| our_bits.push(i));
-            assert_eq!(true_bits, our_bits);
+            check_for_each_one_bit(&words, s..s);
         }
-
     }
 
     #[test]
     fn for_each_one_bit_one_word() {
-        todo!();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1234);
+        let mut bits = bitvec![u64, Lsb0;];
+        let range = 10..50;
+        for i in 0..64 {
+            if range.contains(&i) {
+                bits.push(rng.gen_bool(0.5));
+            } else {
+                bits.push(true); // These bits should be masked out
+            }
+        }
+        eprintln!("{}", bits);
+        let words = bits.into_vec();
+        for s in 0..64 {
+            for e in s..64 {
+                check_for_each_one_bit(words.as_slice(), s..e);
+            }
+        }
     }
 
     #[test]
