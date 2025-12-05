@@ -446,9 +446,10 @@ mod tests {
     fn for_each_one_bit_empty() {
         let words = [u64::MAX, u64::MAX, u64::MAX];
 
-        for s in 0..=64*3 {
+        for s in 0..64*3 {
             check_for_each_one_bit(&words, s..s);
         }
+        check_for_each_one_bit(&words, 64*3..1000); // Out of bounds
     }
 
     #[test]
