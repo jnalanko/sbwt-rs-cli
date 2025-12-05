@@ -251,87 +251,13 @@ impl SubsetSeq for SubsetMatrix{
 
             // We roll our own one-bit iterator because the one in the bitvec crate
             // has a lot of overhead. This one is something like 6x faster!
-            for_each_one_bit(words, sbwt_input_range.start, sbwt_input_range.end, |i| {
+            crate::util::for_each_one_bit(words, sbwt_input_range.start, sbwt_input_range.end, |i| {
                 output_slice[output_offset] = labels[i - sbwt_input_range.start];
                 output_offset += 1;
             });
         }
     }
 
-}
-
-fn for_each_one_bit<F>(words: &[u64], s: usize, e: usize, mut cb: F)
-where
-    F: FnMut(usize),
-{
-    if words.is_empty() || s >= e {
-        return;
-    }
-
-    let bit_len = words.len() * 64;
-    if s >= bit_len {
-        return;
-    }
-
-    let start_word = s / 64;
-    let end_word = (e - 1) / 64; // inclusive
-
-    // Helper: iterate 1-bits in a single word, adding `base_bit` to positions.
-    #[inline]
-    fn scan_word<F>(mut word: u64, base_bit: usize, cb: &mut F)
-    where
-        F: FnMut(usize),
-    {
-        while word != 0 {
-            let tz = word.trailing_zeros() as usize;
-            cb(base_bit + tz);
-            word &= word - 1; // clear lowest set bit
-        }
-    }
-
-    // Single-word range: mask both ends in the same word.
-    if start_word == end_word {
-        let start_bit = s % 64;
-        let end_bit = e % 64; // exclusive
-
-        let mut word = words[start_word];
-
-        // Mask out bits before s
-        word &= !0u64 << start_bit;
-
-        // Mask out bits at/after e
-        if end_bit != 0 {
-            word &= (1u64 << end_bit) - 1;
-        }
-
-        scan_word(word, start_word * 64, &mut cb);
-        return;
-    }
-
-    // --- First word: mask only the low bits ---
-    {
-        let start_bit = s % 64;
-        let mut word = words[start_word];
-
-        word &= !0u64 << start_bit;
-        scan_word(word, start_word * 64, &mut cb);
-    }
-
-    // --- Middle words: no masking at all ---
-    for (rel_idx, &word) in words[start_word + 1..end_word].iter().enumerate() {
-        scan_word(word, (start_word + 1 + rel_idx) * 64, &mut cb);
-    }
-
-    // --- Last word: mask only the high bits ---
-    {
-        let end_bit = e % 64; // exclusive; 0 means "all 64 bits are in range"
-        let mut word = words[end_word];
-
-        if end_bit != 0 {
-            word &= (1u64 << end_bit) - 1;
-        }
-        scan_word(word, end_word * 64, &mut cb);
-    }
 }
 
 /// Formats the subset matrix as an ASCII bit matrix of 0s and 1s, where row i

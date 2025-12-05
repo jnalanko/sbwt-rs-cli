@@ -273,7 +273,6 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(mut bv: bitvec::vec::BitVec::<u64,
     simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
 }
 
-#[allow(dead_code)]
 pub(crate) fn segment_range(range: Range<usize>, n_pieces: usize) -> Vec<Range<usize>> {
     let segment_len = range.len().div_ceil(n_pieces);
     let mut pieces: Vec<Range<usize>> = vec![];
@@ -304,6 +303,85 @@ pub(crate) fn gen_random_dna_string(len: usize, seed: u64) -> Vec<u8> {
         }
     }).collect()
 }
+
+
+// Calls the callback for each bit in the range s..e. This seems to be
+// about 6 times faster than using the iter_ones() function of BitVec
+// in the bitvec::crate.
+pub fn for_each_one_bit<F>(words: &[u64], s: usize, e: usize, mut cb: F)
+where
+    F: FnMut(usize),
+{
+    if words.is_empty() || s >= e {
+        return;
+    }
+
+    let bit_len = words.len() * 64;
+    if s >= bit_len {
+        return;
+    }
+
+    let start_word = s / 64;
+    let end_word = (e - 1) / 64; // inclusive
+
+    // Helper: iterate 1-bits in a single word, adding `base_bit` to positions.
+    #[inline]
+    fn scan_word<F>(mut word: u64, base_bit: usize, cb: &mut F)
+    where
+        F: FnMut(usize),
+    {
+        while word != 0 {
+            let tz = word.trailing_zeros() as usize;
+            cb(base_bit + tz);
+            word &= word - 1; // clear lowest set bit
+        }
+    }
+
+    // Single-word range: mask both ends in the same word.
+    if start_word == end_word {
+        let start_bit = s % 64;
+        let end_bit = e % 64; // exclusive
+
+        let mut word = words[start_word];
+
+        // Mask out bits before s
+        word &= !0u64 << start_bit;
+
+        // Mask out bits at/after e
+        if end_bit != 0 {
+            word &= (1u64 << end_bit) - 1;
+        }
+
+        scan_word(word, start_word * 64, &mut cb);
+        return;
+    }
+
+    // --- First word: mask only the low bits ---
+    {
+        let start_bit = s % 64;
+        let mut word = words[start_word];
+
+        word &= !0u64 << start_bit;
+        scan_word(word, start_word * 64, &mut cb);
+    }
+
+    // --- Middle words: no masking at all ---
+    for (rel_idx, &word) in words[start_word + 1..end_word].iter().enumerate() {
+        scan_word(word, (start_word + 1 + rel_idx) * 64, &mut cb);
+    }
+
+    // --- Last word: mask only the high bits ---
+    {
+        let end_bit = e % 64; // exclusive; 0 means "all 64 bits are in range"
+        let mut word = words[end_word];
+
+        if end_bit != 0 {
+            word &= (1u64 << end_bit) - 1;
+        }
+        scan_word(word, end_word * 64, &mut cb);
+    }
+}
+
 
 
 #[cfg(test)]
