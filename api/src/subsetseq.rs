@@ -251,7 +251,7 @@ impl SubsetSeq for SubsetMatrix{
 
             // We roll our own one-bit iterator because the one in the bitvec crate
             // has a lot of overhead. This one is something like 6x faster!
-            crate::util::for_each_one_bit(words, sbwt_input_range.start, sbwt_input_range.end, |i| {
+            crate::util::for_each_one_bit(words, sbwt_input_range.clone(), |i| {
                 output_slice[output_offset] = labels[i - sbwt_input_range.start];
                 output_offset += 1;
             });
