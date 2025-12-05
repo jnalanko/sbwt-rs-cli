@@ -308,7 +308,7 @@ pub(crate) fn gen_random_dna_string(len: usize, seed: u64) -> Vec<u8> {
 // Calls the callback for each bit in the range s..e. This seems to be
 // about 6 times faster than using the iter_ones() function of BitVec
 // in the bitvec::crate.
-#[inline] // This made a 25% difference in running time
+#[inline(always)] // This made a 25% difference in running time
 pub fn for_each_one_bit<F>(words: &[u64], s: usize, e: usize, mut cb: F)
 where
     F: FnMut(usize),
