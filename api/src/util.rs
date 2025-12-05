@@ -473,17 +473,24 @@ mod tests {
     }
 
     #[test]
-    fn for_each_one_bit_two_words() {
-        todo!();
-    }
-    
-    #[test]
-    fn for_each_one_bit_three_words() {
-        todo!();
-    }
-
-    #[test]
-    fn for_each_one_bit_ten_words_words() {
-        todo!();
+    fn for_each_one_bit_multiple_words() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(4123);
+        let mut bits = bitvec![u64, Lsb0;];
+        let n_bits = 512;
+        for s in (0..n_bits).step_by(32) {
+            for e in (s..n_bits).step_by(128) {
+                let range = s..e;
+                for i in 0..n_bits {
+                    if range.contains(&i) {
+                        bits.push(rng.gen_bool(0.5));
+                    } else {
+                        bits.push(true); // These bits should be masked out
+                    }
+                }
+                //eprintln!("{}", bits);
+                let words = bits.clone().into_vec();
+                check_for_each_one_bit(words.as_slice(), s..e);
+            }
+        }
     }
 }
