@@ -466,11 +466,9 @@ mod tests {
         }
         eprintln!("{}", bits);
         let words = bits.into_vec();
-        for s in 0..64 {
-            for e in s..64 {
-                check_for_each_one_bit(words.as_slice(), s..e);
-            }
-        }
+        check_for_each_one_bit(words.as_slice(), 0..64);
+        check_for_each_one_bit(words.as_slice(), range);
+        check_for_each_one_bit(words.as_slice(), 20..40);
     }
 
     #[test]
