@@ -32,10 +32,10 @@ pub trait ContractLeft {
 /// index, so it can be copied around cheaply.
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct StreamingIndex<'a, E: ExtendRight, C: ContractLeft> {
-    extend_right: &'a E,
-    contract_left: &'a C,
-    n: usize, // The empty string has colex range [0,n)
-    k: usize, // Maximum length of a match
+    pub extend_right: &'a E,
+    pub contract_left: &'a C,
+    pub n: usize, // The empty string has colex range [0,n)
+    pub k: usize, // Maximum length of a match
 }
 
 impl<'a, SS: SubsetSeq> StreamingIndex<'a, SbwtIndex<SS>, LcsArray> {
@@ -255,9 +255,20 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
     /// Returns an array A of length `query.len()`, where A\[i\] is a pair (d, I) where d is the length of the longest
     /// suffix of `query[i-k+1..=i]` that is found in the index, and I is the colexicographic interval of the match.
     /// The algorithm is described in the paper [Finimizers: Variable-length bounded-frequency minimizers for k-mer sets](https://doi.org/10.1101/2024.02.19.580943).
+    /// For a length-bounded version, see [Self::bounded_matching_statistics].
     #[allow(non_snake_case)]
     pub fn matching_statistics(&self, query: &[u8]) -> Vec<(usize, std::ops::Range<usize>)> {
         let iter = self.matching_statistics_iter(query);
+        iter.collect()
+    }
+
+    /// Returns an array A of length `query.len()`, where A\[i\] is a pair (d, I) where d is the length of the longest
+    /// suffix of `query[i-k+1..=i]` that is found in the index, *up to the given length bound*, and I is the colexicographic interval of the match.
+    /// If the length bound is significantly shorter than k, then the intervals can be very long, so the [ContractLeft] implementation
+    /// needs to have good worst-case time complexity.
+    #[allow(non_snake_case)]
+    pub fn bounded_matching_statistics(&self, query: &[u8], length_bound: usize) -> Vec<(usize, std::ops::Range<usize>)> {
+        let iter = self.bounded_matching_statistics_iter(query, length_bound);
         iter.collect()
     }
 
@@ -267,7 +278,7 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
     /// I: the current colex interval
     /// d: the current match length
     /// Returns the new match length and new colex interval
-    fn matching_statistics_update_step(&self, c: u8, mut I: Range<usize>, mut d: usize) -> (usize, Range<usize>) {
+    fn matching_statistics_update_step(&self, c: u8, mut I: Range<usize>, mut d: usize, length_bound: usize) -> (usize, Range<usize>) {
         if !crate::util::is_dna(c) { // Invalid character. Attempting to right-extend would panic, and anyway
             // we would need to contract all the way to the empty string, and that would
             // take a long time with the current LCS-scanning implementation.
@@ -290,12 +301,22 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
                 // In that case, I is already correct here, so we do not
                 // need to do anything. TODO: is this case covered by tests?
             } 
+            while d > length_bound {
+                I = self.contract_left.contract_left(I, d-1);
+                d -= 1;
+            }
             (d, I)
         }
     }
 
     /// Returns a [MatchingStatisticsIterator] for streaming the matching statistics.
     pub fn matching_statistics_iter<'a>(&self, query: &'a [u8]) -> MatchingStatisticsIterator<'index, 'a, E, C> {
+        self.bounded_matching_statistics_iter(query, usize::MAX)
+    }
+
+    /// Returns a [MatchingStatisticsIterator] for streaming the matching statistics with a given length bound
+    /// smaller than [Self::k()]
+    pub fn bounded_matching_statistics_iter<'a>(&self, query: &'a [u8], length_bound: usize) -> MatchingStatisticsIterator<'index, 'a, E, C> {
         MatchingStatisticsIterator { 
             colex_range: 0..self.n, 
             match_len: 0, 
@@ -305,7 +326,8 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
                 contract_left: self.contract_left, 
                 n: self.n, k: self.k 
             },
-            query 
+            query,
+            length_bound
         }
     }
 
@@ -325,6 +347,7 @@ pub struct MatchingStatisticsIterator<'a, 'b, E: ExtendRight, C: ContractLeft> {
 
     // Query
     query: &'b [u8],
+    length_bound: usize,
 }
 
 impl<E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'_, '_, E, C> {
@@ -332,7 +355,7 @@ impl<E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'_
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.query_pos < self.query.len() {
-            (self.match_len, self.colex_range) = self.streaming_index.matching_statistics_update_step(self.query[self.query_pos], self.colex_range.clone(), self.match_len);
+            (self.match_len, self.colex_range) = self.streaming_index.matching_statistics_update_step(self.query[self.query_pos], self.colex_range.clone(), self.match_len, self.length_bound);
             self.query_pos += 1;
             Some((self.match_len, self.colex_range.clone()))
         } else {
