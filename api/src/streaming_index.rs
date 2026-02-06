@@ -245,7 +245,7 @@ impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
                 }
             }
 
-            if I.len() <= freq_bound{
+            if I.len() <= freq_bound {
                 SFS[i] = Some((d, I.clone()));
             }
         }
