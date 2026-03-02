@@ -43,7 +43,7 @@ impl<SS: SeqStream + Send> crate::SeqStream for SeqStreamWithRevComp<SS>{
 
 /// Any struct implementing this interface can be used in [SbwtIndexBuilder] to construct the SBWT index and optionally the LCS array.
 pub trait SbwtConstructionAlgorithm {
-    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>);
+    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>);
 }
 
 /// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
@@ -53,7 +53,6 @@ pub struct BitPackedKmerSortingDisk{
     mem_gb: usize,
     dedup_batches: bool,
     temp_dir: std::path::PathBuf,
-    add_all_dummy_paths: bool,
 }
 
 #[deprecated(
@@ -69,7 +68,7 @@ impl BitPackedKmerSortingDisk {
     /// - do not deduplicate k-mer batches before sorting.
     /// - use the current directory as the temporary directory.
     pub fn new() -> Self {
-        Self{mem_gb: 4, dedup_batches: false, temp_dir: std::path::PathBuf::from_str(".").unwrap(), add_all_dummy_paths: false}
+        Self{mem_gb: 4, dedup_batches: false, temp_dir: std::path::PathBuf::from_str(".").unwrap()}
     }
 
     /// Set the amount of memory to use in gigabytes. This is not strictly enforced, but the algorithm will try to stay within this limit.
@@ -91,18 +90,12 @@ impl BitPackedKmerSortingDisk {
         self
     }
 
-    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
-    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
-        self.add_all_dummy_paths = enable;
-        self
-    }
 }
 
 impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
-    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mem_gb = self.mem_gb;
         let dedup_batches = self.dedup_batches;
-        let add_all_dummy_paths = self.add_all_dummy_paths;
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         match k {
             0..=32 => {
@@ -135,7 +128,6 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
 pub struct BitPackedKmerSortingMem{
     dedup_batches: bool,
     mem_gb: usize,
-    add_all_dummy_paths: bool,
 }
 
 impl BitPackedKmerSortingMem {
@@ -144,7 +136,7 @@ impl BitPackedKmerSortingMem {
     /// - do not deduplicate k-mer batches before sorting.
     /// - 8GB memory
     pub fn new() -> Self {
-        Self{dedup_batches: false, mem_gb: 8, add_all_dummy_paths: false}
+        Self{dedup_batches: false, mem_gb: 8}
     }
 
     /// Whether to deduplicate k-mer batches before sorting. If the input has many duplicate k-mers, this will reduce the disk space required by the algorithm.
@@ -160,18 +152,12 @@ impl BitPackedKmerSortingMem {
         self
     }
 
-    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
-    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
-        self.add_all_dummy_paths = enable;
-        self
-    }
 }
 
 impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
-    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let dedup_batches = self.dedup_batches;
         let mem_gb = self.mem_gb;
-        let add_all_dummy_paths = self.add_all_dummy_paths;
         match k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
@@ -206,6 +192,7 @@ pub struct SbwtIndexBuilder<A: SbwtConstructionAlgorithm + Default> {
     add_rev_comp: bool,
     build_select_support: bool,
     precalc_length: usize,
+    add_all_dummy_paths: bool,
 }
 
 impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
@@ -219,7 +206,7 @@ impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
     /// - precalc_length = 8.
     /// - default settings for the chosen algorithm.
     pub fn new() -> Self {
-        Self{k: 31, n_threads: 4, algorithm: A::default(), build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: 8}
+        Self{k: 31, n_threads: 4, algorithm: A::default(), build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: 8, add_all_dummy_paths: false}
     }
 
     /// Sets the k-mer length.
@@ -264,14 +251,21 @@ impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
         self
     }
 
+    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
+    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
+        self.add_all_dummy_paths = enable;
+        self
+    }
+
     /// Run the algorithm and return the SBWT index and optionally the LCS array if [build_lcs](SbwtIndexBuilder::build_lcs) was set.
     /// See also [run_from_slices](SbwtIndexBuilder::run_from_slices), [run_from_fasta](SbwtIndexBuilder::run_from_fasta) and [run_from_fastq](SbwtIndexBuilder::run_from_fastq).
     pub fn run<SS: SeqStream + Send>(self, input: SS) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+        let add_all_dummy_paths = self.add_all_dummy_paths;
         let (mut sbwt, lcs) = if self.add_rev_comp {
-            let input_with_rc = SeqStreamWithRevComp{inner: input, rc_buf: Vec::<u8>::new(), parity: false}; 
-            self.algorithm.run(input_with_rc, self.k, self.n_threads, self.build_lcs)
+            let input_with_rc = SeqStreamWithRevComp{inner: input, rc_buf: Vec::<u8>::new(), parity: false};
+            self.algorithm.run(input_with_rc, self.k, self.n_threads, self.build_lcs, add_all_dummy_paths)
         } else {
-            self.algorithm.run(input, self.k, self.n_threads, self.build_lcs)
+            self.algorithm.run(input, self.k, self.n_threads, self.build_lcs, add_all_dummy_paths)
         };
 
         if self.build_select_support {
