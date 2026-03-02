@@ -105,12 +105,12 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
 }
 
 // The return value is Some if store_first_mers is true
-fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool, store_first_mers: bool) -> Option<Vec<(LongKmer<B>, usize)>> {
+fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool, store_first_mers: bool) -> Option<Vec<(LongKmer<B>, u8)>> {
     assert!(shared_bin_buffers.len() == N_BINS);
     let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); N_BINS];
 
     let mut first_mers = if store_first_mers {
-        Some(Vec::<(LongKmer::<B>, usize)>::new())
+        Some(Vec::<(LongKmer::<B>, u8)>::new())
     } else {
         None
     };
@@ -129,7 +129,7 @@ fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender
                             run_range = run_range.end-k..run_range.end;
                         }
                         let mer = LongKmer::<B>::from_ascii(&seq[run_range.clone()]).unwrap();
-                        first_mers_ref.as_mut().unwrap().push((mer, run_range.len()));
+                        first_mers_ref.as_mut().unwrap().push((mer, run_range.len() as u8));
                     }
                 });
             }
@@ -254,7 +254,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     dedup_batches: bool,
     store_first_mers: bool,
     approx_mem_gb: usize
-) -> (Vec<LongKmer<B>>, Option<Vec<(LongKmer<B>, usize)>>) {
+) -> (Vec<LongKmer<B>>, Option<Vec<(LongKmer<B>, u8)>>) {
 
     assert!(k >= BIN_PREFIX_LEN);
 
@@ -300,7 +300,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         producer_handle.join().unwrap(); // Wait for the producer to finish
         drop(encoder_in); // Close the channel
 
-        let mut first_mers = if store_first_mers { Some(Vec::<(LongKmer<B>, usize)>::new()) } else { None };
+        let mut first_mers = if store_first_mers { Some(Vec::<(LongKmer<B>, u8)>::new()) } else { None };
         for h in encoder_handles { // Wait for the encoders to finish
             if let Some(mers) = h.join().unwrap() {
                 first_mers.as_mut().unwrap().extend(mers); // Unwrap is okay because we end up here only if store_first_mers is set

@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::ops::Range;
 
 use crate::bitpacked_kmer_sorting_mem::cursors::find_first_starting_with;
@@ -68,6 +69,7 @@ pub fn get_has_predecessor_marks<const B: usize>(
 
 pub fn get_sorted_dummies<const B: usize>(
     sorted_kmers: &[LongKmer::<B>],
+    given_mers: Option<Vec<(LongKmer<B>, u8)>>, // All dummy suffixes of these will be included.
     sigma: usize, k: usize, n_threads: usize
 ) -> Vec<(LongKmer<B>, u8)> {
 
@@ -137,6 +139,22 @@ pub fn get_sorted_dummies<const B: usize>(
 
         // Concatenate pieces
         let mut required_dummies = required_dummies_pieces.into_iter().fold(vec![], |mut acc, v| {acc.extend(v); acc});
+
+        if let Some(given_mers) = given_mers {
+            log::info!("Adding extra dummy k-mer strings");
+            for (mut prefix, mut prefix_full_len) in given_mers {
+                // Add all nonempty proper prefixes, and the full prefix if it's shorter than k
+                if prefix_full_len as usize == k {
+                    prefix = prefix.left_shifted(1);
+                    prefix_full_len -= 1;
+                }
+                for i in 0..prefix_full_len {
+                    let len = prefix_full_len - i;
+                    required_dummies.push((prefix, len as u8));
+                    prefix = prefix.left_shifted(1);
+                }
+            }
+        }
 
         // We always assume that the empty k-mer exists. This assumption is reflected in the C-array
         // later, which adds one "ghost dollar" count to all counts.

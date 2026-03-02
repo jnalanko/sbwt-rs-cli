@@ -33,10 +33,10 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Bit-packing and sorting all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
         let (rev_kmers, rev_first_mers) = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches, add_all_dummy_paths, approx_mem_gb);
 
-        if let Some(rev_first_mers) = rev_first_mers {
+        if let Some(rev_first_mers) = rev_first_mers.clone() {
             println!("TODO: DO SOMETHING WITH THESE -MERS");
             for (rev_mer, len) in rev_first_mers {
-                let mut s = rev_mer.to_string()[0..len].as_bytes().to_owned();
+                let mut s = rev_mer.to_string()[0..len as usize].as_bytes().to_owned();
                 s.reverse();
                 eprintln!("{}", String::from_utf8_lossy(&s));
             }
@@ -46,7 +46,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("{} distinct k-mers found", n_kmers);
 
         log::info!("Constructing dummy k-mers");
-        let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, sigma, k, n_threads);
+        let dummies = dummies::get_sorted_dummies::<B>(&rev_kmers, rev_first_mers, sigma, k, n_threads);
 
         log::info!("{} dummy nodes constructed", dummies.len());
 
