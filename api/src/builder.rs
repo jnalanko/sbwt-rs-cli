@@ -159,19 +159,19 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
         let add_all_dummy_paths = true; // TODO!! Put to config
         match k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             _ => {
                 panic!("k > 256 not supported with bitpacked sorting algorithm.");
