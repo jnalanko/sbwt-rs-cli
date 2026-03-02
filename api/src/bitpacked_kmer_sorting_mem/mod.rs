@@ -21,6 +21,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
     approx_mem_gb: usize,
     dedup_batches: bool,
     build_lcs: bool,
+    add_all_dummy_paths: bool,
 ) -> (SbwtIndex::<SS>, Option<LcsArray>) {
 
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
@@ -30,7 +31,16 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         let sigma = DNA_ALPHABET.len();
 
         log::info!("Bit-packing and sorting all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
-        let rev_kmers = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches, approx_mem_gb);
+        let (rev_kmers, rev_first_mers) = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches, add_all_dummy_paths, approx_mem_gb);
+
+        if let Some(rev_first_mers) = rev_first_mers {
+            println!("TODO: DO SOMETHING WITH THESE -MERS");
+            for (rev_mer, len) in rev_first_mers {
+                let mut s = rev_mer.to_string()[0..len].as_bytes().to_owned();
+                s.reverse();
+                eprintln!("{}", String::from_utf8_lossy(&s));
+            }
+        }
 
         let n_kmers = rev_kmers.len();
         log::info!("{} distinct k-mers found", n_kmers);

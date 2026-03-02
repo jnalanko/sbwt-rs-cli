@@ -156,6 +156,7 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let dedup_batches = self.dedup_batches;
         let mem_gb = self.mem_gb;
+        let add_all_dummy_paths = true; // TODO!! Put to config
         match k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs)

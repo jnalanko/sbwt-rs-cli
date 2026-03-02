@@ -500,3 +500,18 @@ mod tests {
         check_for_each_one_bit(words, 10..words.len()*64-10);
     }
 }
+
+pub fn for_each_run_with_key<T: Eq, KeyType: Eq, F1: Fn(&T) -> KeyType, F2: FnMut(Range<usize>)>(items: &[T], key_fn: F1, mut callback: F2) {
+    if items.is_empty() { return }
+
+    let mut run_start = 0;
+    let n = items.len();
+    for i in 1..n {
+        if key_fn(&items[i]) != key_fn(&items[i-1]) {
+            callback(run_start..i);
+            run_start = i;
+        }
+    }
+    // Final run
+    callback(run_start..n);
+}

@@ -1,8 +1,10 @@
 use std::cmp::max;
+use std::ops::Range;
 use std::sync::Mutex;
 
 use crate::kmer::KmerIterator;
 use crate::kmer::LongKmer;
+use crate::util::is_dna;
 
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
@@ -102,14 +104,36 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
     drop(out);
 }
 
-fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool) {
+// The return value is Some if store_first_mers is true
+fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool, store_first_mers: bool) -> Option<Vec<(LongKmer<B>, usize)>> {
     assert!(shared_bin_buffers.len() == N_BINS);
     let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); N_BINS];
+
+    let mut first_mers = if store_first_mers {
+        Some(Vec::<(LongKmer::<B>, usize)>::new())
+    } else {
+        None
+    };
+    let first_mers_ref = &mut first_mers; // To capture in a closure
+
     while let Ok(mut batch) = input.recv(){
         // Reverse to get colex sorting
         batch.reverse_all();
 
         for seq in batch.iter(){
+            if store_first_mers {
+                crate::util::for_each_run_with_key(seq, |c| is_dna(*c), |mut run_range: Range<usize>| {
+                    if !run_range.is_empty() && is_dna(seq[run_range.start]) {
+                        // Take the last up to k characters
+                        if run_range.len() > k {
+                            run_range = run_range.end-k..run_range.end;
+                        }
+                        let mer = LongKmer::<B>::from_ascii(&seq[run_range.clone()]).unwrap();
+                        first_mers_ref.as_mut().unwrap().push((mer, run_range.len()));
+                    }
+                });
+            }
+
             for kmer in KmerIterator::<B>::new(seq, k) {
                 let bin_id = kmer.get_from_left(0) as usize * 16 + kmer.get_from_left(1) as usize * 4 + kmer.get_from_left(2) as usize; // Interpret nucleotides in base-4
                 this_thread_bin_buffers[bin_id].push(kmer);
@@ -149,6 +173,8 @@ fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender
         }
         output.send(b).unwrap();
     }
+
+    first_mers
 
 }
 
@@ -218,13 +244,17 @@ fn determine_buf_capacities<const B: usize>(approx_mem_gb: usize, n_threads: usi
 }
 
 // Rayon thread pool must be initialized before calling
+// Returns the bitpacked k-mers and if requested, the *reverse* of the start of
+// every run of ACGT characters, up to length k. For example, if the sequence
+// is ACGTNNNNNACNN and k = 3, returns (GCA, 3) and (CA, 2)
 pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream + Send>(
     seqs: IN,
     k: usize,
     n_threads: usize,
     dedup_batches: bool,
+    store_first_mers: bool,
     approx_mem_gb: usize
-) -> Vec<LongKmer<B>> {
+) -> (Vec<LongKmer<B>>, Option<Vec<(LongKmer<B>, usize)>>) {
 
     assert!(k >= BIN_PREFIX_LEN);
 
@@ -241,7 +271,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     log::info!("Bitpacking and binning k-mers");
     // Wrap to scope to be able to borrow seqs for the producer thread even when it's not 'static.
-    let mut bins: Vec<Vec<LongKmer<B>>> = std::thread::scope(|scope| {
+    let (mut bins, first_mers) = std::thread::scope(|scope| {
         use crossbeam::crossbeam_channel::unbounded;
         let (parser_out, encoder_in) = unbounded();
         let (encoder_out, collector_in) = unbounded();
@@ -252,13 +282,13 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         });
 
         // Create encoders
-        let mut encoder_handles = Vec::<std::thread::ScopedJoinHandle::<()>>::new();
+        let mut encoder_handles = Vec::<std::thread::ScopedJoinHandle::<_>>::new();
 
         for _ in 0..n_threads {
             let encoder_in_clone = encoder_in.clone();
             let encoder_out_clone = encoder_out.clone();
             encoder_handles.push(scope.spawn(move || {
-                kmer_encoder_thread(encoder_in_clone, encoder_out_clone, shared_bin_buffers, k, thread_local_buf_caps, shared_buf_caps, dedup_batches);
+                kmer_encoder_thread(encoder_in_clone, encoder_out_clone, shared_bin_buffers, k, thread_local_buf_caps, shared_buf_caps, dedup_batches, store_first_mers)
             }));
         }
 
@@ -269,8 +299,12 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
         producer_handle.join().unwrap(); // Wait for the producer to finish
         drop(encoder_in); // Close the channel
+
+        let mut first_mers = if store_first_mers { Some(Vec::<(LongKmer<B>, usize)>::new()) } else { None };
         for h in encoder_handles { // Wait for the encoders to finish
-            h.join().unwrap();
+            if let Some(mers) = h.join().unwrap() {
+                first_mers.as_mut().unwrap().extend(mers); // Unwrap is okay because we end up here only if store_first_mers is set
+            }
         }
 
         // Send remaining shared batches
@@ -290,7 +324,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
         // Wait for the collector to finish and concatenate each sequence of shared bins
         let collected_shared_bin_seqs = collector_handle.join().unwrap();
-        collected_shared_bin_seqs.into_par_iter().map(|pieces| {
+        let bins: Vec<Vec<LongKmer<B>>> = collected_shared_bin_seqs.into_par_iter().map(|pieces| {
             // Concatenate all to the first piece (TODO: here if the
             // pieces are sorted, we can just merge the runs and the final sort
             // is done also).
@@ -305,8 +339,9 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                 first.shrink_to_fit();
                 first
             }
-        }).collect()
+        }).collect();
 
+        (bins, first_mers)
     });
 
     // Sort bins in parallel: todo: largest first
@@ -346,7 +381,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
         bin_concat.extend(bin.iter());
     }
 
-    bin_concat
+    (bin_concat, first_mers)
 
 }
 
