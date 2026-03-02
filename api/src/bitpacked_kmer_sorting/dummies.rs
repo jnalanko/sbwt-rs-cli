@@ -6,7 +6,7 @@ use simple_sds_sbwt::raw_vector::*;
 use rayon::prelude::*;
 
 // We take in a path and not a file object because we need multiple readers to the same file
-pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Path, sigma: usize, k: usize, temp_file_manager: &mut TempFileManager) -> Vec<(LongKmer::<B>, u8)>{
+pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Path, sigma: usize, k: usize, temp_file_manager: &mut TempFileManager, given_mers: Option<Vec<(LongKmer<B>, u8)>>) -> Vec<(LongKmer::<B>, u8)>{
 
     // Todo: I'm using dummy merger cursors with an empty dummy file. Should refactor things to manage without the
     // empty dummy file.
@@ -71,6 +71,21 @@ pub fn get_sorted_dummies<const B: usize>(sorted_kmers_filepath: &std::path::Pat
             }
         }
         global_cursor.next(); // Advance
+    }
+
+    if let Some(given_mers) = given_mers {
+        log::info!("Adding extra dummy k-mer strings");
+        for (mut prefix, mut prefix_full_len) in given_mers {
+            if prefix_full_len as usize == k {
+                prefix = prefix.left_shifted(1);
+                prefix_full_len -= 1;
+            }
+            for i in 0..prefix_full_len {
+                let len = prefix_full_len - i;
+                required_dummies.push((prefix, len as u8));
+                prefix = prefix.left_shifted(1);
+            }
+        }
     }
 
     // We always assume that the empty k-mer exists. This assumption is reflected in the C-array

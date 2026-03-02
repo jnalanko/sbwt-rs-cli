@@ -95,27 +95,28 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mem_gb = self.mem_gb;
         let dedup_batches = self.dedup_batches;
+        let add_all_dummy_paths = true; // TODO!! Put to config
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         match k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             _ => {
                 panic!("k > 256 not supported with bitpacked sorting algorithm.");
             }
-        } 
+        }
     }
 }
 

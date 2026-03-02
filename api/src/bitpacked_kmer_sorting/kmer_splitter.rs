@@ -19,8 +19,9 @@ fn colex_sorted_binmers(bin_prefix_len: usize) -> Vec<Vec<u8>> {
     binmers
 }
 
-// Returns the files of the bins, and the total number of bytes written to the files.
-pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, temp_file_manager: &mut TempFileManager) -> (Vec<TempFile>, usize){
+// Returns the files of the bins, the total number of bytes written to the files, and optionally
+// the reversed first (up to k) characters of each DNA run in the input sequences.
+pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (Vec<TempFile>, usize, Option<Vec<(LongKmer<B>, u8)>>){
 
     // Suppose we have a memory budget of m bytes and t threads.
     // Suppose each k-mer takes s bytes and there are 64 bins.
@@ -73,7 +74,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
         });
 
         // Create encoder-splitters
-        let mut encoder_handles = Vec::<thread::JoinHandle::<()>>::new();
+        let mut encoder_handles = Vec::<thread::JoinHandle::<Vec<(LongKmer<B>, u8)>>>::new();
         for _ in 0..n_threads{
             let receiver_clone = encoder_in.clone();
             let sender_clone = encoder_out.clone();
@@ -82,8 +83,18 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                 for buf in bin_buffers.iter_mut(){
                     buf.reserve_exact(encoder_bin_buf_size);
                 }
+                let mut first_mers: Vec<(LongKmer<B>, u8)> = Vec::new();
                 while let Ok(batch) = receiver_clone.recv(){
                     for seq in batch{
+                        if add_all_dummy_paths {
+                            crate::util::for_each_run_with_key(&seq, |c| crate::util::is_dna(*c), |run_range| {
+                                if !run_range.is_empty() && crate::util::is_dna(seq[run_range.start]) {
+                                    let run_range = if run_range.len() > k { run_range.end - k..run_range.end } else { run_range };
+                                    let mer = LongKmer::<B>::from_ascii(&seq[run_range.clone()]).unwrap();
+                                    first_mers.push((mer, run_range.len() as u8));
+                                }
+                            });
+                        }
                         for kmer in seq.windows(k){
                             match LongKmer::<B>::from_ascii(kmer) {
                                 Ok(kmer) => {
@@ -100,7 +111,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                                 }
                                 Err(KmerEncodingError::InvalidNucleotide(_)) => (), // Ignore
                                 Err(KmerEncodingError::TooLong(_)) => panic!("k = {} is too long", k),
-                            }        
+                            }
                         }
                     }
                 }
@@ -113,6 +124,8 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                     }
                     sender_clone.send(b).unwrap();
                 }
+
+                first_mers
             }));
         }
 
@@ -150,9 +163,18 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
 
         producer_handle.join().unwrap();
         drop(encoder_in); // Close the channel
-        for h in encoder_handles{
-            h.join().unwrap();
-        }
+        let first_mers: Option<Vec<(LongKmer<B>, u8)>> = if add_all_dummy_paths {
+            let mut all = Vec::new();
+            for h in encoder_handles {
+                all.extend(h.join().unwrap());
+            }
+            Some(all)
+        } else {
+            for h in encoder_handles {
+                h.join().unwrap();
+            }
+            None
+        };
         drop(encoder_out); // Close the channel
 
         // Return the TempFiles and the total number of bytes written to them
@@ -162,7 +184,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
             w.file.seek(std::io::SeekFrom::Start(0)).unwrap();
         }
 
-        (writers, n_bytes_written)
+        (writers, n_bytes_written, first_mers)
 
     })
 }
