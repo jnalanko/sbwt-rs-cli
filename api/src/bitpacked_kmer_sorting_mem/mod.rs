@@ -33,15 +33,6 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Bit-packing and sorting all k-mers of all input sequences (dedup batches: {}).", dedup_batches);
         let (rev_kmers, rev_first_mers) = get_bitpacked_sorted_distinct_kmers::<B, IN>(seqs, k, n_threads, dedup_batches, add_all_dummy_paths, approx_mem_gb);
 
-        if let Some(rev_first_mers) = rev_first_mers.clone() {
-            println!("TODO: DO SOMETHING WITH THESE -MERS");
-            for (rev_mer, len) in rev_first_mers {
-                let mut s = rev_mer.to_string()[0..len as usize].as_bytes().to_owned();
-                s.reverse();
-                eprintln!("{}", String::from_utf8_lossy(&s));
-            }
-        }
-
         let n_kmers = rev_kmers.len();
         log::info!("{} distinct k-mers found", n_kmers);
 
@@ -82,4 +73,70 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         })
 
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::min;
+
+    use crate::util::is_dna;
+
+
+    #[test]
+    fn test_add_all_dummy_paths() {
+        let k = 3;
+        let seq1 = b"ACACTGANNNNNGATANNNNTGNNNAN";
+        let seq2 = b"NNNNNNNNNN";
+        let seq3 = b"ACCCCCCCNNNNTACNNN";
+        let seqs: Vec<&[u8]> = vec![seq1, seq2, seq3];
+        let (mut sbwt, lcs) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
+            crate::SliceSeqStream::new(seqs.as_slice()),
+            k,
+            3,     // n_threads
+            1,     // approx_mem_gb
+            false, // dedup_batches
+            true, // build_lcs
+            true,  // add_all_dummy_paths
+        );
+        sbwt.build_select();
+
+        for seq in [seq1.as_ref(), seq2.as_ref(), seq3.as_ref()] {
+            crate::util::for_each_run_with_key(seq, |c| crate::util::is_dna(*c), |run_range| {
+                if crate::util::is_dna(seq[run_range.start]) {
+                    let s = &seq[run_range];
+                    // All dummy prefixes up to length k-1 should be in the index
+                    for l in 1..min(k, s.len()) {
+                        let colex_range = sbwt.search(&s[0..l]).unwrap();
+                        assert!(colex_range.len() > 0);
+                        let smallest = sbwt.access_kmer(colex_range.start);
+                        let n_dna = smallest.iter().filter(|c| is_dna(**c)).count();
+                        eprintln!("{}", String::from_utf8(smallest).unwrap());
+                        assert_eq!(n_dna, l);
+                    }
+                }
+            });
+        }
+
+        // Collect true k-mers from the index (rows where all k characters are DNA)
+        let index_kmers: std::collections::HashSet<Vec<u8>> = (0..sbwt.n_sets())
+            .map(|i| sbwt.access_kmer(i))
+            .filter(|kmer| kmer.iter().all(|&c| is_dna(c)))
+            .collect();
+
+        // Collect k-mers from the input sequences
+        let mut input_kmers: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        for seq in [seq1.as_ref(), seq2.as_ref(), seq3.as_ref()] {
+            crate::util::for_each_run_with_key(seq, |c| is_dna(*c), |run_range| {
+                if is_dna(seq[run_range.start]) {
+                    let s = &seq[run_range];
+                    for i in 0..s.len().saturating_sub(k - 1) {
+                        input_kmers.insert(s[i..i + k].to_vec());
+                    }
+                }
+            });
+        }
+
+        assert_eq!(index_kmers, input_kmers);
+
+    }
 }
