@@ -189,6 +189,7 @@ fn build_command(matches: &clap::ArgMatches){
     let dedup_batches = matches.get_flag("dedup-batches");
     let in_memory = matches.get_flag("in-memory");
     let add_revcomp = matches.get_flag("add-revcomp");
+    let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
     let precalc_length = *matches.get_one::<usize>("prefix-precalc-length").unwrap();
     let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
 
@@ -210,11 +211,11 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
     let (sbwt, lcs) = if in_memory {
-        let algo = BitPackedKmerSortingMem::new().mem_gb(mem_gb).dedup_batches(dedup_batches);
+        let algo = BitPackedKmerSortingMem::new().mem_gb(mem_gb).dedup_batches(dedup_batches).add_all_dummy_paths(add_all_dummy_paths);
         let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length);
         run_build_algorithm(builder, input_mode)
     } else {
-        let algo = BitPackedKmerSortingDisk::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
+        let algo = BitPackedKmerSortingDisk::new().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir).add_all_dummy_paths(add_all_dummy_paths);
         let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length);
         run_build_algorithm(builder, input_mode)
     };
@@ -854,6 +855,10 @@ fn main() {
                 .help("Add reverse reverse complements of all k-mers to the index.")
                 .long("add-revcomp")
                 .short('r')
+                .action(clap::ArgAction::SetTrue))
+            .arg(clap::Arg::new("add-all-dummy-paths")
+                .help("Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.")
+                .long("add-all-dummy-paths")
                 .action(clap::ArgAction::SetTrue))
             .arg(clap::Arg::new("prefix-precalc-length")
                 .help("Prefix precalc lookup table prefix length p. Larger p speeds up queries, but the table takes 4^(p+2) bytes of space.")

@@ -53,6 +53,7 @@ pub struct BitPackedKmerSortingDisk{
     mem_gb: usize,
     dedup_batches: bool,
     temp_dir: std::path::PathBuf,
+    add_all_dummy_paths: bool,
 }
 
 #[deprecated(
@@ -68,7 +69,7 @@ impl BitPackedKmerSortingDisk {
     /// - do not deduplicate k-mer batches before sorting.
     /// - use the current directory as the temporary directory.
     pub fn new() -> Self {
-        Self{mem_gb: 4, dedup_batches: false, temp_dir: std::path::PathBuf::from_str(".").unwrap()}
+        Self{mem_gb: 4, dedup_batches: false, temp_dir: std::path::PathBuf::from_str(".").unwrap(), add_all_dummy_paths: false}
     }
 
     /// Set the amount of memory to use in gigabytes. This is not strictly enforced, but the algorithm will try to stay within this limit.
@@ -89,13 +90,19 @@ impl BitPackedKmerSortingDisk {
         std::fs::create_dir_all(&self.temp_dir).unwrap();
         self
     }
+
+    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
+    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
+        self.add_all_dummy_paths = enable;
+        self
+    }
 }
 
 impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mem_gb = self.mem_gb;
         let dedup_batches = self.dedup_batches;
-        let add_all_dummy_paths = true; // TODO!! Put to config
+        let add_all_dummy_paths = self.add_all_dummy_paths;
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         match k {
             0..=32 => {
@@ -128,6 +135,7 @@ impl SbwtConstructionAlgorithm for BitPackedKmerSortingDisk {
 pub struct BitPackedKmerSortingMem{
     dedup_batches: bool,
     mem_gb: usize,
+    add_all_dummy_paths: bool,
 }
 
 impl BitPackedKmerSortingMem {
@@ -136,7 +144,7 @@ impl BitPackedKmerSortingMem {
     /// - do not deduplicate k-mer batches before sorting.
     /// - 8GB memory
     pub fn new() -> Self {
-        Self{dedup_batches: false, mem_gb: 8}
+        Self{dedup_batches: false, mem_gb: 8, add_all_dummy_paths: false}
     }
 
     /// Whether to deduplicate k-mer batches before sorting. If the input has many duplicate k-mers, this will reduce the disk space required by the algorithm.
@@ -151,13 +159,19 @@ impl BitPackedKmerSortingMem {
         self.mem_gb = mem_gb;
         self
     }
+
+    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
+    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
+        self.add_all_dummy_paths = enable;
+        self
+    }
 }
 
 impl SbwtConstructionAlgorithm for BitPackedKmerSortingMem {
     fn run<SS: SeqStream + Send>(self, input: SS, k: usize, n_threads: usize, build_lcs: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let dedup_batches = self.dedup_batches;
         let mem_gb = self.mem_gb;
-        let add_all_dummy_paths = true; // TODO!! Put to config
+        let add_all_dummy_paths = self.add_all_dummy_paths;
         match k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
