@@ -60,24 +60,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 
     /// An internal function for marking the dummy nodes in the SBWT.
     fn mark_dummies(sbwt: &SbwtIndex<SS>) -> bitvec::vec::BitVec {
-        let mut dummy_marks = bitvec![0; sbwt.n_sets()];
-        let mut dfs_stack = Vec::<(usize, usize)>::new(); // Node, depth
-        dfs_stack.push((0,0)); // Colex rank of $, depth of $
-        let mut outlabels = Vec::<u8>::new();
-        while let Some((v, depth)) = dfs_stack.pop() { 
-            outlabels.clear();
-            sbwt.sbwt.append_set_to_buf(v, &mut outlabels);
-            dummy_marks.set(v, true);
-
-            if depth + 1 < sbwt.k() {
-                for &c_idx in outlabels.iter() {
-                    let u = sbwt.lf_step(v, c_idx as usize);
-                    dfs_stack.push((u, depth + 1));
-                }
-            }
-        }
-
-        dummy_marks
+        sbwt.compute_dummy_node_marks()
     } 
 
     /// An internal function marking for each (k-1)-mer the smallest k-mer that has that (k-1)-mer as a suffix.

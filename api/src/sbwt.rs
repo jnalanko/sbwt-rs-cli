@@ -9,6 +9,7 @@ use num::traits::ToBytes;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
+use bitvec::prelude::*;
 
 use crate::compact_int_vector::CompactIntVector;
 use crate::compact_int_vector::CompactIntVectorMutSlice;
@@ -809,6 +810,27 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         marks
     }
 
+    /// Compute a bit vector marking the dummy nodes in the SBWT
+    pub fn compute_dummy_node_marks(&self) -> bitvec::vec::BitVec {
+        let mut dummy_marks = bitvec![0; self.n_sets()];
+        let mut dfs_stack = Vec::<(usize, usize)>::new(); // Node, depth
+        dfs_stack.push((0,0)); // Colex rank of $, depth of $
+        let mut outlabels = Vec::<u8>::new();
+        while let Some((v, depth)) = dfs_stack.pop() { 
+            outlabels.clear();
+            self.sbwt.append_set_to_buf(v, &mut outlabels);
+            dummy_marks.set(v, true);
+
+            if depth + 1 < self.k() {
+                for &c_idx in outlabels.iter() {
+                    let u = self.lf_step(v, c_idx as usize);
+                    dfs_stack.push((u, depth + 1));
+                }
+            }
+        }
+
+        dummy_marks
+    } 
 
 }
 
