@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.2
+
+###  Performance
+
+* Significantly speed up `push_labels_forward`, speeding up e.g. the SBWT merge algorithm.
+* Better parallelism in unitig iteration and exporting.
+
+### API features
+
+* Eliminate `simple_sds_sbwt` from the public API.
+* Expose a function for a single matching statistics update step.
+* Add a matching statistics iterator with a smaller length bound than k.
+* Make functions related to unitigs public.
+* Make the dummy marking algorithm public and move it to SbwtIndex.
+* Provide access to DBG dummy marks.
+
+# Bugfixes
+
+* Make the DBG implementation work even if there are redundant dummies.
+* Fix empty ranges in parallel segmentation.
+* Fix past-the-end bits in bitvec.
+
 ## v0.4.1
 
 New algorithms and performance improvements. This is a major update, but still backward compatible.
