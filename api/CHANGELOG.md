@@ -2,7 +2,7 @@
 
 ## v0.4.2
 
-###  Performance
+### Performance
 
 * Significantly speed up `push_labels_forward`, speeding up e.g. the SBWT merge algorithm.
 * Better parallelism in unitig iteration and exporting.
@@ -10,13 +10,13 @@
 ### API features
 
 * Expose a function for a single matching statistics update step.
-* Add a matching statistics iterator with a smaller length bound than k.
+* Add a matching statistics iterator with a length bound below k.
 * Make functions related to unitigs public.
 * Make the dummy marking algorithm public and move it to SbwtIndex.
 * Provide access to DBG dummy marks.
-* Eliminate most dependencies to `simple_sds_sbwt` from the public API. Some dependencies remain at `streaming_index.rs` and `sdsl_compatibility.rs`.
+* Eliminate most dependencies on `simple_sds_sbwt` from the public API. Some dependencies remain at `streaming_index.rs` and `sdsl_compatibility.rs`.
 
-# Bugfixes
+### Bugfixes
 
 * Make the DBG implementation work even if there are redundant dummies.
 * Fix empty ranges in parallel segmentation.
