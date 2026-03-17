@@ -9,12 +9,12 @@
 
 ### API features
 
-* Eliminate `simple_sds_sbwt` from the public API.
 * Expose a function for a single matching statistics update step.
 * Add a matching statistics iterator with a smaller length bound than k.
 * Make functions related to unitigs public.
 * Make the dummy marking algorithm public and move it to SbwtIndex.
 * Provide access to DBG dummy marks.
+* Eliminate most dependencies to `simple_sds_sbwt` from the public API. Some dependencies remain at `streaming_index.rs` and `sdsl_compatibility.rs`.
 
 # Bugfixes
 
