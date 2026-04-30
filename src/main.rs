@@ -756,6 +756,34 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     println!("Jaccard index: {}", jaccard);
 }
 
+fn kmer_at_rank_command(matches: &clap::ArgMatches) {
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let rank = *matches.get_one::<usize>("rank").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
+    let index = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
+
+    match index {
+        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            if rank >= sbwt.n_sets() {
+                eprintln!("Error: rank {} is out of bounds (index has {} sets)", rank, sbwt.n_sets());
+                std::process::exit(1);
+            }
+            log::info!("Building select support");
+            sbwt.build_select();
+            let mut buf = Vec::<u8>::with_capacity(sbwt.k() + 1);
+            sbwt.push_kmer_to_vec(rank, &mut buf);
+            buf.push(b'\n');
+            std::io::stdout().write_all(&buf).unwrap();
+        }
+    }
+}
+
 fn stats_command(matches: &clap::ArgMatches) {
     let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
@@ -1116,6 +1144,29 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("kmer-at-colex")
+            .about("Print the k-mer with a given colexicographic rank")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("index")
+                .help("SBWT index file")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("rank")
+                .help("Colexicographic rank of the k-mer to retrieve")
+                .short('r')
+                .long("rank")
+                .required(true)
+                .value_parser(clap::value_parser!(usize))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         ;
 
     let matches = cli.get_matches();
@@ -1167,6 +1218,7 @@ fn main() {
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
         Some(("stats", sub_matches)) => stats_command(sub_matches),
+        Some(("kmer-at-colex", sub_matches)) => kmer_at_rank_command(sub_matches),
         _ => unreachable!(),
     }
     
