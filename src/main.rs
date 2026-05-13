@@ -243,6 +243,7 @@ fn build_lcs_command(matches: &clap::ArgMatches) {
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
     let outfile = matches.get_one::<std::path::PathBuf>("output");
     let outfile = match outfile {
         Some(out) => out.clone(),
@@ -269,7 +270,7 @@ fn build_lcs_command(matches: &clap::ArgMatches) {
     log::info!("Computing the LCS array");
     let lcs = match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            LcsArray::from_sbwt(&sbwt, n_threads)
+            LcsArray::from_sbwt(&sbwt, n_threads, low_ram)
         }
     };
 
@@ -946,6 +947,11 @@ fn main() {
                 .long("output")
                 .short('o')
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("low-ram")
+                .help("Enable optimizations to reduce peak RAM at the expense of slower running time.")
+                .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
             )
         )
         .subcommand(clap::Command::new("benchmark")

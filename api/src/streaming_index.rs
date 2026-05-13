@@ -142,9 +142,9 @@ impl LcsArray {
     /// Build an LCS array using the given SBWT index. This runs an O(nk) time algorithm, where
     /// n is the number of k-mers in the padded spectrum encoded in the SBWT, and k is the length
     /// of the k-mers. The algorithm works by inverting the SBWT column by column, which takes
-    /// 2n bytes of extra working space. The algorithm is described in the paper
+    /// 2n bytes of extra working space, or less if optimize_peak_ram is true. The algorithm is described in the paper
     /// [Longest Common Prefix Arrays for Succinct k-spectra](https://doi.org/10.48550/arXiv.2306.04850).
-    pub fn from_sbwt<SS: SubsetSeq + Sync>(sbwt: &SbwtIndex<SS>, n_threads: usize) -> Self {
+    pub fn from_sbwt<SS: SubsetSeq + Sync>(sbwt: &SbwtIndex<SS>, n_threads: usize, optimize_peak_ram: bool) -> Self {
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
         // The array stores values in the range [0..k-1], so we need
@@ -160,37 +160,51 @@ impl LcsArray {
         log::info!("Initializing...");
         // The value of k is used to denote that a value has not been computed yet.
         // This is okay since all LCS value are strictly smaller than k.
-        let mut lcs = vec![k as u8; sbwt.n_sets()]; 
-
-        // Build the last column of the SBWT matrix
-        log::info!("Building column {} of the SBWT matrix", k-1);
-        let mut labels_in = sbwt.build_last_column(); 
-        let mut labels_out = labels_in.clone();
+        let mut lcs = vec![k as u8; sbwt.n_sets()];
 
         lcs[0] = 0; // By definition
 
         // Iterate columns from right to left
-        for round in 0..k {
-            if round > 0 {
-                log::info!("Building column {} of the SBWT matrix", k-1-round);
-                sbwt.push_all_labels_forward(&labels_in, &mut labels_out, n_threads);
-            }
-
-            log::info!("Storing LCS values of {}", round);
-            thread_pool.install(||{
-                lcs.par_iter_mut().enumerate().for_each(|(i, x)| {
-                    if *x == k as u8 && labels_out[i] != labels_out[i-1] {
-                        *x = round as u8;
-                    }
+        log::info!("Building column {} of the SBWT matrix", k-1);
+        if optimize_peak_ram {
+            let mut labels_in = sbwt.build_last_column_compact();
+            let mut labels_out = labels_in.clone();
+            for round in 0..k {
+                if round > 0 {
+                    log::info!("Building column {} of the SBWT matrix", k-1-round);
+                    sbwt.push_all_labels_forward_compact(&labels_in, &mut labels_out, n_threads);
+                }
+                log::info!("Storing LCS values of {}", round);
+                thread_pool.install(||{
+                    lcs.par_iter_mut().enumerate().for_each(|(i, x)| {
+                        if *x == k as u8 && labels_out.get(i) != labels_out.get(i-1) {
+                            *x = round as u8;
+                        }
+                    });
                 });
-            });
-
-            (labels_in, labels_out) = (labels_out, labels_in);
+                (labels_in, labels_out) = (labels_out, labels_in);
+            }
+        } else {
+            let mut labels_in = sbwt.build_last_column();
+            let mut labels_out = labels_in.clone();
+            for round in 0..k {
+                if round > 0 {
+                    log::info!("Building column {} of the SBWT matrix", k-1-round);
+                    sbwt.push_all_labels_forward(&labels_in, &mut labels_out, n_threads);
+                }
+                log::info!("Storing LCS values of {}", round);
+                thread_pool.install(||{
+                    lcs.par_iter_mut().enumerate().for_each(|(i, x)| {
+                        if *x == k as u8 && labels_out[i] != labels_out[i-1] {
+                            *x = round as u8;
+                        }
+                    });
+                });
+                (labels_in, labels_out) = (labels_out, labels_in);
+            }
         }
 
         log::info!("Compressing into log(k) bits per element");
-        drop(labels_in); // Free some memory
-        drop(labels_out); // Free some memory
         let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(sbwt.n_sets(), bit_width as usize).unwrap();
         for x in lcs {
             compressed_lcs.push(x as u64);
@@ -380,7 +394,7 @@ mod tests {
 
         let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         let lcs = lcs.unwrap();
-        let from_sbwt = LcsArray::from_sbwt(&sbwt, 3);
+        let from_sbwt = LcsArray::from_sbwt(&sbwt, 3, false);
 
         let true_lcs = [0,0,1,3,2,2,1,1,1,0,0,2,2,1,3,3,0,2];
         for i in 0..lcs.len() {
@@ -482,7 +496,7 @@ mod tests {
 
         let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::<BitPackedKmerSortingMem>::new().k(4).build_lcs(true).run_from_slices(seqs.as_slice());
         let lcs = lcs.unwrap();
-        let from_sbwt = LcsArray::from_sbwt(&sbwt, 3);
+        let from_sbwt = LcsArray::from_sbwt(&sbwt, 3, false);
 
         let true_lcs = [0,0,1,3,2,2,1,1,1,0,0,2,2,1,3,3,0,2];
         for i in 0..lcs.len() {
