@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.3
+
+* Update to jseqio v0.1.7. This required adding the Sync trait bound to `run_from_fasta` and `run_from_fastq` in the builder.
+
 ## v0.4.2
 
 ### Performance

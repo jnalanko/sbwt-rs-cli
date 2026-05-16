@@ -294,14 +294,14 @@ impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
     } 
 
     /// Run the algorithm from a FASTA-formatted stream of sequences, and return the SBWT index and optionally the LCS array if [SbwtIndexBuilder::build_lcs] was set.
-    pub fn run_from_fasta<R: std::io::Read + Send + 'static>(self, input: R) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run_from_fasta<R: std::io::Read + Send + Sync + 'static>(self, input: R) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = std::io::BufReader::new(input);
         let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         self.run(input)
     } 
 
     /// Run the algorithm from a FASTQ-formatted stream of sequences, and return the SBWT index and optionally the LCS array if [SbwtIndexBuilder::build_lcs] was set.
-    pub fn run_from_fastq<R: std::io::Read + Send + 'static>(self, input: R) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run_from_fastq<R: std::io::Read + Send + Sync + 'static>(self, input: R) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = std::io::BufReader::new(input);
         let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         self.run(input)
