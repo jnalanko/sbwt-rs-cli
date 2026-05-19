@@ -27,17 +27,17 @@ The binary is placed at `./target/release/sbwt`. Run `sbwt --help` or `sbwt <sub
 | Subcommand | Description |
 |---|---|
 | `build` | Build an SBWT index from FASTA/FASTQ input |
+| `build-lcs` | Build the LCS array for an existing SBWT index |
 | `merge` | Compute the union of two SBWT indexes |
 | `intersect` | Compute the intersection of two SBWT indexes |
 | `difference` | Compute the set difference (index1 \ index2) of two SBWT indexes |
 | `jaccard` | Compute the Jaccard index of the *k*-mer sets in two SBWT indexes |
-| `build-lcs` | Build the LCS array for an existing SBWT index |
 | `lookup` | Look up the colex ranks of query *k*-mers |
 | `matching-statistics` | Compute matching statistics against an SBWT index |
 | `dump-kmers` | Print all *k*-mer strings in colexicographic order |
 | `dump-unitigs` | Print all unitigs in FASTA format |
-| `stats` | Print summary statistics of an SBWT index |
 | `kmer-at-colex` | Print the *k*-mer at a given colexicographic rank |
+| `stats` | Print summary statistics of an SBWT index |
 | `check` | Verify the structural integrity of an SBWT index |
 | `benchmark` | Benchmark query performance on an index |
 
@@ -70,7 +70,7 @@ Open `binomial_merge_pipeline/build_661k.sh` and set the following variables at 
 
 ## Credits
 
-This repository extends [jnalanko/sbwt-rs-cli](https://github.com/jnalanko/sbwt-rs-cli) with set-operation support. The set-operation algorithms were implemented in collaboration with [Jarno Alanko](https://github.com/jnalanko), under the supervision of [Camille Marchet](https://github.com/kamimrcht) and [Simon Puglisi](https://www.cs.helsinki.fi/u/puglisi/).
+This repository extends [jnalanko/sbwt-rs-cli](https://github.com/jnalanko/sbwt-rs-cli) with set-operation support. The set-operation algorithms were implemented in collaboration with [Jarno Alanko](https://github.com/jnalanko), under the supervision of Camille Marchet and Simon Puglisi.
 
 The underlying SBWT data structure is described in:
 
