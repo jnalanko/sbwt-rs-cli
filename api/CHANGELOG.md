@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.0
+
+- Added support for set operations (union, intersection, difference).
+  - API: new `set_operations` module (`src/set_operations`) exposing the
+    core functions `merge`, `intersect` and `difference`, together with
+    helper types such as `MergeInterleaving`.
+  - CLI: added top-level commands `merge`, `intersect` and `difference`
+    (see `sbwt merge|intersect|difference --help`). Each command takes two
+    SBWT index files as input and produces a new SBWT index file as
+    output.
+
+This repository is a fork; the upstream changelog history is preserved below.
+
 ## v0.4.3
 
 * Update to jseqio v0.1.7. This required adding the Sync trait bound to `run_from_fasta` and `run_from_fastq` in the builder.

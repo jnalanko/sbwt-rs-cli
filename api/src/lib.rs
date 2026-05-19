@@ -151,8 +151,8 @@ pub use streaming_index::{StreamingIndex, LcsArray, MatchingStatisticsIterator, 
 mod subsetseq;
 pub use subsetseq::*;
 
-mod merge;
-pub use merge::{MergeInterleaving, merge};
+mod set_operations;
+pub use set_operations::{MergeInterleaving, merge, intersect, difference};
 
 mod atomic_bitmap;
 

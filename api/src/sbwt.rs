@@ -715,7 +715,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             } else {
                 match self.sbwt.next_set_with_char(0, c as u8) {
                     Some(i) => i,
-                    None => break
+                    None => continue // No edges with this character; skip to the next one
                 }
             };
             let colex_end = if c == c_e {

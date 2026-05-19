@@ -1,4 +1,3 @@
-use std::cmp::min;
 use std::ops::Range;
 
 use crate::bitpacked_kmer_sorting_mem::cursors::find_first_starting_with;

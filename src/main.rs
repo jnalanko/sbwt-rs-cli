@@ -682,8 +682,12 @@ fn merge_command(matches: &clap::ArgMatches) {
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
 
+    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
+    let mut sbwt_outfile = out_path.clone().into_os_string().into_string().unwrap();
+    sbwt_outfile.push_str(".sbwt");
+
     // Open output file (open early to fail early if there is a problem)
-    let mut out = BufWriter::new(File::create(out_path).unwrap());
+    let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
 
     // Read sbwts
     let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
@@ -714,10 +718,109 @@ fn merge_command(matches: &clap::ArgMatches) {
 
     log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
-    log::info!("Executing the merge interleaving");
+    log::info!("Executing the merge");
     let merged = merge(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads);
-    log::info!("Serializing to {}", out_path.display());
+    log::info!("Serializing to {}", sbwt_outfile);
     sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
+    log::info!("Finished");
+}
+
+fn intersect_command(matches: &clap::ArgMatches) {
+
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
+    let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
+    let out_path = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
+
+    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
+    let mut sbwt_outfile = out_path.clone().into_os_string().into_string().unwrap();
+    sbwt_outfile.push_str(".sbwt");
+
+    // Open output file early to fail fast if path is invalid
+    let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
+
+    // Read both indexes
+    let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
+    let index1 = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index1_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index1_reader).unwrap()
+    };
+
+    let mut index2_reader = std::io::BufReader::new(std::fs::File::open(sbwt2_path).unwrap());
+    let index2 = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index2_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index2_reader).unwrap()
+    };
+
+    let SbwtIndexVariant::SubsetMatrix(index1) = index1;
+    let SbwtIndexVariant::SubsetMatrix(index2) = index2;
+
+    let lut_len1 = index1.get_lookup_table().prefix_length;
+    let lut_len2 = index2.get_lookup_table().prefix_length;
+    let lut_len = max(lut_len1, lut_len2);
+    if lut_len1 != lut_len2 {
+        log::warn!("Different lookup table prefix lengths: {} {}", lut_len1, lut_len2);
+        log::warn!("Using length {} for the intersection index", lut_len);
+    }
+
+    log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
+    let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
+    log::info!("Executing the intersection");
+    let result = intersect(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, low_ram, n_threads);
+    log::info!("Serializing to {}", sbwt_outfile);
+    sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(result), &mut out).unwrap();
+    log::info!("Finished");
+}
+
+fn difference_command(matches: &clap::ArgMatches) {
+
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
+    let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
+    let out_path = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
+
+    let mut sbwt_outfile = out_path.clone().into_os_string().into_string().unwrap();
+    sbwt_outfile.push_str(".sbwt");
+
+    let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
+
+    let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
+    let index1 = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index1_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index1_reader).unwrap()
+    };
+
+    let mut index2_reader = std::io::BufReader::new(std::fs::File::open(sbwt2_path).unwrap());
+    let index2 = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index2_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index2_reader).unwrap()
+    };
+
+    let SbwtIndexVariant::SubsetMatrix(index1) = index1;
+    let SbwtIndexVariant::SubsetMatrix(index2) = index2;
+
+    let lut_len1 = index1.get_lookup_table().prefix_length;
+    let lut_len2 = index2.get_lookup_table().prefix_length;
+    let lut_len = max(lut_len1, lut_len2);
+    if lut_len1 != lut_len2 {
+        log::warn!("Different lookup table prefix lengths: {} {}", lut_len1, lut_len2);
+        log::warn!("Using length {} for the difference index", lut_len);
+    }
+
+    log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
+    let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
+    log::info!("Executing the difference (index1 \\ index2)");
+    let result = difference(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, low_ram, n_threads);
+    log::info!("Serializing to {}", sbwt_outfile);
+    sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(result), &mut out).unwrap();
     log::info!("Finished");
 }
 
@@ -782,6 +885,37 @@ fn kmer_at_rank_command(matches: &clap::ArgMatches) {
             buf.push(b'\n');
             std::io::stdout().write_all(&buf).unwrap();
         }
+    }
+}
+
+fn check_command(matches: &clap::ArgMatches) {
+    let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+
+    log::info!("Loading index from {:?}", index_path);
+    let mut index_reader = std::io::BufReader::new(std::fs::File::open(index_path).unwrap());
+    let SbwtIndexVariant::SubsetMatrix(index) = if cpp_format {
+        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
+    } else {
+        load_sbwt_index_variant(&mut index_reader).unwrap()
+    };
+
+    let n = index.n_sets();
+    let sigma = index.alphabet().len();
+    log::info!("Index loaded: {} sets, {} k-mers, k={}, sigma={}", n, index.n_kmers(), index.k(), sigma);
+
+    log::info!("Checking SBWT structural invariant: sum_c rank(c, n_sets) + 1 == n_sets");
+    let in_edges: usize = (0..sigma).map(|c| index.sbwt().rank(c as u8, n)).sum();
+    if in_edges + 1 == n {
+        log::info!("OK: {} in-edge(s) + root == {} sets", in_edges, n);
+        println!("PASS");
+    } else {
+        log::error!(
+            "FAIL: invariant violated: {} in-edge(s) + root != {} sets; {} node(s) have no in-coming edge",
+            in_edges, n, n - 1 - in_edges
+        );
+        println!("FAIL");
+        std::process::exit(1);
     }
 }
 
@@ -1057,6 +1191,68 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("intersect")
+            .about("Intersect two SBWT indexes (keep only k-mers present in both)")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("sbwt1")
+                .help("The first SBWT index file")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("sbwt2")
+                .help("The second SBWT index file")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("output")
+                .help("Output filename for the intersection SBWT")
+                .short('o')
+                .long("output")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("low-ram")
+                .help("Enable optimizations to reduce peak RAM at the expense of slower running time.")
+                .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
+        .subcommand(clap::Command::new("difference")
+            .about("Compute the set difference of two SBWT indexes (keep only k-mers in index1 but not in index2)")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("sbwt1")
+                .help("SBWT index to subtract from")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("sbwt2")
+                .help("SBWT index whose k-mers are removed")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("output")
+                .help("Output filename for the difference SBWT")
+                .short('o')
+                .long("output")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("low-ram")
+                .help("Enable optimizations to reduce peak RAM at the expense of slower running time.")
+                .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         .subcommand(clap::Command::new("jaccard")
             .arg_required_else_help(true)
             .about("Compute the Jaccard index of the k-mer sets in two given sbwt index files.")
@@ -1173,6 +1369,21 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("check")
+            .about("Verify the SBWT structural invariant (sum_c rank(c, n_sets) + 1 == n_sets). Exits with code 1 if the index is corrupt.")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("index")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         ;
 
     let matches = cli.get_matches();
@@ -1220,11 +1431,14 @@ fn main() {
         Some(("matching-statistics", sub_matches)) => matching_statistics_command(sub_matches),
         Some(("jaccard", sub_matches)) => jaccard_command(sub_matches),
         Some(("merge", sub_matches)) => merge_command(sub_matches),
+        Some(("intersect", sub_matches)) => intersect_command(sub_matches),
+        Some(("difference", sub_matches)) => difference_command(sub_matches),
         Some(("benchmark", sub_matches)) => benchmark_command(sub_matches),
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
         Some(("stats", sub_matches)) => stats_command(sub_matches),
         Some(("kmer-at-colex", sub_matches)) => kmer_at_rank_command(sub_matches),
+        Some(("check", sub_matches)) => check_command(sub_matches),
         _ => unreachable!(),
     }
     
