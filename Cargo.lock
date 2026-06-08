@@ -964,8 +964,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "sbwt-set-operations-cli"
-version = "0.1.0"
+name = "sbwt-cli"
+version = "0.2.0"
 dependencies = [
  "bitvec",
  "byteorder",
