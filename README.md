@@ -1,4 +1,4 @@
-# Set Operations on SBWT Indexes
+# SBWT command-line interface
 
 Command-line interface for building, querying, and performing set operations on [SBWT](https://crates.io/crates/sbwt) (*k*-mer Spectral Burrows-Wheeler Transform) indexes.
 
