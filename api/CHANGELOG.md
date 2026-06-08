@@ -6,12 +6,6 @@
   - API: new `set_operations` module (`src/set_operations`) exposing the
     core functions `merge`, `intersect` and `difference`, together with
     helper types such as `MergeInterleaving`.
-  - CLI: added top-level commands `merge`, `intersect` and `difference`
-    (see `sbwt merge|intersect|difference --help`). Each command takes two
-    SBWT index files as input and produces a new SBWT index file as
-    output.
-
-This repository is a fork; the upstream changelog history is preserved below.
 
 ## v0.4.3
 
