@@ -6,6 +6,8 @@
   - API: new `set_operations` module (`src/set_operations`) exposing the
     core functions `merge`, `intersect` and `difference`, together with
     helper types such as `MergeInterleaving`.
+  - Union is based on the existing merge code. It now also cleans up redundant dummy nodes.
+- Fixed bug in `push_labels_forward_compact` which occurred in some cases when some nucleotide does not occur in the SBWT at all.
 
 ## v0.4.3
 
