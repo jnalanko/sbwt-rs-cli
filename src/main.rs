@@ -1116,6 +1116,7 @@ fn main() {
             )
         )
         .subcommand(clap::Command::new("matching-statistics")
+            .about("For each position of the query, compute the longest match ending there, with length up to k, against the index.")
             .arg_required_else_help(true)
             .arg(clap::Arg::new("index")
                 .help("SBWT index file")
