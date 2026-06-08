@@ -678,13 +678,9 @@ fn merge_command(matches: &clap::ArgMatches) {
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
     let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
-    let out_path = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let sbwt_outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
-
-    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
-    let mut sbwt_outfile = out_path.clone().into_os_string().into_string().unwrap();
-    sbwt_outfile.push_str(".sbwt");
 
     // Open output file (open early to fail early if there is a problem)
     let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
@@ -720,7 +716,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the merge");
     let merged = merge(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads);
-    log::info!("Serializing to {}", sbwt_outfile);
+    log::info!("Serializing to {}", sbwt_outfile.display());
     sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
     log::info!("Finished");
 }
@@ -730,13 +726,9 @@ fn intersect_command(matches: &clap::ArgMatches) {
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
     let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
-    let out_path = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let sbwt_outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
-
-    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
-    let mut sbwt_outfile = out_path.clone().into_os_string().into_string().unwrap();
-    sbwt_outfile.push_str(".sbwt");
 
     // Open output file early to fail fast if path is invalid
     let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
@@ -771,7 +763,7 @@ fn intersect_command(matches: &clap::ArgMatches) {
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the intersection");
     let result = intersect(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, low_ram, n_threads);
-    log::info!("Serializing to {}", sbwt_outfile);
+    log::info!("Serializing to {}", sbwt_outfile.display());
     sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(result), &mut out).unwrap();
     log::info!("Finished");
 }
@@ -781,12 +773,9 @@ fn difference_command(matches: &clap::ArgMatches) {
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
     let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
-    let out_path = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let sbwt_outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
-
-    let mut sbwt_outfile = out_path.clone().into_os_string().into_string().unwrap();
-    sbwt_outfile.push_str(".sbwt");
 
     let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
 
@@ -819,7 +808,7 @@ fn difference_command(matches: &clap::ArgMatches) {
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the difference (index1 \\ index2)");
     let result = difference(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, low_ram, n_threads);
-    log::info!("Serializing to {}", sbwt_outfile);
+    log::info!("Serializing to {}", sbwt_outfile.display());
     sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(result), &mut out).unwrap();
     log::info!("Finished");
 }
