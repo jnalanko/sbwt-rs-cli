@@ -5,6 +5,56 @@ use crate::util::DNA_ALPHABET;
 use std::io::{BufWriter, Seek, Write};
 use std::thread;
 
+struct SeqBatch {
+    concat: Vec<u8>,
+    ends: Vec<usize>,
+}
+
+impl SeqBatch {
+    fn new() -> Self {
+        Self {
+            concat: vec![],
+            ends: vec![0],
+        }
+    }
+
+    fn push(&mut self, seq: &[u8]) {
+        self.concat.extend_from_slice(seq);
+        self.ends.push(self.concat.len());
+    }
+
+    fn size_bytes(&self) -> usize {
+        // Just counts the heap components
+        self.concat.capacity() * size_of::<u8>() + self.ends.capacity() * size_of::<usize>()
+    }
+
+    fn n_seqs(&self) -> usize {
+        self.ends.len() - 1 // -1 because of the initial zero at the start
+    }
+
+    fn into_iter(self) -> SeqBatchIter {
+        SeqBatchIter { batch: self, seq_idx: 0 }
+    }
+}
+
+struct SeqBatchIter {
+    batch: SeqBatch,
+    seq_idx: usize
+}
+
+impl SeqBatchIter {
+    fn next(&mut self) -> Option<&[u8]> {
+        if self.seq_idx == self.batch.n_seqs() { None }
+        else {
+            let start = self.batch.ends[self.seq_idx];
+            let end = self.batch.ends[self.seq_idx+1];
+            let s = &self.batch.concat[start..end];
+            self.seq_idx += 1;
+            Some(s)
+        }
+    }
+}
+
 fn colex_sorted_binmers(bin_prefix_len: usize) -> Vec<Vec<u8>> {
     let mut binmers = Vec::<Vec<u8>>::new();
     for i in 0..(4_usize.pow(bin_prefix_len as u32)){
@@ -48,28 +98,28 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
         log::info!("Bin buffer size: {}", encoder_bin_buf_size);
 
         use crossbeam::crossbeam_channel::bounded;
-        let (parser_out, encoder_in) = bounded(4);
+        let (parser_out, encoder_in) = bounded(n_threads);
         let (encoder_out, writer_in) = bounded(4);
 
         // Create producer
         let producer_handle = scope.spawn(move || {
-            let mut buf = Vec::<Box<[u8]>>::new();
-            let mut current_total_buffer_size = 0_usize;
+            let mut batch = SeqBatch::new();
+            let mut reverse_buffer = Vec::<u8>::new();
             
             while let Some(seq) = seqs.stream_next(){
-                current_total_buffer_size += seq.len();
-                let mut seq_copy = seq.to_owned();
-                seq_copy.reverse(); // Reverse to get colex sorting
-                buf.push(seq_copy.into_boxed_slice());
-                if current_total_buffer_size > producer_buf_size{
-                    let mut sendbuf = Vec::<Box<[u8]>>::new();
-                    std::mem::swap(&mut sendbuf, &mut buf);
-                    parser_out.send(sendbuf).unwrap();
-                    current_total_buffer_size = 0;
+                // Reverse to get colex sorting
+                reverse_buffer.clear();
+                reverse_buffer.extend_from_slice(seq);
+                reverse_buffer.reverse();
+
+                batch.push(&reverse_buffer);
+                if batch.size_bytes() > producer_buf_size {
+                    parser_out.send(batch).unwrap();
+                    batch = SeqBatch::new();
                 }
             }
             
-            parser_out.send(buf).unwrap();
+            parser_out.send(batch).unwrap(); // Last one (possibly empty)
             drop(parser_out);
         });
 
@@ -85,7 +135,8 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                 }
                 let mut first_mers: Vec<(LongKmer<B>, u8)> = Vec::new();
                 while let Ok(batch) = receiver_clone.recv(){
-                    for seq in batch{
+                    let mut batch_iter = batch.into_iter();
+                    while let Some(seq) = batch_iter.next() {
                         if add_all_dummy_paths {
                             crate::util::for_each_run_with_key(&seq, |c| crate::util::is_dna(*c), |run_range| {
                                 if !run_range.is_empty() && crate::util::is_dna(seq[run_range.start]) {
