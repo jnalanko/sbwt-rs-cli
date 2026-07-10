@@ -1,7 +1,9 @@
 //! A builder pattern interface for building an [SbwtIndex].
 
+use std::path::Path;
 use std::str::FromStr;
 
+use crate::tempfile::TempFileManager;
 use crate::{subsetseq::SubsetMatrix, SeqStream};
 use crate::sbwt::{PrefixLookupTable, SbwtIndex};
 use crate::streaming_index::LcsArray;
@@ -306,4 +308,28 @@ impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
         let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         self.run(input)
     } 
+}
+
+pub fn build_from_kmers_on_disk<SS: crate::SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_dir: &Path, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+    let mut tfm = TempFileManager::new(temp_dir);
+    match k {
+        0..=32 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<1, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        33..=64 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<2, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        65..=96 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<3, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        97..=128 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<4, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        129..=256 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<8, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        _ => {
+            panic!("k > 256 not supported with bitpacked sorting algorithm.");
+        }
+    }
 }

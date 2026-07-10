@@ -59,7 +59,7 @@ pub fn sort_and_dedup_kmers_into_file<const B: usize, IN: crate::SeqStream + Sen
     })
 }
 
-pub fn build_from_kmers_on_disk<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
 
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
@@ -113,7 +113,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
     let (kmers_file, first_mers_file) = sort_and_dedup_kmers_into_file::<B, IN, SS>(seqs, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_file_manager);
 
     let first_mers_file_path_option: Option<&Path> = first_mers_file.as_ref().map(|f| f.path.as_path());
-    build_from_kmers_on_disk::<B, IN, SS>(k, n_threads, build_lcs, temp_file_manager, &kmers_file.path, first_mers_file_path_option)
+    build_from_kmers_on_disk::<B, SS>(k, n_threads, build_lcs, temp_file_manager, &kmers_file.path, first_mers_file_path_option)
 }
 
 #[cfg(test)]

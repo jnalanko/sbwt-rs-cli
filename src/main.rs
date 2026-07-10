@@ -259,8 +259,7 @@ fn build_from_kmers_on_disk_command(matches: &clap::ArgMatches){
     log::info!("Building SBWT from k-mers on disk");
     let start_time = std::time::Instant::now();
 
-    // TODO: call build_from_kmers_on_disk with kmers_file, first_mers_file, k, n_threads, build_lcs and temp_dir.
-    let (sbwt, lcs): (SbwtIndex<SubsetMatrix>, Option<LcsArray>) = todo!();
+    let (sbwt, lcs) = build_from_kmers_on_disk::<SubsetMatrix>(k, n_threads, build_lcs, temp_dir, kmers_file, first_mers_file.map(|p| p.as_path()));
 
     let end_time = std::time::Instant::now();
     log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
