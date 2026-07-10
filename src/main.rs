@@ -239,6 +239,52 @@ fn build_command(matches: &clap::ArgMatches){
     }
 }
 
+fn build_list_kmers_on_disk_command(matches: &clap::ArgMatches){
+
+    let infile = matches.get_one::<std::path::PathBuf>("input");
+    let in_listfile = matches.get_one::<std::path::PathBuf>("input-list");
+
+    let k = *matches.get_one::<usize>("k").unwrap();
+    let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let dedup_batches = matches.get_flag("dedup-batches");
+    let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
+    let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
+
+    let input_mode = if let Some(input) = infile {
+        InputMode::SingleFile(input.clone())
+    } else if let Some(input_list) = in_listfile {
+        InputMode::FileList(input_list.clone())
+    } else {
+        panic!("Either --input or --input-list must be given");
+    };
+
+    log::info!("Sorting and deduplicating k-mers to disk");
+    let start_time = std::time::Instant::now();
+
+    let (kmers_file, first_mers_file) = match input_mode {
+        InputMode::SingleFile(path_buf) => {
+            let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(&path_buf).unwrap()};
+            sort_and_dedup_kmers_into_file::<SubsetMatrix, _>(reader, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_dir)
+        }
+        InputMode::FileList(path_buf) => {
+            let paths = read_lines(&path_buf);
+            let multi_reader = MyMultiFileSeqReader::new(paths);
+            sort_and_dedup_kmers_into_file::<SubsetMatrix, _>(multi_reader, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_dir)
+        }
+    };
+
+    let end_time = std::time::Instant::now();
+    log::info!("Finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
+
+    log::info!("Wrote k-mers file: {}", kmers_file.display());
+    println!("{}", kmers_file.display());
+    if let Some(first_mers_file) = &first_mers_file {
+        log::info!("Wrote first-mers file: {}", first_mers_file.display());
+        println!("{}", first_mers_file.display());
+    }
+}
+
 fn build_from_kmers_on_disk_command(matches: &clap::ArgMatches){
 
     let kmers_file = matches.get_one::<std::path::PathBuf>("kmers-file").unwrap();
@@ -1061,6 +1107,53 @@ fn main() {
                 .default_value("8")
                 .value_parser(clap::value_parser!(usize)))
         )
+        .subcommand(clap::Command::new("build-list-kmers-on-disk")
+            .about("Sort and deduplicate the reverse k-mers of the input sequences into a file on disk. Prints the path to the resulting k-mers file (and, if --add-all-dummy-paths is given, the first-mers file) to stdout. The files are not deleted, and can be later given to build-from-kmers-on-disk.")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("input")
+                .help("Input fasta or fastq sequence file")
+                .short('i')
+                .long("input")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("input-list")
+                .help("A file containing a list of filenames of sequence lines, one per line")
+                .long("input-list")
+                .conflicts_with("input")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("temp-dir")
+                .help("Directory for the resulting k-mers files, and other temporary files created during construction.")
+                .long("temp-dir")
+                .default_value(".")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("k")
+                .help("k-mer length")
+                .short('k')
+                .required(true)
+                .value_parser(clap::value_parser!(usize))
+            )
+            .arg(clap::Arg::new("mem-gb")
+                .help("An approximate memory budget for various buffers, in gigabytes. The total memory usage may be higher. The larger the budget, the more effective the deduplication is with --dedup-batches.")
+                .short('m')
+                .long("mem-gb")
+                .required(false)
+                .value_parser(clap::value_parser!(usize))
+                .default_value("8")
+            )
+            .arg(clap::Arg::new("dedup-batches")
+                .help("Slows down the construction, but reduces temporary disk space usage and memory if the data has many duplicate k-mers.")
+                .long("dedup-batches")
+                .short('d')
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("add-all-dummy-paths")
+                .help("Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.")
+                .long("add-all-dummy-paths")
+                .action(clap::ArgAction::SetTrue))
+        )
         .subcommand(clap::Command::new("build-from-kmers-on-disk")
             .about("Build the SBWT and possibly the LCS array from a file of sorted, deduplicated reverse k-mers on disk, as produced by the on-disk construction algorithm.")
             .arg_required_else_help(true)
@@ -1498,6 +1591,7 @@ fn main() {
 
     match matches.subcommand(){
         Some(("build", sub_matches)) => build_command(sub_matches),
+        Some(("build-list-kmers-on-disk", sub_matches)) => build_list_kmers_on_disk_command(sub_matches),
         Some(("build-from-kmers-on-disk", sub_matches)) => build_from_kmers_on_disk_command(sub_matches),
         Some(("build-lcs", sub_matches)) => build_lcs_command(sub_matches),
         Some(("lookup", sub_matches)) => lookup_query_command(sub_matches),
