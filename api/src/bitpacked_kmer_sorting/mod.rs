@@ -20,91 +20,82 @@ fn file_size(path: &Path) -> usize {
 // * A file with all the reverse k-mers in lexicogprahic order
 // * if `add_all_dummy_paths` is  given, also a file with the reversed up to k characters of each input string.
 pub fn sort_and_dedup_kmers_into_file<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (crate::tempfile::TempFile, Option<crate::tempfile::TempFile>){
-    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
-    thread_pool.install(||{
+    log::info!("Splitting k-mers into bins");
+    let (bin_files, n_bytes_in_bins, first_mers) = kmer_splitter::split_to_bins::<B, IN>(seqs, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_file_manager);
 
-        log::info!("Splitting k-mers into bins");
-        let (bin_files, n_bytes_in_bins, first_mers) = kmer_splitter::split_to_bins::<B, IN>(seqs, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_file_manager);
+    log::info!("Total size of k-mer bins: {} bytes ({})", n_bytes_in_bins, human_bytes(n_bytes_in_bins as f64));
 
-        log::info!("Total size of k-mer bins: {} bytes ({})", n_bytes_in_bins, human_bytes(n_bytes_in_bins as f64));
+    log::info!("Sorting and deduplicating bins");
+    let (bin_files, n_bytes_after_dedup) = kmer_splitter::par_sort_and_dedup_bin_files::<B>(bin_files, mem_gb, n_threads);
 
-        log::info!("Sorting and deduplicating bins");
-        let (bin_files, n_bytes_after_dedup) = kmer_splitter::par_sort_and_dedup_bin_files::<B>(bin_files, mem_gb, n_threads);
+    log::info!("Total size of deduplicated k-mer bins: {} bytes ({})", n_bytes_after_dedup, human_bytes(n_bytes_after_dedup as f64));
 
-        log::info!("Total size of deduplicated k-mer bins: {} bytes ({})", n_bytes_after_dedup, human_bytes(n_bytes_after_dedup as f64));
+    let mut kmers_file = temp_file_manager.create_new_file("kmers-", 10, ".bin");
 
-        let mut kmers_file = temp_file_manager.create_new_file("kmers-", 10, ".bin");
+    log::info!("Concatenating deduplicated bins");
+    let concat_space_overhead = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
 
-        log::info!("Concatenating deduplicated bins");
-        let concat_space_overhead = kmer_splitter::concat_files(bin_files, &mut kmers_file.file);
+    let concat_space_peak = n_bytes_after_dedup + concat_space_overhead;
+    log::info!("Disk peak space during concatenation: {} bytes ({})", concat_space_peak, human_bytes(concat_space_peak as f64));
+    kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-        let concat_space_peak = n_bytes_after_dedup + concat_space_overhead;
-        log::info!("Disk peak space during concatenation: {} bytes ({})", concat_space_peak, human_bytes(concat_space_peak as f64));
-        kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
+    let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file.path);
 
-        let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file.path);
+    log::info!("{} distinct k-mers found", n_kmers);
 
-        log::info!("{} distinct k-mers found", n_kmers);
-
-        if let Some(first_mers) = first_mers {
-            let mut first_mers_file = temp_file_manager.create_new_file("sbwt-temp-first-mers", 8, ".bin");
-            log::info!("Writing first -mers to {}", first_mers_file.path.display());
-            dummies::write_to_disk(first_mers, &mut first_mers_file.file);
-            (kmers_file, Some(first_mers_file))
-        } else {
-            (kmers_file, None)
-        }
-
-    })
+    if let Some(first_mers) = first_mers {
+        let mut first_mers_file = temp_file_manager.create_new_file("sbwt-temp-first-mers", 8, ".bin");
+        log::info!("Writing first -mers to {}", first_mers_file.path.display());
+        dummies::write_to_disk(first_mers, &mut first_mers_file.file);
+        (kmers_file, Some(first_mers_file))
+    } else {
+        (kmers_file, None)
+    }
 }
 
 pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
 
-    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
-    thread_pool.install(||{
+    let sigma = DNA_ALPHABET.len(); 
+    let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file);
+    let required_dummies = dummies::get_sorted_dummies::<B>(kmers_file, n_kmers, sigma, k, n_threads, first_mers_file);
 
-        let sigma = DNA_ALPHABET.len(); 
-        let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file);
-        let required_dummies = dummies::get_sorted_dummies::<B>(kmers_file, n_kmers, sigma, k, n_threads, first_mers_file);
+    log::info!("{} dummy nodes needed", required_dummies.len());
 
-        log::info!("{} dummy nodes needed", required_dummies.len());
+    let n_dummies = required_dummies.len();
 
-        let n_dummies = required_dummies.len();
+    // Write dummies to disk
+    log::info!("Writing dummies to disk");
+    let mut dummy_file = temp_file_manager.create_new_file("dummies-", 10, ".bin");
+    dummies::write_to_disk(required_dummies, &mut dummy_file.file);
 
-        // Write dummies to disk
-        log::info!("Writing dummies to disk");
-        let mut dummy_file = temp_file_manager.create_new_file("dummies-", 10, ".bin");
-        dummies::write_to_disk(required_dummies, &mut dummy_file.file);
+    let mut dummy_merge_peak = file_size(&kmers_file) + file_size(&dummy_file.path);
+    if let Some(first_mer_file) = first_mers_file { dummy_merge_peak += file_size(first_mer_file) }
+    log::info!("Temporary disk space peak during dummy construction: {} bytes ({})", dummy_merge_peak, human_bytes(dummy_merge_peak as f64));
 
-        let mut dummy_merge_peak = file_size(&kmers_file) + file_size(&dummy_file.path);
-        if let Some(first_mer_file) = first_mers_file { dummy_merge_peak += file_size(first_mer_file) }
-        log::info!("Temporary disk space peak during dummy construction: {} bytes ({})", dummy_merge_peak, human_bytes(dummy_merge_peak as f64));
+    log::info!("Constructing the sbwt subset sequence");
+    let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, &kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
 
-        log::info!("Constructing the sbwt subset sequence");
-        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, &kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
+    // Create the C array
+    #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
+    let C: Vec<usize> = crate::util::get_C_array(&rawrows);
 
-        // Create the C array
-        #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
-        let C: Vec<usize> = crate::util::get_C_array(&rawrows);
+    log::info!("Building the subset rank structure");
+    let mut subsetseq = SS::new_from_bit_vectors(rawrows);
+    subsetseq.build_rank();
+    let n_sets = subsetseq.len();
+    let (mut index, lcs) = (SbwtIndex::<SS>::from_components(
+        subsetseq,
+        n_kmers,
+        k,
+        C,
+        PrefixLookupTable::new_empty(n_sets))
+    , lcs.map(LcsArray::new));
 
-        log::info!("Building the subset rank structure");
-        let mut subsetseq = SS::new_from_bit_vectors(rawrows);
-        subsetseq.build_rank();
-        let n_sets = subsetseq.len();
-        let (mut index, lcs) = (SbwtIndex::<SS>::from_components(
-            subsetseq,
-            n_kmers,
-            k,
-            C,
-            PrefixLookupTable::new_empty(n_sets))
-        , lcs.map(LcsArray::new));
-
-        let lut = PrefixLookupTable::new(&index, 8);
-        index.set_lookup_table(lut);
-        (index, lcs)
-    })
+    let lut = PrefixLookupTable::new(&index, 8);
+    index.set_lookup_table(lut);
+    (index, lcs)
 }
 
 /// Build using bitpacked k-mer sorting. See [SbwtIndexBuilder](crate::builder::SbwtIndexBuilder) for a wrapper with a more 
