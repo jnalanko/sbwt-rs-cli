@@ -54,14 +54,14 @@ pub(crate) fn seek_kmer_reader<const B: usize>(path: &Path, idx: usize) -> BufRe
     let record_len = kmer_record_len::<B>();
     let mut f = File::open(path).unwrap();
     f.seek(SeekFrom::Start(idx as u64 * record_len as u64)).unwrap();
-    BufReader::new(f)
+    BufReader::with_capacity(1 << 23, f) // 8 MiB bufferr
 }
 
 pub(crate) fn seek_dummy_reader<const B: usize>(path: &Path, idx: usize) -> BufReader<File> {
     let record_len = dummy_record_len::<B>();
     let mut f = File::open(path).unwrap();
     f.seek(SeekFrom::Start(idx as u64 * record_len as u64)).unwrap();
-    BufReader::new(f)
+    BufReader::with_capacity(1 << 23, f) // 8 MiB bufferr
 }
 
 #[cfg(test)]
