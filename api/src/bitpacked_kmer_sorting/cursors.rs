@@ -286,10 +286,54 @@ fn prepend_c<const B: usize>(kmer: (LongKmer<B>, u8), k: usize, c: usize) -> (Lo
     }
 }
 
+/// Computes one thread's slice of the LCS array into a `Vec<T>` staging buffer and extends
+/// `compressed_lcs` with it. The caller must pick `T` wide enough to hold every value in
+/// `0..k` (see `build_lcs_array_disk`); `IntVector` implements `Extend<T>` directly for
+/// u8/u16/u32/u64, so no conversion is needed when handing the piece off.
+fn push_lcs_pieces<const B: usize, T>(
+    dummy_filepath: &Path,
+    nondummy_filepath: &Path,
+    n_dummies: usize,
+    n_kmers: usize,
+    k: usize,
+    n_threads: usize,
+    compressed_lcs: &mut simple_sds_sbwt::int_vector::IntVector,
+)
+where
+    T: TryFrom<usize> + Send,
+    simple_sds_sbwt::int_vector::IntVector: std::iter::Extend<T>,
+{
+    let n = n_kmers + n_dummies;
+
+    // We start the segmentation from 1 so that we always have a previous k-mer to compare against
+    let segments = crate::util::segment_range(1..n, n_threads);
+    let lcs_pieces: Vec<Vec<T>> = segments.into_par_iter().map(|range| {
+        let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, range.start - 1, k, n_dummies, n_kmers); // range.start >= 1 so this is ok
+        let mut subrange = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, range.clone(), n_dummies, n_kmers);
+        let mut lcs_piece = Vec::<T>::with_capacity(range.len());
+        while let Some((kmer, len)) = subrange.next() {
+            let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
+            // Guaranteed to fit: the caller picked T wide enough for values up to k - 1.
+            lcs_piece.push(T::try_from(lcp_value).ok().expect("LCS value does not fit in the chosen staging integer width"));
+            (prev_kmer, prev_len) = (kmer, len);
+        }
+        lcs_piece
+    }).collect();
+
+    for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
+        compressed_lcs.extend(piece);
+    }
+}
+
 /// Disk analogue of the in-memory `build_lcs_array`. Computes the (compressed) LCS array by
 /// segmenting the merged index range and, per segment, streaming forward through a
 /// range-bounded `DummyNodeMerger` while computing pairwise LCP values against the previous
 /// merged element (looked up once per segment via `get_ith_merged_kmer_disk`).
+///
+/// Unlike the in-memory version (which always stages into `u16` since it already holds the
+/// full k-mer array in RAM anyway), this stages LCS values into the narrowest of
+/// u8/u16/u32/u64 that can hold every value in `0..k`, since disk-based construction is meant
+/// to keep peak memory low.
 pub fn build_lcs_array_disk<const B: usize>(
     dummy_filepath: &Path,
     nondummy_filepath: &Path,
@@ -300,33 +344,29 @@ pub fn build_lcs_array_disk<const B: usize>(
 ) -> simple_sds_sbwt::int_vector::IntVector {
     // LCS values are between 0 and k-1
     assert!(k > 0);
-    assert!(k < u16::MAX as usize);
 
     let n = n_kmers + n_dummies;
 
     log::info!("Computing LCS values");
 
-    // We start the segmentation from 1 so that we always have a previous k-mer to compare against
-    let segments = crate::util::segment_range(1..n, n_threads);
-    let lcs_pieces: Vec<Vec<u16>> = segments.into_par_iter().map(|range| {
-        let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, range.start - 1, k, n_dummies, n_kmers); // range.start >= 1 so this is ok
-        let mut subrange = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, range.clone(), n_dummies, n_kmers);
-        let mut lcs_piece = Vec::<u16>::with_capacity(range.len());
-        while let Some((kmer, len)) = subrange.next() {
-            let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
-            lcs_piece.push(lcp_value as u16);
-            (prev_kmer, prev_len) = (kmer, len);
-        }
-        lcs_piece
-    }).collect();
-
     // Compress into log(k) bits per element
-    log::info!("Compressing LCS array to log(k) bits per element");
     let bitwidth = 64 - (k as u64 - 1).leading_zeros();
     let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(n, bitwidth as usize).unwrap();
     compressed_lcs.push(0); // lcs[0] = 0 by definition
-    for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
-        compressed_lcs.extend(piece);
+
+    log::info!("Compressing LCS array to log(k) bits per element");
+    // Pick the narrowest staging integer type that can hold every value in 0..k (i.e. up to k-1).
+    // Comparisons are done in u64 to avoid literal-overflow issues with e.g. u32::MAX + 1 on
+    // platforms where usize is narrower than 64 bits.
+    let k_u64 = k as u64;
+    if k_u64 <= u8::MAX as u64 + 1 {
+        push_lcs_pieces::<B, u8>(dummy_filepath, nondummy_filepath, n_dummies, n_kmers, k, n_threads, &mut compressed_lcs);
+    } else if k_u64 <= u16::MAX as u64 + 1 {
+        push_lcs_pieces::<B, u16>(dummy_filepath, nondummy_filepath, n_dummies, n_kmers, k, n_threads, &mut compressed_lcs);
+    } else if k_u64 <= u32::MAX as u64 + 1 {
+        push_lcs_pieces::<B, u32>(dummy_filepath, nondummy_filepath, n_dummies, n_kmers, k, n_threads, &mut compressed_lcs);
+    } else {
+        push_lcs_pieces::<B, u64>(dummy_filepath, nondummy_filepath, n_dummies, n_kmers, k, n_threads, &mut compressed_lcs);
     }
 
     compressed_lcs
