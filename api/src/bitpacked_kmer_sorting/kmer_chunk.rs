@@ -21,11 +21,6 @@ impl<const B: usize> KmerChunk<B>{
         SortedKmerChunk{kmers: self.kmers}
     }
 
-    /*pub fn par_sort_unstable(mut self) -> SortedKmerChunk<B>{
-        self.kmers.par_sort_unstable();
-        SortedKmerChunk{kmers: self.kmers}
-    }*/
-
     #[allow(dead_code)]
     pub fn into_vec(self) -> Vec<LongKmer::<B>>{
         self.kmers

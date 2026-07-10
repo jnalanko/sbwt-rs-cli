@@ -303,27 +303,30 @@ where
     T: TryFrom<usize> + Send,
     simple_sds_sbwt::int_vector::IntVector: std::iter::Extend<T>,
 {
-    let n = n_kmers + n_dummies;
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+    thread_pool.install(|| {
+        let n = n_kmers + n_dummies;
 
-    // We start the segmentation from 1 so that we always have a previous k-mer to compare against
-    let segments = crate::util::segment_range(1..n, n_threads);
-    let lcs_pieces: Vec<Vec<T>> = segments.into_par_iter().map(|range| {
-        let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, range.start - 1, k, n_dummies, n_kmers); // range.start >= 1 so this is ok
-        let mut subrange = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, range.clone(), n_dummies, n_kmers);
-        let mut lcs_piece = Vec::<T>::with_capacity(range.len());
-        while let Some((kmer, len)) = subrange.next() {
-            let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
-            // Guaranteed to fit: the caller picked T wide enough for values up to k - 1.
-            lcs_piece.push(T::try_from(lcp_value).ok().expect("LCS value does not fit in the chosen staging integer width"));
-            (prev_kmer, prev_len) = (kmer, len);
+        // We start the segmentation from 1 so that we always have a previous k-mer to compare against
+        let segments = crate::util::segment_range(1..n, n_threads);
+        let lcs_pieces: Vec<Vec<T>> = segments.into_par_iter().map(|range| {
+            let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, range.start - 1, k, n_dummies, n_kmers); // range.start >= 1 so this is ok
+            let mut subrange = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, range.clone(), n_dummies, n_kmers);
+            let mut lcs_piece = Vec::<T>::with_capacity(range.len());
+            while let Some((kmer, len)) = subrange.next() {
+                let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
+                // Guaranteed to fit: the caller picked T wide enough for values up to k - 1.
+                lcs_piece.push(T::try_from(lcp_value).ok().expect("LCS value does not fit in the chosen staging integer width"));
+                (prev_kmer, prev_len) = (kmer, len);
+            }
+            lcs_piece
+        }).collect();
+
+        log::info!("Compressing LCS array to log(k) bits per element");
+        for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
+            compressed_lcs.extend(piece);
         }
-        lcs_piece
-    }).collect();
-
-    log::info!("Compressing LCS array to log(k) bits per element");
-    for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
-        compressed_lcs.extend(piece);
-    }
+    })
 }
 
 /// Disk analogue of the in-memory `build_lcs_array`. Computes the (compressed) LCS array by
