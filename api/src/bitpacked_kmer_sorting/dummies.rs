@@ -1,11 +1,14 @@
-use std::io::{BufWriter, Write};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
 use std::ops::Range;
 use std::path::Path;
 
+use crate::bitpacked_kmer_sorting::disk_access::dummy_record_len;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
 
 use bitvec::order::Lsb0;
+use byteorder::ReadBytesExt;
 use rayon::prelude::*;
 
 use super::disk_access;
@@ -178,13 +181,17 @@ fn build_dummy_prefixes_disk<const B: usize>(
     required_dummies_pieces.into_iter().fold(vec![], |mut acc, v| { acc.extend(v); acc })
 }
 
+fn file_size(path: &Path) -> usize {
+    std::fs::metadata(path).unwrap().len() as usize
+}
+
 pub fn get_sorted_dummies<const B: usize>(
     sorted_kmers_filepath: &Path,
     n_kmers: usize,
     sigma: usize,
     k: usize,
     n_threads: usize,
-    given_mers: Option<Vec<(LongKmer<B>, u8)>>, // All dummy suffixes of these will be included.
+    given_mers: Option<&Path>, // All dummy suffixes of these will be included.
 ) -> Vec<(LongKmer::<B>, u8)>{
 
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
@@ -198,7 +205,14 @@ pub fn get_sorted_dummies<const B: usize>(
 
         if let Some(given_mers) = given_mers {
             log::info!("Adding extra dummy k-mer strings");
-            for (mut prefix, mut prefix_full_len) in given_mers {
+            let dummy_record_len = crate::bitpacked_kmer_sorting::disk_access::dummy_record_len::<B>();
+            assert!(file_size(given_mers) % dummy_record_len == 0);
+            let n_given_mers = file_size(given_mers) / dummy_record_len;
+            let mut first_mers_reader = BufReader::new(File::open(given_mers).unwrap());
+            for _ in 0..n_given_mers {
+                let mut prefix = LongKmer::<B>::load(&mut first_mers_reader).unwrap().unwrap();
+                let mut prefix_full_len = first_mers_reader.read_u8().unwrap() as usize;
+
                 if prefix_full_len as usize == k {
                     prefix = prefix.left_shifted(1);
                     prefix_full_len -= 1;

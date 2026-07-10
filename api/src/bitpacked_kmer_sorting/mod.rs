@@ -8,7 +8,7 @@ mod disk_access;
 
 use human_bytes::human_bytes;
 
-use std::{cmp::max, io::Seek, path::Path};
+use std::{cmp::max, io::{BufWriter, Seek}, path::Path};
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, tempfile::TempFileManager, util::DNA_ALPHABET};
 
@@ -16,14 +16,13 @@ fn file_size(path: &Path) -> usize {
     std::fs::metadata(path).unwrap().len() as usize
 }
 
-/// Build using bitpacked k-mer sorting. See [SbwtIndexBuilder](crate::builder::SbwtIndexBuilder) for a wrapper with a more 
-/// user-friendly interface. B is the number u64 words in a k-mer.
-pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, build_lcs: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (SbwtIndex::<SS>, Option<LcsArray>) {
-
+// Returns:
+// * A file with all the reverse k-mers in lexicogprahic order
+// * if `add_all_dummy_paths` is  given, also a file with the reversed up to k characters of each input string.
+pub fn sort_and_dedup_kmers_into_file<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (crate::tempfile::TempFile, Option<crate::tempfile::TempFile>){
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
     thread_pool.install(||{
-        let sigma = DNA_ALPHABET.len(); 
 
         log::info!("Splitting k-mers into bins");
         let (bin_files, n_bytes_in_bins, first_mers) = kmer_splitter::split_to_bins::<B, IN>(seqs, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_file_manager);
@@ -48,7 +47,27 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         log::info!("{} distinct k-mers found", n_kmers);
 
-        let required_dummies = dummies::get_sorted_dummies::<B>(&kmers_file.path, n_kmers, sigma, k, n_threads, first_mers);
+        if let Some(first_mers) = first_mers {
+            let mut first_mers_file = temp_file_manager.create_new_file("sbwt-temp-first-mers", 8, ".bin");
+            log::info!("Writing first -mers to {}", first_mers_file.path.display());
+            dummies::write_to_disk(first_mers, &mut first_mers_file.file);
+            (kmers_file, Some(first_mers_file))
+        } else {
+            (kmers_file, None)
+        }
+
+    })
+}
+
+pub fn build_from_kmers_on_disk<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+
+    thread_pool.install(||{
+
+        let sigma = DNA_ALPHABET.len(); 
+        let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file);
+        let required_dummies = dummies::get_sorted_dummies::<B>(kmers_file, n_kmers, sigma, k, n_threads, first_mers_file);
 
         log::info!("{} dummy nodes needed", required_dummies.len());
 
@@ -59,16 +78,12 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         let mut dummy_file = temp_file_manager.create_new_file("dummies-", 10, ".bin");
         dummies::write_to_disk(required_dummies, &mut dummy_file.file);
 
-        let dummy_merge_peak = file_size(&kmers_file.path) + file_size(&dummy_file.path);
-        let disk_peak_total = max(max(dummy_merge_peak, concat_space_peak), n_bytes_in_bins);
-        log::info!("Temporary disk space peak: {} bytes ({})", disk_peak_total, human_bytes(disk_peak_total as f64));
+        let mut dummy_merge_peak = file_size(&kmers_file) + file_size(&dummy_file.path);
+        if let Some(first_mer_file) = first_mers_file { dummy_merge_peak += file_size(first_mer_file) }
+        log::info!("Temporary disk space peak during dummy construction: {} bytes ({})", dummy_merge_peak, human_bytes(dummy_merge_peak as f64));
 
         log::info!("Constructing the sbwt subset sequence");
-
-        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, &kmers_file.path, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
-
-        drop(kmers_file); // Free disk space
-        drop(dummy_file); // Free disk space
+        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, &kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
 
         // Create the C array
         #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
@@ -90,7 +105,15 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         index.set_lookup_table(lut);
         (index, lcs)
     })
+}
 
+/// Build using bitpacked k-mer sorting. See [SbwtIndexBuilder](crate::builder::SbwtIndexBuilder) for a wrapper with a more 
+/// user-friendly interface. B is the number u64 words in a k-mer.
+pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, build_lcs: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+    let (kmers_file, first_mers_file) = sort_and_dedup_kmers_into_file::<B, IN, SS>(seqs, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_file_manager);
+
+    let first_mers_file_path_option: Option<&Path> = first_mers_file.as_ref().map(|f| f.path.as_path());
+    build_from_kmers_on_disk::<B, IN, SS>(k, n_threads, build_lcs, temp_file_manager, &kmers_file.path, first_mers_file_path_option)
 }
 
 #[cfg(test)]
