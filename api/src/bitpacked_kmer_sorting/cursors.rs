@@ -1,11 +1,14 @@
-use std::{io::{BufReader, Seek, Read}, fs::File, path::Path};
+use std::{fs::File, io::BufReader, ops::Range, path::Path};
 
 use bitvec::order::Lsb0;
-use simple_sds_sbwt::ops::Access;
-use std::io::SeekFrom;
-use std::cmp::min;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
+use simple_sds_sbwt::ops::Push;
+
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
+
+use super::disk_access;
 
 pub struct DummyNodeMerger<R: std::io::Read, const B: usize> {
     dummy_reader: R, // Stream of k-mer objects
@@ -18,6 +21,13 @@ pub struct DummyNodeMerger<R: std::io::Read, const B: usize> {
 
     dummy_position: usize, // Position of the dummy cursor
     nondummy_position: usize, // Position of the nondummy cursor
+
+    // The cursor treats a side as exhausted (returns None for it) once its position counter
+    // reaches the corresponding range end, even if the underlying file has more data past that
+    // point. Unbounded mergers (see `new`/`new_with_initial_positions`) use usize::MAX here, so
+    // they only stop at the real end of file, matching the previous unbounded behavior exactly.
+    dummy_range_end: usize,
+    nondummy_range_end: usize,
 }
 
 impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
@@ -29,7 +39,7 @@ impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
                 match kmer_opt{
                     Some(kmer) => kmer,
                     None => return None, // End of stream
-                }   
+                }
             },
             Err(e) => panic!("IO error while streaming sorted k-mers: {}", e),
         };
@@ -51,6 +61,7 @@ impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
         }
     }
 
+    #[allow(dead_code)] // Unbounded constructor; kept for API completeness and used in tests.
     pub fn new(mut dummy_reader: R, mut nondummy_reader: R, k: usize) -> Self {
         let dummy_kmer = Self::read_from_dummy_reader(&mut dummy_reader);
         let nondummy_kmer = Self::read_from_non_dummy_reader(&mut nondummy_reader, k);
@@ -63,11 +74,14 @@ impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
             k,
             dummy_position: 0,
             nondummy_position: 0,
+            dummy_range_end: usize::MAX,
+            nondummy_range_end: usize::MAX,
         }
     }
 
     // TODO: this is stupid. The given positions are just for bookkeeping that the caller might use. They don't affect the
     // cursor at all. Need to refactor.
+    #[allow(dead_code)] // Unbounded constructor; kept for API completeness.
     pub fn new_with_initial_positions(mut dummy_reader: R, mut nondummy_reader: R, k: usize, dummy_position: usize, nondummy_position: usize) -> Self {
         let dummy_kmer = Self::read_from_dummy_reader(&mut dummy_reader);
         let nondummy_kmer = Self::read_from_non_dummy_reader(&mut nondummy_reader, k);
@@ -80,6 +94,40 @@ impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
             k,
             dummy_position,
             nondummy_position,
+            dummy_range_end: usize::MAX,
+            nondummy_range_end: usize::MAX,
+        }
+    }
+
+    /// Constructs a merger whose two sides act exhausted once their position counters reach
+    /// `dummy_range_end`/`nondummy_range_end`, even if the underlying file has more data past
+    /// that point. The readers must already be seeked to `dummy_position`/`nondummy_position`.
+    pub fn new_range_bounded(
+        mut dummy_reader: R, mut nondummy_reader: R, k: usize,
+        dummy_position: usize, dummy_range_end: usize,
+        nondummy_position: usize, nondummy_range_end: usize,
+    ) -> Self {
+        let dummy_kmer = if dummy_position < dummy_range_end {
+            Self::read_from_dummy_reader(&mut dummy_reader)
+        } else {
+            None
+        };
+        let nondummy_kmer = if nondummy_position < nondummy_range_end {
+            Self::read_from_non_dummy_reader(&mut nondummy_reader, k)
+        } else {
+            None
+        };
+
+        Self {
+            dummy_reader,
+            nondummy_reader,
+            dummy_kmer,
+            nondummy_kmer,
+            k,
+            dummy_position,
+            nondummy_position,
+            dummy_range_end,
+            nondummy_range_end,
         }
     }
 
@@ -107,8 +155,14 @@ impl <R: std::io::Read, const B: usize> DummyNodeMerger<R, B> {
         self.dummy_position
     }
 
+    #[allow(dead_code)]
     pub fn nondummy_position(&self)  -> usize{
         self.nondummy_position
+    }
+
+    /// The index of the next element to be returned, in the conceptual merged (dummy + nondummy) order.
+    pub fn cur_merged_index(&self) -> usize {
+        self.dummy_position + self.nondummy_position
     }
 }
 
@@ -120,23 +174,39 @@ impl<const B: usize> Iterator for DummyNodeMerger<BufReader<File>, B> {
         match (self.dummy_kmer, self.nondummy_kmer){
             (None, None) => None,
             (Some(dummy_kmer), None) => {
-                self.dummy_kmer = Self::read_from_dummy_reader(&mut self.dummy_reader);
                 self.dummy_position += 1;
+                self.dummy_kmer = if self.dummy_position < self.dummy_range_end {
+                    Self::read_from_dummy_reader(&mut self.dummy_reader)
+                } else {
+                    None
+                };
                 Some(dummy_kmer)
             },
             (None, Some(nondummy_kmer)) => {
-                self.nondummy_kmer = Self::read_from_non_dummy_reader(&mut self.nondummy_reader, self.k);
                 self.nondummy_position += 1;
+                self.nondummy_kmer = if self.nondummy_position < self.nondummy_range_end {
+                    Self::read_from_non_dummy_reader(&mut self.nondummy_reader, self.k)
+                } else {
+                    None
+                };
                 Some(nondummy_kmer)
             },
             (Some(dummy_kmer), Some(nondummy_kmer)) => {
                 if dummy_kmer < nondummy_kmer {
-                    self.dummy_kmer = Self::read_from_dummy_reader(&mut self.dummy_reader);
                     self.dummy_position += 1;
+                    self.dummy_kmer = if self.dummy_position < self.dummy_range_end {
+                        Self::read_from_dummy_reader(&mut self.dummy_reader)
+                    } else {
+                        None
+                    };
                     Some(dummy_kmer)
                 } else {
-                    self.nondummy_kmer = Self::read_from_non_dummy_reader(&mut self.nondummy_reader, self.k);
                     self.nondummy_position += 1;
+                    self.nondummy_kmer = if self.nondummy_position < self.nondummy_range_end {
+                        Self::read_from_non_dummy_reader(&mut self.nondummy_reader, self.k)
+                    } else {
+                        None
+                    };
                     Some(nondummy_kmer)
                 }
             }
@@ -145,147 +215,213 @@ impl<const B: usize> Iterator for DummyNodeMerger<BufReader<File>, B> {
 
 }
 
-// We take in Paths instead of a Files because we need multiple readers to the same files 
-pub fn init_char_cursors<const B: usize>(dummy_filepath: &Path, nondummy_filepath: &Path, k: usize, sigma: usize)
--> Vec<DummyNodeMerger<BufReader<File>, B>>{
-    let mut char_cursors = Vec::<DummyNodeMerger<BufReader<File>, B>>::new();
-    for c in 0..(sigma as u8){
-        log::trace!("Searching character {}", c);
+impl<const B: usize> DummyNodeMerger<BufReader<File>, B> {
+    /// Builds a merger scoped to `merged_range` within the conceptual merged (dummy + nondummy)
+    /// sorted sequence. Both endpoints of `merged_range` are located via binary search over the
+    /// two sorted disk files (`n_dummies`/`n_kmers` records respectively), and the two readers
+    /// are seeked to the resulting split point. `merged_range.end` may be `n_dummies + n_kmers`
+    /// (one past the very end), in which case the dest side is effectively unbounded.
+    pub fn new_bounded(
+        dummy_path: &Path,
+        nondummy_path: &Path,
+        k: usize,
+        merged_range: Range<usize>,
+        n_dummies: usize,
+        n_kmers: usize,
+    ) -> Self {
+        let (dummy_start, nondummy_start, _) = crate::util::binary_search_position_in_merged_list(
+            |j| disk_access::read_dummy_at::<B>(dummy_path, j),
+            |i| (disk_access::read_kmer_at::<B>(nondummy_path, i), k as u8),
+            merged_range.start, n_dummies, n_kmers,
+        );
+        let (dummy_end, nondummy_end, _) = crate::util::binary_search_position_in_merged_list(
+            |j| disk_access::read_dummy_at::<B>(dummy_path, j),
+            |i| (disk_access::read_kmer_at::<B>(nondummy_path, i), k as u8),
+            merged_range.end, n_dummies, n_kmers,
+        );
 
-        let (dummy_reader, dummy_pos) = 
-        { // Seek in dummies
+        let dummy_reader = disk_access::seek_dummy_reader::<B>(dummy_path, dummy_start);
+        let nondummy_reader = disk_access::seek_kmer_reader::<B>(nondummy_path, nondummy_start);
 
-            let dummy_file_len = std::fs::metadata(dummy_filepath).unwrap().len() as usize;
-            let dummy_record_len = LongKmer::<B>::byte_size() + 1; // Pairs (kmer, len byte)
-            assert_eq!(dummy_file_len % dummy_record_len, 0);
-    
-            let access_fn = |pos| {
-                let mut f = File::open(dummy_filepath).unwrap();
-                f.seek(SeekFrom::Start(pos as u64 * dummy_record_len as u64)).unwrap();
-                let kmer = LongKmer::<B>::load(&mut f).unwrap().unwrap(); // Should never be none because we know the file length
+        Self::new_range_bounded(dummy_reader, nondummy_reader, k, dummy_start, dummy_end, nondummy_start, nondummy_end)
+    }
+}
 
-                // Read the length byte
-                let mut len_buf = [0_u8; 1];
-                f.read_exact(&mut len_buf).unwrap();
-                let len = u8::from_le_bytes(len_buf);
-                (kmer, len)
-            };
+/// Disk analogue of the in-memory `get_ith_merged_kmer`: returns the element at position `i`
+/// (0-indexed) in the conceptual merged (dummy + nondummy) sorted sequence. O(log^2(n)) time.
+pub fn get_ith_merged_kmer_disk<const B: usize>(
+    dummy_path: &Path,
+    nondummy_path: &Path,
+    i: usize,
+    k: usize,
+    n_dummies: usize,
+    n_kmers: usize,
+) -> (LongKmer<B>, u8) {
+    let (dummy_idx, nondummy_idx, in_dummies) = crate::util::binary_search_position_in_merged_list(
+        |j| disk_access::read_dummy_at::<B>(dummy_path, j),
+        |i| (disk_access::read_kmer_at::<B>(nondummy_path, i), k as u8),
+        i, n_dummies, n_kmers,
+    );
 
-            let pred_fn = |kmer: (LongKmer::<B>,u8)| {
-                kmer.1 > 0 && kmer.0.get_from_left(0) >= c
-            };
+    if in_dummies {
+        disk_access::read_dummy_at::<B>(dummy_path, dummy_idx)
+    } else {
+        (disk_access::read_kmer_at::<B>(nondummy_path, nondummy_idx), k as u8)
+    }
+}
 
-            let start = binary_search_leftmost_that_fulfills_pred(
-                access_fn, 
-                pred_fn, 
-                dummy_file_len / dummy_record_len);
+// Here c is from 0..3. Returns the k-mer (or dummy) reached by walking backward from `kmer`
+// along a `c`-labeled edge: `c` prepended to `kmer`'s first (len-1) characters.
+fn prepend_c<const B: usize>(kmer: (LongKmer<B>, u8), k: usize, c: usize) -> (LongKmer<B>, u8) {
+    if kmer.1 as usize == k {
+        (
+            kmer.0
+                .copy_set_from_left(k - 1, 0)
+                .right_shifted(1)
+                .copy_set_from_left(0, c as u8),
+            k as u8,
+        )
+    } else {
+        (kmer.0.right_shifted(1).copy_set_from_left(0, c as u8), kmer.1 + 1) // Dummy
+    }
+}
 
-            let mut f = File::open(dummy_filepath).unwrap();
-            f.seek(SeekFrom::Start(start as u64 * dummy_record_len as u64)).unwrap();
-            (BufReader::new(f), start)
-        };
+/// Disk analogue of the in-memory `build_lcs_array`. Computes the (compressed) LCS array by
+/// segmenting the merged index range and, per segment, streaming forward through a
+/// range-bounded `DummyNodeMerger` while computing pairwise LCP values against the previous
+/// merged element (looked up once per segment via `get_ith_merged_kmer_disk`).
+pub fn build_lcs_array_disk<const B: usize>(
+    dummy_filepath: &Path,
+    nondummy_filepath: &Path,
+    n_dummies: usize,
+    n_kmers: usize,
+    k: usize,
+    n_threads: usize,
+) -> simple_sds_sbwt::int_vector::IntVector {
+    // LCS values are between 0 and k-1
+    assert!(k > 0);
+    assert!(k < u16::MAX as usize);
 
-        let (nondummy_reader, nondummy_pos) = 
-        { // Seek in nondummies
+    let n = n_kmers + n_dummies;
 
-            let nondummy_file_len = std::fs::metadata(nondummy_filepath).unwrap().len() as usize;
-            let nondummy_record_len = LongKmer::<B>::byte_size();
-            assert_eq!(nondummy_file_len % nondummy_record_len, 0);
-    
-            let access_fn = |pos| {
-                let mut f = File::open(nondummy_filepath).unwrap();
-                f.seek(SeekFrom::Start(pos as u64 * nondummy_record_len as u64)).unwrap();
-                LongKmer::<B>::load(&mut f).unwrap().unwrap() // Should never be None because we know the file length
-            };
+    log::info!("Computing LCS values");
 
-            let pred_fn = |kmer: LongKmer::<B>| {
-                kmer.get_from_left(0) >= c
-            };
+    // We start the segmentation from 1 so that we always have a previous k-mer to compare against
+    let segments = crate::util::segment_range(1..n, n_threads);
+    let lcs_pieces: Vec<Vec<u16>> = segments.into_par_iter().map(|range| {
+        let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, range.start - 1, k, n_dummies, n_kmers); // range.start >= 1 so this is ok
+        let mut subrange = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, range.clone(), n_dummies, n_kmers);
+        let mut lcs_piece = Vec::<u16>::with_capacity(range.len());
+        while let Some((kmer, len)) = subrange.next() {
+            let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
+            lcs_piece.push(lcp_value as u16);
+            (prev_kmer, prev_len) = (kmer, len);
+        }
+        lcs_piece
+    }).collect();
 
-            let start = binary_search_leftmost_that_fulfills_pred(
-                access_fn, 
-                pred_fn, 
-                nondummy_file_len / nondummy_record_len);
-        
-            let mut f = File::open(nondummy_filepath).unwrap();
-            f.seek(SeekFrom::Start(start as u64 * nondummy_record_len as u64)).unwrap();
-            (BufReader::new(f), start)
-        };
-
-        let cursor = DummyNodeMerger::new_with_initial_positions(dummy_reader, nondummy_reader, k, dummy_pos, nondummy_pos);
-        char_cursors.push(cursor);
+    // Compress into log(k) bits per element
+    log::info!("Compressing LCS array to log(k) bits per element");
+    let bitwidth = 64 - (k as u64 - 1).leading_zeros();
+    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(n, bitwidth as usize).unwrap();
+    compressed_lcs.push(0); // lcs[0] = 0 by definition
+    for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
+        compressed_lcs.extend(piece);
     }
 
-    char_cursors
-
+    compressed_lcs
 }
 
 // Returns the SBWT bit vectors and optionally the LCS array
 pub fn build_sbwt_bit_vectors<const B: usize>(
-    global_cursor: DummyNodeMerger<BufReader<File>, B>, 
-    mut char_cursors: Vec<DummyNodeMerger<BufReader<File>, B>>, 
-    n: usize,
-    k: usize, 
+    dummy_filepath: &Path,
+    nondummy_filepath: &Path,
+    n_dummies: usize,
+    n_kmers: usize,
+    k: usize,
     sigma: usize,
-    build_lcs: bool) -> (Vec<bitvec::vec::BitVec::<u64, Lsb0>>, Option<simple_sds_sbwt::int_vector::IntVector>)
+    build_lcs: bool,
+    n_threads: usize,
+) -> (Vec<bitvec::vec::BitVec::<u64, Lsb0>>, Option<simple_sds_sbwt::int_vector::IntVector>)
 {
+    let n = n_kmers + n_dummies;
 
-    let mut rawrows = Vec::<bitvec::vec::BitVec::<u64, Lsb0>>::new();
-    for _ in 0..sigma {
-        let mut row = bitvec::vec::BitVec::<u64, Lsb0>::with_capacity(n);
-        row.resize(n, false);
-        rawrows.push(row);
-    }
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+    thread_pool.install(|| {
+        // Split the merged range 0..n into segments for threads
+        let input_ranges = crate::util::segment_range(0..n, n_threads);
 
-    let mut lcs = if build_lcs { 
-        // LCS values are between 0 and k-1
-        assert!(k > 0);
-        let bitwidth = 64 - (k as u64 - 1).leading_zeros();
-        Some(simple_sds_sbwt::int_vector::IntVector::with_len(n, bitwidth as usize, 0).unwrap()) } 
-    else { 
-        None 
-    };
+        let mut rows = vec![];
+        for c in 0..sigma {
+            let row_pieces: Vec<bitvec::vec::BitVec<u64, Lsb0>> = input_ranges.clone().into_par_iter().map(|input_range| {
+                let mut row_piece: bitvec::vec::BitVec::<u64, Lsb0> = bitvec::vec::BitVec::with_capacity(input_range.len());
+                row_piece.resize(input_range.len(), false);
 
-    let mut prev_kmer = LongKmer::<B>::from_ascii(b"").unwrap();
-    let mut prev_len = 0_usize;
-    for (kmer_idx, (kmer, len)) in global_cursor.enumerate() {
-        // The k-mers enumerated are reversed
+                if !input_range.is_empty() {
+                    // Let x be the first input kmer in this range. The destinations of the c-edges start
+                    // from the smallest k-mer that is larger or equal to cx.
+                    let x: (LongKmer<B>, u8) = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, input_range.start, k, n_dummies, n_kmers);
+                    let (cx, cx_len) = prepend_c(x, k, c);
 
-        if build_lcs && kmer_idx > 0 {
-            // The longest common suffix is the longest common prefix of reversed k-mers
-            let mut lcs_value = LongKmer::<B>::lcp(&prev_kmer, &kmer);
-            lcs_value = min(lcs_value, min(prev_len, len as usize));
-            lcs.as_mut().unwrap().set(kmer_idx, lcs_value as u64);
+                    let cx_dummy_insertion_index = binary_search_leftmost_that_fulfills_pred(
+                        |j| disk_access::read_dummy_at::<B>(dummy_filepath, j),
+                        |y: (LongKmer<B>, u8)| y >= (cx, cx_len),
+                        n_dummies,
+                    );
+                    let cx_kmer_insertion_index = binary_search_leftmost_that_fulfills_pred(
+                        |i| disk_access::read_kmer_at::<B>(nondummy_filepath, i),
+                        |y: LongKmer<B>| (y, k as u8) >= (cx, cx_len),
+                        n_kmers,
+                    );
+                    let dest_start_idx = cx_dummy_insertion_index + cx_kmer_insertion_index;
+
+                    let mut src_pointer = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, input_range.clone(), n_dummies, n_kmers); // Origin of edge
+                    let mut dest_pointer = DummyNodeMerger::<BufReader<File>, B>::new_bounded(dummy_filepath, nondummy_filepath, k, dest_start_idx..n, n_dummies, n_kmers); // Destination of edge
+
+                    // We might be starting at a k-mer that is not a suffix group leader. We must not
+                    // add any edges for it. Rewind forward until we are at a suffix group leader.
+                    let mut cur = x;
+                    if input_range.start > 0 {
+                        let mut prev = get_ith_merged_kmer_disk::<B>(dummy_filepath, nondummy_filepath, input_range.start - 1, k, n_dummies, n_kmers);
+                        while LongKmer::<B>::lcp_with_different_lengths((&prev.0, prev.1), (&cur.0, cur.1)) == k-1 {
+                            src_pointer.next(); // Advance
+                            prev = cur;
+                            if let Some(next) = src_pointer.peek() {
+                                cur = next;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
+                    // Now src_pointer should point to the first leader of a suffix group
+                    // in the input range.
+                    while let Some((kmer, len)) = src_pointer.next() {
+                        let kmer_c = prepend_c((kmer,len), k, c);
+
+                        while dest_pointer.peek().is_some_and(|y| y < kmer_c) {
+                            dest_pointer.next();
+                        }
+
+                        if dest_pointer.peek().is_some_and(|y| y == kmer_c) {
+                            row_piece.set(src_pointer.cur_merged_index() - 1 - input_range.start, true); // -1 because we have advanced past the current k-mer
+                            dest_pointer.next().unwrap(); // Don't point to this k-mer anymore because it now has an edge
+                        }
+                    };
+                }
+                row_piece
+            }).collect();
+            rows.push(crate::util::parallel_bitvec_concat(row_pieces));
         }
 
-        for c in 0..(sigma as u8) {
-            let kmer_c = if len as usize == k {
-                (
-                    kmer.clone()
-                        .copy_set_from_left(k - 1, 0)
-                        .right_shifted(1)
-                        .copy_set_from_left(0, c),
-                    k as u8,
-                )
-            } else {
-                (kmer.clone().right_shifted(1).copy_set_from_left(0, c), len + 1) // Dummy
-            };
+        let lcs = if build_lcs {
+            Some(build_lcs_array_disk::<B>(dummy_filepath, nondummy_filepath, n_dummies, n_kmers, k, n_threads))
+        } else {
+            None
+        };
 
-            while char_cursors[c as usize].peek().is_some() && char_cursors[c as usize].peek().unwrap() < kmer_c {
-                char_cursors[c as usize].next();
-            }
-
-            if char_cursors[c as usize].peek().is_some() && char_cursors[c as usize].peek().unwrap() == kmer_c {
-                rawrows[c as usize].set(kmer_idx, true);
-                char_cursors[c as usize].next();
-            }
-        }
-        prev_kmer = kmer;
-        prev_len = len as usize;
-    }
-
-    (rawrows, lcs)
-
+        (rows, lcs)
+    })
 }
 
 #[cfg(test)]
@@ -296,7 +432,7 @@ mod tests{
     use super::*;
 
     #[test]
-    fn test_init_char_cursors(){
+    fn test_new_bounded_matches_sequential_merge(){
         let nondummies = [
             LongKmer::<2>::from_ascii(b"ACGT").unwrap(),
             LongKmer::<2>::from_ascii(b"AGGT").unwrap(),
@@ -304,14 +440,14 @@ mod tests{
             LongKmer::<2>::from_ascii(b"GGGT").unwrap()
         ];
         let dummies = [
-            (LongKmer::<2>::from_ascii(b"AAAA").unwrap(),0), // This is actually the empty dummy so it's not in the A-block
+            (LongKmer::<2>::from_ascii(b"AAAA").unwrap(),0), // This is actually the empty dummy
             (LongKmer::<2>::from_ascii(b"AAAA").unwrap(),1),
             (LongKmer::<2>::from_ascii(b"ACAA").unwrap(),2),
             (LongKmer::<2>::from_ascii(b"ACAA").unwrap(),3),
             (LongKmer::<2>::from_ascii(b"GGTT").unwrap(),3),
         ];
 
-        let mut temp_file_manager = crate::tempfile::TempFileManager::new(std::path::Path::new("temp"));
+        let mut temp_file_manager = crate::tempfile::TempFileManager::new(std::path::Path::new("/tmp"));
 
         let mut nondummy_file = temp_file_manager.create_new_file("test-", 10, ".nondummy");
         let mut dummy_file = temp_file_manager.create_new_file("test-", 10, ".dummy");
@@ -331,12 +467,32 @@ mod tests{
         dummy_file.flush().unwrap();
         nondummy_file.flush().unwrap();
 
-        let char_cursors = init_char_cursors(&dummy_path, &nondummy_path, 4, 4);
+        let n_dummies = dummies.len();
+        let n_kmers = nondummies.len();
+        let n = n_dummies + n_kmers;
 
-        assert_eq!(char_cursors[0].peek(), Some((LongKmer::<2>::from_ascii(b"AAAA").unwrap(), 1))); // A
-        assert_eq!(char_cursors[1].peek(), Some((LongKmer::<2>::from_ascii(b"GGAA").unwrap(), 4))); // C
-        assert_eq!(char_cursors[2].peek(), Some((LongKmer::<2>::from_ascii(b"GGAA").unwrap(), 4))); // G
-        assert_eq!(char_cursors[3].peek(), None); // T
+        // Build the ground truth via a plain unbounded sequential merge.
+        let full_merge = DummyNodeMerger::new(
+            std::io::BufReader::new(std::fs::File::open(&dummy_path).unwrap()),
+            std::io::BufReader::new(std::fs::File::open(&nondummy_path).unwrap()),
+            4,
+        );
+        let expected: Vec<(LongKmer::<2>, u8)> = full_merge.collect();
+        assert_eq!(expected.len(), n);
 
+        // Check get_ith_merged_kmer_disk against the ground truth for every position.
+        for i in 0..n {
+            assert_eq!(get_ith_merged_kmer_disk::<2>(&dummy_path, &nondummy_path, i, 4, n_dummies, n_kmers), expected[i]);
+        }
+
+        // Check that new_bounded, restricted to every possible sub-range, reproduces the
+        // corresponding slice of the ground truth merge.
+        for start in 0..=n {
+            for end in start..=n {
+                let bounded = DummyNodeMerger::<BufReader<File>, 2>::new_bounded(&dummy_path, &nondummy_path, 4, start..end, n_dummies, n_kmers);
+                let got: Vec<(LongKmer::<2>, u8)> = bounded.collect();
+                assert_eq!(got, expected[start..end].to_vec());
+            }
+        }
     }
 }

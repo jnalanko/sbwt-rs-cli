@@ -273,6 +273,52 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(mut bv: bitvec::vec::BitVec::<u64,
     simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
 }
 
+/// Assumes both input lists have no duplicates, and any element exists in only one of the lists.
+/// Given `target_pos` in the conceptual sorted merge of the two lists (0..=len_a+len_b, one past
+/// the end allowed), returns `(pos_a, pos_b, take_from_a)`: the split point into the two lists such
+/// that `pos_a` elements of `a` and `pos_b` elements of `b` precede `target_pos` in the merge, and
+/// `take_from_a` tells whether the element at `target_pos` (if any) comes from `a`.
+/// Takes O(log^2(n)) time.
+pub(crate) fn binary_search_position_in_merged_list<T: PartialOrd + Eq, Access1: Fn(usize) -> T, Access2: Fn(usize) -> T>(access_a: Access1, access_b: Access2, target_pos: usize, len_a: usize, len_b: usize) -> (usize, usize, bool) {
+
+    assert!(target_pos <= len_a + len_b); // One-past the end allowed
+
+    let pos_in_merged_list = |a_idx: usize| {
+        // Returns the index of a[a_idx] in the merged list of a and b
+        // That is equal to to number of element in a that are smaller than a[a_idx],
+        // and the number of elements in b that are smaller than a[a_idx].
+        // We imagine that a[a_len] is infinity to make that corner case work.
+
+        if a_idx == len_a {
+            // All of a and b are smaller than infinity
+            len_a + len_b
+        } else {
+            let b_count = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > access_a(a_idx), len_b);
+            a_idx + b_count
+        }
+
+    };
+
+    // Find the smallest a_idx that is at or after the target position
+    let a_idx = binary_search_leftmost_that_fulfills_pred(|i| i, |a_idx| pos_in_merged_list(a_idx) >= target_pos, len_a);
+    if pos_in_merged_list(a_idx) == target_pos {
+        // Bingo. Find the b_idx of the next element in b, that is
+        // the smallest element in b that is larger than a[a_idx]
+        if a_idx == len_a {
+            (len_a, len_b, true) // End
+        } else {
+            let x = access_a(a_idx);
+            let b_idx = binary_search_leftmost_that_fulfills_pred(|j| j, |b_idx| access_b(b_idx) > x, len_b);
+            assert_eq!(a_idx + b_idx, target_pos);
+            (a_idx, b_idx, true)
+        }
+    } else {
+        // a[a_idx] is after the target position, and a[a_idx-1] is before it (if exists)
+        // This means that there are a_idx elements from a before the target position.
+        (a_idx, target_pos - a_idx, false)
+    }
+}
+
 pub(crate) fn segment_range(range: Range<usize>, n_pieces: usize) -> Vec<Range<usize>> {
     let segment_len = range.len().div_ceil(n_pieces);
     let mut pieces: Vec<Range<usize>> = vec![];
@@ -389,9 +435,55 @@ where
 #[cfg(test)]
 mod tests {
 
-    use rand::{Rng, SeedableRng};
+    use rand::{seq::SliceRandom, Rng, SeedableRng};
 
     use super::{for_each_one_bit, *};
+
+    #[test]
+    fn test_binary_search_merged_list() {
+        // Test empty vs empty
+        assert_eq!((0,0,true), super::binary_search_position_in_merged_list(|i| i, |j| j, 0, 0, 0));
+
+        // Random testcases
+        let seed = 1234;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        for rep in 0..100 { // Stress test with 100 random runs
+            let mut v: Vec<usize> = (0..20).collect();
+            v.shuffle(&mut rng);
+            let split_point = if rep == 0 {
+                0 // Test empty v1
+            } else if rep == 1 {
+                v.len() // Test empty v2
+            } else {
+                // Random split point
+                rng.gen_range(0,v.len()+1)
+            };
+
+            let mut v1 = v[0..split_point].to_vec();
+            let mut v2 = v[split_point..].to_vec();
+            v1.sort();
+            v2.sort();
+
+            let mut merged: Vec<(usize, usize, bool)> = vec![]; // (i_v1, i_v2, b). b tells which vector it's from
+            merged.extend(v1.iter().enumerate().map(|x| (*x.1, x.0, true)));
+            merged.extend(v2.iter().enumerate().map(|x| (*x.1, x.0, false)));
+            merged.sort();
+            let n_merged = merged.len();
+            merged.push((v1.len(), v2.len(), true)); // One past the end. The bit is true to match how the search treats this.
+
+            for query in 0..=n_merged {
+                let mut true_i = 0;
+                let mut true_j = 0;
+                for (_,_,from_a) in &merged[0..query] {
+                    true_i += *from_a as usize;
+                    true_j += !(*from_a) as usize;
+                }
+                let true_from_a = merged[query].2;
+                let (i,j,from_a) = super::binary_search_position_in_merged_list(|i| v1[i], |j| v2[j], query, v1.len(), v2.len());
+                assert_eq!((i,j,from_a), (true_i, true_j, true_from_a));
+            }
+        }
+    }
 
     #[test]
     fn parallel_concatenation() {

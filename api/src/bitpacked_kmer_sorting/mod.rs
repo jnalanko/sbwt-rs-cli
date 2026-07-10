@@ -4,8 +4,7 @@ mod dummies;
 mod kmer_splitter;
 mod cursors;
 mod kmer_chunk;
-
-use crate::kmer::LongKmer;
+mod disk_access;
 
 use human_bytes::human_bytes;
 
@@ -45,15 +44,15 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
         log::info!("Disk peak space during concatenation: {} bytes ({})", concat_space_peak, human_bytes(concat_space_peak as f64));
         kmers_file.file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-        let n_kmers = file_size(&kmers_file.path) / LongKmer::<B>::byte_size();
+        let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file.path);
 
         log::info!("{} distinct k-mers found", n_kmers);
 
-        let required_dummies = dummies::get_sorted_dummies::<B>(&kmers_file.path, sigma, k, temp_file_manager, first_mers);
+        let required_dummies = dummies::get_sorted_dummies::<B>(&kmers_file.path, n_kmers, sigma, k, n_threads, first_mers);
 
         log::info!("{} dummy nodes needed", required_dummies.len());
 
-        let n = n_kmers + required_dummies.len();
+        let n_dummies = required_dummies.len();
 
         // Write dummies to disk
         log::info!("Writing dummies to disk");
@@ -66,15 +65,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         log::info!("Constructing the sbwt subset sequence");
 
-        let char_cursors = cursors::init_char_cursors::<B>(&dummy_file.path, &kmers_file.path, k, sigma);
-
-        let global_cursor = cursors::DummyNodeMerger::new(
-            std::io::BufReader::new(std::fs::File::open(&dummy_file.path).unwrap()),
-            std::io::BufReader::new(std::fs::File::open(&kmers_file.path).unwrap()),
-            k,
-        );
-
-        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors(global_cursor, char_cursors, n, k, sigma, build_lcs);
+        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, &kmers_file.path, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
 
         drop(kmers_file); // Free disk space
         drop(dummy_file); // Free disk space
@@ -163,5 +154,62 @@ mod tests {
         }
 
         assert_eq!(index_kmers, input_kmers);
+    }
+
+    #[test]
+    fn disk_vs_mem_parallel_differential() {
+        use crate::builder::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem, SbwtIndexBuilder};
+        use crate::util::gen_random_dna_string;
+
+        // k must be >= BIN_PREFIX_LEN (3), which the mem-based bin splitter requires.
+        for &k in &[3_usize, 8, 31] {
+            let seq = gen_random_dna_string(500, k as u64);
+            for &n_threads in &[1_usize, 2, 3, 8] {
+                let (mem_sbwt, mem_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                    .k(k).n_threads(n_threads).build_lcs(true)
+                    .run_from_slices(&[seq.as_slice()]);
+
+                let (disk_sbwt, disk_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new()
+                    .k(k).n_threads(n_threads).build_lcs(true)
+                    .run_from_slices(&[seq.as_slice()]);
+
+                assert_eq!(mem_sbwt, disk_sbwt, "SBWT mismatch at k={} n_threads={}", k, n_threads);
+                assert_eq!(mem_lcs, disk_lcs, "LCS mismatch at k={} n_threads={}", k, n_threads);
+            }
+        }
+    }
+
+    // Stress test for the suffix-group-leader rewind logic: constructs many k-mers that share
+    // the same (k-1)-length suffix (varying only the first character), so that with many
+    // threads, segment boundaries are likely to land inside such a "suffix group".
+    #[test]
+    fn disk_vs_mem_suffix_group_boundary_stress() {
+        use crate::builder::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem, SbwtIndexBuilder};
+        use crate::util::gen_random_dna_string;
+
+        let k = 4;
+        let mut seqs: Vec<Vec<u8>> = vec![];
+        for seed in 0..40_u64 {
+            let suffix = gen_random_dna_string(k - 1, seed);
+            for &first in &[b'A', b'C', b'G', b'T'] {
+                let mut kmer = vec![first];
+                kmer.extend_from_slice(&suffix);
+                seqs.push(kmer);
+            }
+        }
+        let seq_refs: Vec<&[u8]> = seqs.iter().map(|s| s.as_slice()).collect();
+
+        for &n_threads in &[1_usize, 2, 4, 8, 16] {
+            let (mem_sbwt, mem_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                .k(k).n_threads(n_threads).build_lcs(true)
+                .run_from_slices(&seq_refs);
+
+            let (disk_sbwt, disk_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new()
+                .k(k).n_threads(n_threads).build_lcs(true)
+                .run_from_slices(&seq_refs);
+
+            assert_eq!(mem_sbwt, disk_sbwt, "SBWT mismatch at n_threads={}", n_threads);
+            assert_eq!(mem_lcs, disk_lcs, "LCS mismatch at n_threads={}", n_threads);
+        }
     }
 }
