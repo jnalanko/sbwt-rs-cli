@@ -320,6 +320,7 @@ where
         lcs_piece
     }).collect();
 
+    log::info!("Compressing LCS array to log(k) bits per element");
     for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
         compressed_lcs.extend(piece);
     }
@@ -354,7 +355,6 @@ pub fn build_lcs_array_disk<const B: usize>(
     let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(n, bitwidth as usize).unwrap();
     compressed_lcs.push(0); // lcs[0] = 0 by definition
 
-    log::info!("Compressing LCS array to log(k) bits per element");
     // Pick the narrowest staging integer type that can hold every value in 0..k (i.e. up to k-1).
     // Comparisons are done in u64 to avoid literal-overflow issues with e.g. u32::MAX + 1 on
     // platforms where usize is narrower than 64 bits.
