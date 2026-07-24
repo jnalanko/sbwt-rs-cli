@@ -9,8 +9,10 @@ use simple_sds_sbwt::raw_vector::{RawVector, AccessRaw};
 use simple_sds_sbwt::ops::{Rank, Select};
 use byteorder::ReadBytesExt;
 
-pub fn concatenate_sequences<W>(reader: &mut SeqReader<'_>, output: &mut W) -> std::io::Result<()>
-where W: std::io::Write
+pub fn concatenate_sequences<SS, W>(reader: &mut SS, output: &mut W) -> std::io::Result<()>
+where
+    SS: SeqStream,
+    W: std::io::Write
 {
     write!(output, "#")?;
     while let Some(sequence) = reader.stream_next() {
@@ -131,7 +133,7 @@ impl<'a> Clone for SeqReader<'a> {
     }
 }
 
-fn sanitise(data: &mut [u8]) {
+pub(super) fn sanitise(data: &mut [u8]) {
     for k in data {
         if CHAR_TO_INDEX[(*k) as usize] > 5 {
             *k = b'$';

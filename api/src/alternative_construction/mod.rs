@@ -76,7 +76,8 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     }
 
     let mut lcs: Option<IntVector> = if build_lcs {
-        let bit_width = (usize::BITS - k.leading_zeros()) as usize;
+        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+        let bit_width = bit_width as usize;
         let mut value = IntVector::with_capacity(bwt.len(), bit_width).unwrap();
         value.push(0); // '$...$' dummy k-mer
         Some(value)
@@ -202,7 +203,8 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     }
 
     let mut lcs: Option<IntVector> = if build_lcs {
-        let bit_width = (usize::BITS - k.leading_zeros()) as usize;
+        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+        let bit_width = bit_width as usize;
         let mut value = IntVector::with_capacity(set_count, bit_width).unwrap();
         value.push(0); // '$...$' dummy k-mer
         Some(value)
@@ -425,7 +427,6 @@ struct PartialAuxiliaryBitVectors {
 fn build_parital_auxiliary_bitvectors(bwt: &Bwt, lcp: &Lcp, k: usize) -> PartialAuxiliaryBitVectors {
     log::info!("[build_partial_auxiliary_bitvectors] begin");
     let len = bwt.len();
-    // let mut shorter_than_k     = RawVector::with_len(len, false);
     let mut k_minus_one_ranges = RawVector::with_len(len, false);
     let mut k_ranges           = RawVector::with_len(len, false);
     let mut set_count = 0;
@@ -553,5 +554,232 @@ fn push_set(rows: &mut [Row], set: u8) {
 #[inline]
 fn include_letter(bwt: &Bwt, index: usize, current_set: u8) -> u8 {
     (1 << bwt.get_char_index(index)) as u8 | current_set
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BitPackedKmerSortingMem, SbwtIndexBuilder, SubsetMatrix, VecSeqStream};
+
+    struct RevVecSeqStream<'a> {
+        seqs: &'a [Vec<u8>],
+        copy: Vec<u8>,
+        index: usize,
+    }
+
+    impl<'a> RevVecSeqStream<'a> {
+        fn new(seqs: &'a [Vec<u8>]) -> Self {
+            Self {
+                seqs,
+                copy: vec![],
+                index: 0
+            }
+        }
+    }
+
+    impl<'a> crate::SeqStream for RevVecSeqStream<'a> {
+        fn stream_next(&mut self) -> Option<&[u8]> {
+            if self.index >= self.seqs.len() {
+                return None;
+            }
+            self.copy.clear();
+            self.copy.extend(&self.seqs[self.index]);
+            preprocessing::sanitise(&mut self.copy);
+            self.copy.reverse();
+            let result = &self.copy;
+            self.index += 1;
+            Some(result)
+        }
+    }
+
+    fn make_concatenation(seqs: &[Vec<u8>]) -> Vec<u8> {
+        let mut stream = RevVecSeqStream::new(seqs);
+        let capacity: usize = seqs.iter().map(|seq| seq.len() + 1).sum::<usize>() + 2;
+        let mut concatenation = Vec::<u8>::with_capacity(capacity);
+        preprocessing::concatenate_sequences(&mut stream, &mut concatenation).unwrap();
+        concatenation
+    }
+
+    macro_rules! seqs {
+        ($($seq:expr),* $(,)?) => {
+            vec![$($seq.to_vec(),)*]
+        };
+    }
+
+    #[test]
+    fn concatenate_sequences() {
+        let seqs = seqs![b"ACGT", b"ANOPT", b"TGCA"];
+        let concatenation = make_concatenation(&seqs);
+        assert_eq!(b"#$TGCA$T$$$A$ACGT$".as_slice(), &concatenation);
+    }
+
+    fn construct_bwt_lcp(concatenation: &[u8], k: usize) -> (Bwt, Lcp) {
+        let length = concatenation.len();
+
+        let mut suffix_array = (0..concatenation.len()).collect::<Vec<_>>();
+        suffix_array.sort_by_key(|index| &concatenation[*index..]);
+        let bwt = suffix_array.iter()
+            .map(|index| concatenation[(index + concatenation.len() - 1) % concatenation.len()])
+            .collect::<Vec<_>>();
+        let bwt = preprocessing::ascii_to_bwt(&mut bwt.as_slice(), length).unwrap();
+
+        let mut lcp = Vec::<u64>::with_capacity(length);
+        lcp.push(0);
+        for i in 1..bwt.len() {
+            let mut it_a = suffix_array[i - 1];
+            let mut it_b = suffix_array[i];
+            let mut lcp_value = 0;
+            while it_a < suffix_array.len() && it_b < suffix_array.len() {
+                if concatenation[it_a] != concatenation[it_b] {
+                    break;
+                }
+                lcp_value += 1;
+                it_a += 1;
+                it_b += 1;
+            }
+            lcp.push(lcp_value);
+        }
+
+        let lcp_bytes: Vec<u8> = lcp.into_iter().map(|value| value.to_le_bytes()).collect::<Vec<_>>().concat();
+        let lcp = preprocessing::truncate_lcp::<_, true>(&mut lcp_bytes.as_slice(), bwt.len(), k).unwrap();
+
+        (bwt, lcp)
+    }
+
+    #[test]
+    fn bwt_lcp() {
+        let seqs = seqs![b"CCACC", b"AGG", b"TACG", b"ACG", b"NOP"];
+        let concatenation = make_concatenation(&seqs);
+        let (bwt, mut lcp) = construct_bwt_lcp(&concatenation, 3);
+
+        let mut order = 0;
+        let mut index = bwt.len() - 1;
+        for _ in 0..bwt.len() {
+            let (new_order, character) = bwt.lf_step(order);
+            if character != b'#' {
+                // The inverse step works only for the letters in the alphabet and $, not for #.
+                assert_eq!(bwt.inverse_lf_step(new_order), order, "{}", index);
+            }
+            assert_eq!(concatenation[index], character, "{}", index);
+            if index == 0 {
+                index = bwt.len() - 1;
+            } else {
+                index -= 1;
+            }
+            order = new_order;
+        }
+
+        let invariant = &[0, 0, 1, 2, 3, 3, 1, 1,  3, 2, 0, 2, 1, 1, 0, 1, 2, 2, 1, 2, 0, 1, 3, 1, 0];
+        let values = (&mut lcp).collect::<Vec<_>>();
+        assert_eq!(invariant, values.as_slice());
+    }
+
+    #[test]
+    fn randomised_kmers() {
+        use rand_chacha::ChaCha20Rng;
+        use rand_chacha::rand_core::SeedableRng;
+        use rand_chacha::rand_core::RngCore;
+
+        let k: usize = 16;
+        let kmer_length: usize = 32;
+        let kmer_count = 256;
+        let mut rng = ChaCha20Rng::from_seed([42; 32]);
+
+        let mut seqs = Vec::<Vec<u8>>::new();
+        for _ in 0..kmer_count {
+            let kmer: Vec<u8> = (0..kmer_length).map(|_| match rng.next_u32() % 4 {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'T',
+            }).collect();
+            seqs.push(kmer);
+        }
+
+        seqs.sort();
+        seqs.dedup();
+
+        let concatenation = make_concatenation(&seqs);
+        let (bwt, lcp) = construct_bwt_lcp(&concatenation, k);
+
+        {
+            // Without redundant dummies.
+            let (invariant_sbwt, invariant_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                .k(k).build_lcs(true)
+                .run_from_vecs(&seqs);
+
+            let Output {
+                sbwt: constructed_sbwt,
+                lcs: constructed_lcs,
+                counts
+            } = build_without_redundant_dummies::<SubsetMatrix>(&bwt, &lcp, k, true);
+
+            assert!(counts.is_none());
+
+            let mut invariant_buf = Vec::<u8>::new();
+            let mut constructed_buf = Vec::<u8>::new();
+
+            invariant_sbwt.serialize(&mut invariant_buf).unwrap();
+            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(invariant_buf, constructed_buf);
+            
+            invariant_buf.clear();
+            constructed_buf.clear();
+
+            let invariant_lcs = invariant_lcs.unwrap();
+            let constructed_lcs = constructed_lcs.unwrap();
+
+            invariant_lcs  .serialize(&mut invariant_buf).unwrap();
+            constructed_lcs.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(invariant_buf, constructed_buf);
+        }
+
+        {
+            // With all dummies.
+            let (mut invariant_sbwt, invariant_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                .k(k).build_lcs(true)
+                .add_all_dummy_paths(true)
+                .run_from_vecs(&seqs);
+
+            let Output {
+                sbwt: constructed_sbwt,
+                lcs: constructed_lcs,
+                counts
+            } = build_with_all_dummies::<SubsetMatrix>(&bwt, &lcp, k, true, true);
+
+            let mut invariant_buf = Vec::<u8>::new();
+            let mut constructed_buf = Vec::<u8>::new();
+
+            invariant_sbwt.serialize(&mut invariant_buf).unwrap();
+            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(invariant_buf, constructed_buf);
+            
+            invariant_buf.clear();
+            constructed_buf.clear();
+
+            let invariant_lcs = invariant_lcs.unwrap();
+            let constructed_lcs = constructed_lcs.unwrap();
+
+            invariant_lcs  .serialize(&mut invariant_buf).unwrap();
+            constructed_lcs.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(invariant_buf, constructed_buf);
+
+            invariant_sbwt.build_select();
+            let pnsv = crate::vodbg::pnsv::PnsvTuned::new_default(&invariant_sbwt, &invariant_lcs, k);
+            let mut vodbg = crate::vodbg::VoDbg::new(&invariant_sbwt, &pnsv);
+            vodbg.build_counts(
+                VecSeqStream::new(&seqs),
+                true,
+                Counts::DEFAULT_SAMPLE_DISTANCE,
+                1, 4, Counts::DEFAULT_BATCH_SIZE_IN_BYTES).unwrap();
+
+            invariant_buf.clear();
+            constructed_buf.clear();
+
+            vodbg.counts().unwrap().serialize(&mut invariant_buf).unwrap();
+            counts.unwrap().serialize(&mut constructed_buf).unwrap();
+            assert_eq!(invariant_buf, constructed_buf);
+        }
+    }
 }
 
