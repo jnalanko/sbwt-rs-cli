@@ -669,9 +669,9 @@ mod tests {
             order = new_order;
         }
 
-        let invariant = &[0, 0, 1, 2, 3, 3, 1, 1,  3, 2, 0, 2, 1, 1, 0, 1, 2, 2, 1, 2, 0, 1, 3, 1, 0];
+        let correct = &[0, 0, 1, 2, 3, 3, 1, 1,  3, 2, 0, 2, 1, 1, 0, 1, 2, 2, 1, 2, 0, 1, 3, 1, 0];
         let values = (&mut lcp).collect::<Vec<_>>();
-        assert_eq!(invariant, values.as_slice());
+        assert_eq!(correct, values.as_slice());
     }
 
     #[test]
@@ -696,6 +696,9 @@ mod tests {
             seqs.push(kmer);
         }
 
+        seqs.push(b"WITH_INCORRECT_CHARACTERS".to_vec());
+        seqs.push(vec![b'A'; 1024]);
+
         seqs.sort();
         seqs.dedup();
 
@@ -704,7 +707,7 @@ mod tests {
 
         {
             // Without redundant dummies.
-            let (invariant_sbwt, invariant_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            let (correct_sbwt, correct_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
                 .k(k).build_lcs(true)
                 .run_from_vecs(&seqs);
 
@@ -716,27 +719,27 @@ mod tests {
 
             assert!(counts.is_none());
 
-            let mut invariant_buf = Vec::<u8>::new();
+            let mut correct_buf = Vec::<u8>::new();
             let mut constructed_buf = Vec::<u8>::new();
 
-            invariant_sbwt.serialize(&mut invariant_buf).unwrap();
+            correct_sbwt.serialize(&mut correct_buf).unwrap();
             constructed_sbwt.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(invariant_buf, constructed_buf);
+            assert_eq!(correct_buf, constructed_buf);
             
-            invariant_buf.clear();
+            correct_buf.clear();
             constructed_buf.clear();
 
-            let invariant_lcs = invariant_lcs.unwrap();
+            let correct_lcs = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
 
-            invariant_lcs  .serialize(&mut invariant_buf).unwrap();
+            correct_lcs  .serialize(&mut correct_buf).unwrap();
             constructed_lcs.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(invariant_buf, constructed_buf);
+            assert_eq!(correct_buf, constructed_buf);
         }
 
         {
             // With all dummies.
-            let (mut invariant_sbwt, invariant_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            let (mut correct_sbwt, correct_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
                 .k(k).build_lcs(true)
                 .add_all_dummy_paths(true)
                 .run_from_vecs(&seqs);
@@ -747,38 +750,38 @@ mod tests {
                 counts
             } = build_with_all_dummies::<SubsetMatrix>(&bwt, &lcp, k, true, true);
 
-            let mut invariant_buf = Vec::<u8>::new();
+            let mut correct_buf = Vec::<u8>::new();
             let mut constructed_buf = Vec::<u8>::new();
 
-            invariant_sbwt.serialize(&mut invariant_buf).unwrap();
+            correct_sbwt.serialize(&mut correct_buf).unwrap();
             constructed_sbwt.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(invariant_buf, constructed_buf);
+            assert_eq!(correct_buf, constructed_buf);
             
-            invariant_buf.clear();
+            correct_buf.clear();
             constructed_buf.clear();
 
-            let invariant_lcs = invariant_lcs.unwrap();
+            let correct_lcs = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
 
-            invariant_lcs  .serialize(&mut invariant_buf).unwrap();
+            correct_lcs  .serialize(&mut correct_buf).unwrap();
             constructed_lcs.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(invariant_buf, constructed_buf);
+            assert_eq!(correct_buf, constructed_buf);
 
-            invariant_sbwt.build_select();
-            let pnsv = crate::vodbg::pnsv::PnsvTuned::new_default(&invariant_sbwt, &invariant_lcs, k);
-            let mut vodbg = crate::vodbg::VoDbg::new(&invariant_sbwt, &pnsv);
+            correct_sbwt.build_select();
+            let pnsv = crate::vodbg::pnsv::PnsvTuned::new_default(&correct_sbwt, &correct_lcs, k);
+            let mut vodbg = crate::vodbg::VoDbg::new(&correct_sbwt, &pnsv);
             vodbg.build_counts(
                 VecSeqStream::new(&seqs),
                 true,
                 Counts::DEFAULT_SAMPLE_DISTANCE,
                 1, 4, Counts::DEFAULT_BATCH_SIZE_IN_BYTES).unwrap();
 
-            invariant_buf.clear();
+            correct_buf.clear();
             constructed_buf.clear();
 
-            vodbg.counts().unwrap().serialize(&mut invariant_buf).unwrap();
+            vodbg.counts().unwrap().serialize(&mut correct_buf).unwrap();
             counts.unwrap().serialize(&mut constructed_buf).unwrap();
-            assert_eq!(invariant_buf, constructed_buf);
+            assert_eq!(correct_buf, constructed_buf);
         }
     }
 }
