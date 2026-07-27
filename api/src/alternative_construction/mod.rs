@@ -23,6 +23,21 @@ pub struct Output<SS: SubsetSeq + Send> {
 
 type Row = BitVec<u64>;
 
+/// Constructs an SbwtIndex (and optionally an LCS array and the counts of the k-mers in the input
+/// sequences) from the BWT and a Longest Commond Prefix array of the Suffix Array of the
+/// concatenated input sequences.
+///
+/// Expects the BWT and the LCP to correspond to a concatenation as done by the
+/// [preprocessing::concatenate_sequences] function, that is, the start of the concatenation is the
+/// '#' character and then before each sequence there is a single '$' character as well as at the
+/// end of the concatenated string. The input sequences should be reversed as the k-mers in the
+/// SBWT are sorted colexicographically. The BWT is expected to be in ascii whereas the LCP is
+/// expected to consist of 64 bit unsigned integers. The number of characters in the BWT and the
+/// number of integers in the LCP should be the same.
+///
+/// The `build_counts` parameter is taken into account only if all dummies are included in the
+/// SBWT, otherwise the Counts data structure will not answer queries about shorter k-mers
+/// correctly.
 pub fn build_from_input<RBwt, RLcp, SS>(
     bwt_input: &mut RBwt,
     lcp_input: &mut RLcp,
@@ -49,6 +64,8 @@ where
 
 const FULL_SET: u8 = 0b00011110;
 
+/// The subroutine of the [build_from_input] function which handles the construction of the
+/// SbwtIndex without the redundant dummies.
 pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     bwt: &Bwt,
     lcp: &Lcp,
@@ -338,11 +355,24 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     }
 }
 
+/// Auxiliary BitVectors needed for the calculation of the SbwtIndex without redundant dummies.
 struct FullAuxiliaryBitVectors {
+    /// It is easier to calculate the true k-mers while creating the auxiliary bitvectors rather
+    /// than trying to figure out their count later.
     kmer_count: usize,
+    /// Used to figure out whether a k-mer at the beginning of a sequence has a true k-mer as a
+    /// predecessor in order to figure out whether the dummy k-mer is necessary. In the final pass
+    /// it is used to figure out if a given (k-1)-range contains a region of dummy k-mers.
     shorter_than_k: BitVector,
+    /// Used in the pass which marks the dummy k-mers that need to be kept in order to identify the
+    /// k-mers which are at the beginning of an input sequence.
     equal_to_k: RawVector,
+    /// Used in order to figure out the bounds at which to check the [Self::shorter_than_k]
+    /// bitvector whether a non-dummy k-mer at the beginning of an input sequence has a non-dummy
+    /// k-mer as a predecessor. In addition, it is used to figure out the bounds at which to
+    /// "collect" outedges for the first k-mer with a given (k-1) suffix in the SBWT.
     k_minus_one_ranges: BitVector,
+    /// Used to enumerate the sets of the SBWT.
     k_ranges: RawVector,
 }
 
@@ -470,7 +500,14 @@ fn build_parital_auxiliary_bitvectors(bwt: &Bwt, lcp: &Lcp, k: usize) -> Partial
 }
 
 struct DummyMarks {
+    /// We keep a dummy (k-1)-mer and all of its predecessors if a k-mer at the beginning of an
+    /// input sequence would not have a non-dummy k-mer as a predecessor in the SBWT graph.
     keep_dummy: RawVector,
+    /// Marks (k-1)-mers in order to keep their outedge as it is not guaranteed that the non-dummy
+    /// k-mer that exists as a predecessor to a non-dummy k-mer at the beginning of a sequence has
+    /// the needed label. This is needed as we don't want to include all letters of dummy k-mers
+    /// whose "true" lenght is less than k-1 and there is no way to figure out which ones are
+    /// those from the [FullAuxiliaryBitVectors::shorter_than_k] bitvector alone.
     keep_outedge: RawVector,
 }
 
@@ -516,6 +553,9 @@ fn build_dummy_marks(bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> Dumm
     }
 }
 
+/// Finds the end of the (k-1)-range and performs two rank queries on the shorter_than_k bitvector
+/// in order to figure out if there is a non-dummy k-mer in this (k-1) range. If there is then the
+/// dummy k-mer is not needed.
 fn has_full_kmer_predecessor(
     predecessor: usize,
     bwt: &Bwt,
@@ -732,7 +772,7 @@ mod tests {
             let correct_lcs = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
 
-            correct_lcs  .serialize(&mut correct_buf).unwrap();
+            correct_lcs    .serialize(&mut correct_buf).unwrap();
             constructed_lcs.serialize(&mut constructed_buf).unwrap();
             assert_eq!(correct_buf, constructed_buf);
         }
@@ -763,7 +803,7 @@ mod tests {
             let correct_lcs = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
 
-            correct_lcs  .serialize(&mut correct_buf).unwrap();
+            correct_lcs    .serialize(&mut correct_buf).unwrap();
             constructed_lcs.serialize(&mut constructed_buf).unwrap();
             assert_eq!(correct_buf, constructed_buf);
 
