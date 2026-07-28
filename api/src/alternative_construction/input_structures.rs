@@ -71,6 +71,16 @@ impl Bwt {
     }
 
     #[inline]
+    pub fn first_character_of_suffix(&self, index: usize) -> u8 {
+        for char_index in (0..self.counts.len()).rev() {
+            if index >= self.counts[char_index] {
+                return INDEX_TO_CHAR[char_index];
+            }
+        }
+        INDEX_TO_CHAR[INDEX_TO_CHAR.len() - 1]
+    }
+
+    #[inline]
     pub fn inverse_lf_step(&self, index: usize) -> usize {
         assert!(index < self.data[0].len());
         for char_index in (0..self.counts.len()).rev() {
