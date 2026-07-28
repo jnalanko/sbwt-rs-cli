@@ -52,6 +52,10 @@ where
     RLcp: Read,
     SS: SubsetSeq + Send
 {
+    log::info!(
+        "length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}",
+        length, build_lcs, add_all_dummies, build_counts
+    );
     let bwt = preprocessing::ascii_to_bwt(bwt_input, length)?;
     let lcp = preprocessing::truncate_lcp::<_, true>(lcp_input, length, k)?;
     let result = if !add_all_dummies {
