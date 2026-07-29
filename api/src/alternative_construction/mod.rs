@@ -66,7 +66,7 @@ where
     Ok(result)
 }
 
-const FULL_SET: u8 = 0b00011110;
+pub(crate) const FULL_SET: u8 = 0b00011110;
 
 /// The subroutine of the [build_from_input] function which handles the construction of the
 /// SbwtIndex without the redundant dummies.
@@ -142,7 +142,9 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
             k_range_count = 0;
         }
 
-        current_lcs_value = current_lcs_value.min(lcp.get(index));
+        if build_lcs {
+            current_lcs_value = current_lcs_value.min(lcp.get(index));
+        }
 
         let is_start_of_k_range = k_ranges.bit(index);
         if is_start_of_k_range {
@@ -152,10 +154,8 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
         if shorter_than_k.get(index) {
             has_dummy_kmer = true;
             if dummy_marks.keep_dummy.bit(index) {
-                if !include_dummy_kmer {
-                    if build_lcs {
-                        lcs.as_mut().unwrap().push(current_lcs_value as u64);
-                    }
+                if build_lcs && !include_dummy_kmer {
+                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
                     current_lcs_value = k - 1;
                 }
                 include_dummy_kmer = true;
@@ -165,10 +165,8 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
                 current_set = include_letter(bwt, index, current_set);
             }
         } else {
-            if is_start_of_k_range {
-                if build_lcs {
-                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
-                }
+            if build_lcs && is_start_of_k_range {
+                lcs.as_mut().unwrap().push(current_lcs_value as u64);
                 current_lcs_value = k - 1;
             }
             current_set = include_letter(bwt, index, current_set);
@@ -523,13 +521,13 @@ fn build_dummy_marks(bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> Dumm
 
     let start = bwt.counts[1];
     let mut predecessor_confirmed = false;
-    for index in start..bwt.len() {
+    for index in start..len {
         if aux.k_ranges.bit(index) {
             predecessor_confirmed = false;
         }
 
         if aux.equal_to_k.bit(index) {
-            let predecessor = bwt.inverse_lf_step(index);
+            let (predecessor, _) = bwt.inverse_lf_step(index);
             // If we haven't found a full k-mer as a predecessor for this k-range, search for it.
             if !predecessor_confirmed {
                 predecessor_confirmed |= has_full_kmer_predecessor(
@@ -560,7 +558,7 @@ fn build_dummy_marks(bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> Dumm
 /// Finds the end of the (k-1)-range and performs two rank queries on the shorter_than_k bitvector
 /// in order to figure out if there is a non-dummy k-mer in this (k-1) range. If there is then the
 /// dummy k-mer is not needed.
-fn has_full_kmer_predecessor(
+pub(crate) fn has_full_kmer_predecessor(
     predecessor: usize,
     bwt: &Bwt,
     k_minus_one_ranges: &BitVector, 
@@ -580,16 +578,17 @@ fn has_full_kmer_predecessor(
     number_of_prefixes_with_true_length_smaller_than_k < range_length
 }
 
-fn keep_predecessors(mut predecessor: usize, bwt: &Bwt, mut k: usize, keep_suffix: &mut RawVector) {
+fn keep_predecessors(mut predecessor: usize, bwt: &Bwt, mut k: usize, keep_dummy: &mut RawVector) {
     while k > 0 {
-        keep_suffix.set_bit(predecessor, true);
-        predecessor = bwt.inverse_lf_step(predecessor);
+        keep_dummy.set_bit(predecessor, true);
+        let (next, _) = bwt.inverse_lf_step(predecessor);
+        predecessor = next;
         k -= 1;
     }
 }
 
 #[inline]
-fn push_set(rows: &mut [Row], set: u8) {
+pub(crate) fn push_set(rows: &mut [Row], set: u8) {
     for i in 1..=4 {
         rows[i - 1].push(set & (1 << i) != 0);
     }
@@ -702,7 +701,8 @@ mod tests {
             let (new_order, character) = bwt.lf_step(order);
             if character != b'#' {
                 // The inverse step works only for the letters in the alphabet and $, not for #.
-                assert_eq!(bwt.inverse_lf_step(new_order), order, "{}", index);
+                let (found_order, _) = bwt.inverse_lf_step(new_order);
+                assert_eq!(order, found_order, "{}", index);
             }
             assert_eq!(concatenation[index], character, "{}", index);
             if index == 0 {
