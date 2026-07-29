@@ -53,7 +53,7 @@ where
     SS: SubsetSeq + Send
 {
     log::info!(
-        "length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}",
+        "[build_from_input] begin [length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}]",
         length, build_lcs, add_all_dummies, build_counts
     );
     let bwt = preprocessing::ascii_to_bwt(bwt_input, length)?;
@@ -63,6 +63,7 @@ where
     } else {
         build_with_all_dummies(&bwt, &lcp, k, build_lcs, build_counts)
     };
+    log::info!("[build_from_input] done");
     Ok(result)
 }
 
@@ -109,7 +110,6 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
             *current_set = include_letter(bwt, index, *current_set);
         },
     );
-    log::info!("[build_without_redundant_dummies] constructing sbwt");
     let result = collect_output(k, rows, lcs, None, kmer_count);
     log::info!("[build_without_redundant_dummies] done");
     result
@@ -134,6 +134,7 @@ where
     FDummy: FnMut(&mut u8, usize),
     FNonDummy: FnMut(&mut u8, usize)
 {
+    log::info!("[_build_without_redundant_dummies] begin");
     let mut rows = Vec::<BitVec<u64>>::new();
     for _ in 0..4 {
         // note(mk): These overestimating allocations should reserve the pages in the virtual
@@ -222,6 +223,7 @@ where
         k_range_count -= 1;
     }
 
+    log::info!("[_build_without_redundant_dummies] begin");
     (rows, lcs)
 }
 
@@ -232,6 +234,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     build_lcs: bool,
     build_counts: bool,
 ) -> Output<SS> {
+    log::info!("[build_with_all_dummies] begin");
     let aux = build_parital_auxiliary_bitvectors(bwt, lcp, k);
     let set_count = aux.set_count;
 
@@ -275,7 +278,6 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     }
     push_set(&mut rows, current_set);
     current_set = 0;
-    log::info!("[build_with_all_dummies] done with $ range");
 
     let mut k_range_count = 0;
     let mut sbwt_index = 0;
@@ -351,9 +353,9 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
         }
     }
 
-    log::info!("[build_with_all_dummies] done with other ranges");
-
-    collect_output(k, rows, lcs, counts, aux.kmer_count)
+    let result = collect_output(k, rows, lcs, counts, aux.kmer_count);
+    log::info!("[build_with_all_dummies] done");
+    result
 }
 
 pub(crate) fn collect_output<SS: SubsetSeq + Send>(
@@ -363,6 +365,7 @@ pub(crate) fn collect_output<SS: SubsetSeq + Send>(
     counts: Option<Counts>,
     kmer_count: usize
 ) -> Output<SS> {
+    log::info!("[collect_output] constructing sbwt");
     let C: Vec<usize> = crate::util::get_C_array(&rows);
     let mut subset_rank = SS::new_from_bit_vectors(rows);
     subset_rank.build_rank();
@@ -379,6 +382,7 @@ pub(crate) fn collect_output<SS: SubsetSeq + Send>(
     index.set_lookup_table(prefix_lookup_table);
     let lcs = lcs.map(LcsArray::new);
 
+    log::info!("[collect_output] constructing done");
     Output {
         sbwt: index,
         lcs,
@@ -466,10 +470,13 @@ fn build_full_auxiliary_bitvectors(bwt: &Bwt, lcp: &Lcp, k: usize) -> FullAuxili
     log::info!("[build_full_auxiliary_bitvectors] rank for shorter than k k-mers bitvector");
     let mut shorter_than_k = BitVector::from(shorter_than_k);
     shorter_than_k.enable_rank();
+
     log::info!("[build_full_auxiliary_bitvectors] rank and select for (k-1)-ranges bitvector");
     let mut k_minus_one_ranges = BitVector::from(k_minus_one_ranges);
     k_minus_one_ranges.enable_rank();
     k_minus_one_ranges.enable_select();
+
+    log::info!("[build_full_auxiliary_bitvectors] done");
     FullAuxiliaryBitVectors {
         kmer_count,
         shorter_than_k,
@@ -523,6 +530,7 @@ fn build_parital_auxiliary_bitvectors(bwt: &Bwt, lcp: &Lcp, k: usize) -> Partial
     k_minus_one_ranges.set_bit(1, true);
     k_ranges.set_bit(1, true);
 
+    log::info!("[build_partial_auxiliary_bitvectors] done");
     PartialAuxiliaryBitVectors {
         set_count,
         kmer_count,
@@ -579,6 +587,7 @@ fn build_dummy_marks(bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> Dumm
         }
     }
 
+    log::info!("[build_dummy_marks] done");
     DummyMarks {
         keep_dummy,
         keep_outedge,

@@ -28,12 +28,14 @@ pub fn build<SS: SubsetSeq + Send>(
     add_all_dummies: bool,
     build_counts: bool
 ) -> Output<SS> {
-    log::info!("[build] length: {}", input.len());
-    if !add_all_dummies {
+    log::info!("[build] begin [length: {}]", input.len());
+    let result = if !add_all_dummies {
         build_without_redundant_dummies(threads, input, k, build_lcs)
     } else {
         build_with_all_dummies(threads, input, k, build_lcs, build_counts)
-    }
+    };
+    log::info!("[build] done");
+    result
 }
 
 pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
@@ -83,12 +85,14 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
             *current_set |= (1 << outedge) as u8;
         }
     );
-
-    super::alternative_construction::collect_output(k, rows, lcs, None, kmer_count)
+    let result = super::alternative_construction::collect_output(k, rows, lcs, None, kmer_count);
+    log::info!("[build_without_redundant_dummies] done");
+    result
 }
 
 /// Needs to be executed in a rayon context.
 pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<usize> {
+    log::info!("[par_bounded_context_suffix_array] begin");
     let length = input.len();
     let word_count = k.div_ceil(LANES);
 
@@ -130,6 +134,7 @@ pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<us
         suffix_a.cmp(suffix_b)
     });
 
+    log::info!("[par_bounded_context_suffix_array] done");
     suffix_array
 }
 
@@ -148,6 +153,7 @@ fn build_full_auxiliary_data(
     bounded_context_suffix_array: Vec<usize>,
     k: usize
 ) -> FullAuxiliaryData {
+    log::info!("[build_full_auxiliary_data] begin");
     // The input should still be padded with '#'.
     let length = bounded_context_suffix_array.len();
     let word_count = k.div_ceil(LANES);
@@ -221,13 +227,16 @@ fn build_full_auxiliary_data(
         }
     }
 
+    log::info!("[build_full_auxiliary_data] shorter_than_k");
     let mut shorter_than_k = BitVector::from(shorter_than_k);
     shorter_than_k.enable_rank();
 
+    log::info!("[build_full_auxiliary_data] k_minus_one_ranges");
     let mut k_minus_one_ranges = BitVector::from(k_minus_one_ranges);
     k_minus_one_ranges.enable_rank();
     k_minus_one_ranges.enable_select();
 
+    log::info!("[build_full_auxiliary_data] bwt");
     let mut bwt_bit_vectors = bwt_raw_vectors.into_iter().map(BitVector::from).collect::<Vec<_>>();
     bwt_bit_vectors.iter_mut().for_each(|vector| {
         vector.enable_rank();
@@ -235,6 +244,7 @@ fn build_full_auxiliary_data(
     });
     let bwtk = Bwt::new(bwt_bit_vectors);
 
+    log::info!("[build_full_auxiliary_data] done");
     FullAuxiliaryData {
         kmer_count,
         bwtk,
@@ -304,6 +314,7 @@ struct DummyMarks {
 }
 
 fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
+    log::info!("[build_dummy_marks] begin");
     use super::alternative_construction::has_full_kmer_predecessor;
 
     let len = aux.bwtk.len();
@@ -335,6 +346,7 @@ fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
         }
     }
 
+    log::info!("[build_dummy_marks] done");
     DummyMarks {
         keep_dummy,
         outedge,
@@ -362,7 +374,7 @@ fn keep_predecessors(
 pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     threads: usize, mut input: Vec<u8>, k: usize, build_lcs: bool, build_counts: bool
 ) -> Output<SS> {
-    log::info!("[build_without_redundant_dummies] begin");
+    log::info!("[build_with_all_dummies] begin");
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result: Option<Vec<usize>> = None;
     thread_pool.scope(|scope| {
@@ -516,7 +528,9 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
         }
     }
 
-    super::alternative_construction::collect_output(k, rows, lcs, counts, kmer_count)
+    let result = super::alternative_construction::collect_output(k, rows, lcs, counts, kmer_count);
+    log::info!("[build_with_all_dummies] done");
+    result
 }
 
 #[cfg(test)]
