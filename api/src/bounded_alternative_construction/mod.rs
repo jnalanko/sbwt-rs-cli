@@ -1,10 +1,10 @@
 // Code by Martin Kostadinov.
 
-use crate::{LcsArray, SbwtIndex, SubsetSeq};
+use crate::SubsetSeq;
 
-use super::alternative_construction::{
+use crate::vodbg::count::{Counts, Sample};
+use crate::alternative_construction::{
     Output,
-    FULL_SET,
     push_set,
     input_structures::{
         Bwt, Lcp, CHAR_TO_INDEX
@@ -20,9 +20,26 @@ use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
 type Word = wide::u8x32;
 const LANES: usize = Word::LANES as usize;
 
-pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
-    mut input: Vec<u8>, threads: usize, k: usize, build_lcs: bool
+pub fn build<SS: SubsetSeq + Send>(
+    threads: usize,
+    input: Vec<u8>,
+    k: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool
 ) -> Output<SS> {
+    log::info!("[build] length: {}", input.len());
+    if !add_all_dummies {
+        build_without_redundant_dummies(threads, input, k, build_lcs)
+    } else {
+        build_with_all_dummies(threads, input, k, build_lcs, build_counts)
+    }
+}
+
+pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
+    threads: usize, mut input: Vec<u8>, k: usize, build_lcs: bool
+) -> Output<SS> {
+    log::info!("[build_without_redundant_dummies] begin");
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result: Option<Vec<usize>> = None;
     thread_pool.scope(|scope| {
@@ -31,7 +48,6 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
         });
     });
     let bounded_context_suffix_array = result.unwrap();
-    println!("{:?}", bounded_context_suffix_array);
 
     let aux = build_full_auxiliary_data(input, bounded_context_suffix_array, k);
     let dummy_marks = build_dummy_marks(&aux, k);
@@ -47,123 +63,28 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     } = aux;
     drop(equal_to_k);
 
-    let mut rows = Vec::<BitVec<u64>>::new();
-    for _ in 0..4 {
-        rows.push(BitVec::with_capacity(bwtk.len()));
-    }
-
-    let mut lcs: Option<IntVector> = if build_lcs {
-        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
-        let bit_width = bit_width as usize;
-        let mut value = IntVector::with_capacity(bwtk.len(), bit_width).unwrap();
-        value.push(0); // '$...$' dummy k-mer
-        Some(value)
-    } else {
-        None
-    };
-
-    let mut current_set: u8 = 0;
     let separator_count = bwtk.counts[1];
-
-    for index in 1..separator_count {
-        if dummy_marks.keep_dummy.bit(index) {
-            current_set |= (1 << dummy_marks.outedge.get(index)) as u8;
-            if current_set & FULL_SET == FULL_SET {
-                break;
-            }
-        }
-    }
-    push_set(&mut rows, current_set);
-
-    current_set = 0;
-    let mut current_lcs_value = k - 1;
-    let mut include_dummy_kmer = false;
-    let mut has_dummy_kmer     = false;
-    let mut k_range_count = 0;
-
-    for index in separator_count..bwtk.len() {
-        if k_minus_one_ranges.get(index) {
-            println!("---");
-            if has_dummy_kmer && !include_dummy_kmer {
-                k_range_count -= 1;
-            }
-            while k_range_count > 0 {
-                println!("{:?}", current_set);
-                push_set(&mut rows, current_set);
-                current_set = 0;
-                k_range_count -= 1;
-            }
-
-            current_set = 0;
-            has_dummy_kmer = false;
-            include_dummy_kmer = false;
-            k_range_count = 0;
-        }
-
-        if build_lcs {
-            current_lcs_value = current_lcs_value.min(lcp.get(index));
-        }
-
-        let is_start_of_k_range = k_ranges.bit(index);
-        if is_start_of_k_range {
-            k_range_count += 1;
-        }
-
-        if shorter_than_k.get(index) {
-            has_dummy_kmer = true;
-            let outedge = dummy_marks.outedge.get(index);
-            if dummy_marks.keep_dummy.bit(index) {
-                if !include_dummy_kmer && build_lcs {
-                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
-                    current_lcs_value = k - 1;
-                }
-                include_dummy_kmer = true;
-                current_set |= (1 << outedge) as u8;
-            }
-            if outedge != 0 {
-                current_set |= (1 << outedge) as u8;
-            }
-        } else {
-            if build_lcs && is_start_of_k_range {
-                lcs.as_mut().unwrap().push(current_lcs_value as u64);
-                current_lcs_value = k - 1;
-            }
-            current_set |= (1 << bwtk.get_char_index(index)) as u8;
-        }
-    }
-
-    println!("---");
-    if has_dummy_kmer && !include_dummy_kmer {
-        k_range_count -= 1;
-    }
-    while k_range_count > 0 {
-        println!("{:?}", current_set);
-        push_set(&mut rows, current_set);
-        current_set = 0;
-        k_range_count -= 1;
-    }
-
-    let C: Vec<usize> = crate::util::get_C_array(&rows);
-    let mut subset_rank = SS::new_from_bit_vectors(rows);
-    subset_rank.build_rank();
-    let n_sets  = subset_rank.len();
-    let n_kmers = kmer_count;
-    let mut index = SbwtIndex::<SS>::from_components(
-        subset_rank,
-        n_kmers,
+    let (rows, lcs) = super::alternative_construction::_build_without_redundant_dummies(
         k,
-        C,
-        crate::PrefixLookupTable::new_empty(n_sets)
+        separator_count,
+        bwtk.len(),
+        &lcp,
+        &k_minus_one_ranges,
+        &k_ranges,
+        &shorter_than_k,
+        &dummy_marks.keep_dummy,
+        build_lcs,
+        |current_set, index| {
+            let outedge = dummy_marks.outedge.get(index);
+            *current_set |= (1 << outedge) as u8;
+        },
+        |current_set, index| {
+            let outedge = bwtk.get_char_index(index);
+            *current_set |= (1 << outedge) as u8;
+        }
     );
-    let prefix_lookup_table = crate::PrefixLookupTable::new(&index, 8);
-    index.set_lookup_table(prefix_lookup_table);
-    let lcs = lcs.map(LcsArray::new);
 
-    Output {
-        sbwt: index,
-        lcs,
-        counts: None,
-    }
+    super::alternative_construction::collect_output(k, rows, lcs, None, kmer_count)
 }
 
 /// Needs to be executed in a rayon context.
@@ -273,11 +194,14 @@ fn build_full_auxiliary_data(
 
         let previous_suffix_index = bounded_context_suffix_array[rank - 1];
         let (length, lcp_value) = find_length_and_lcp_value(
+            k,
             &input,
             word_count,
             current_suffix_index,
             previous_suffix_index
         );
+        let length = length.min(k);
+        let lcp_value = lcp_value.min(length);
         lcp.push(lcp_value);
 
         if length < k {
@@ -324,11 +248,14 @@ fn build_full_auxiliary_data(
 
 #[inline]
 fn find_length_and_lcp_value(
+    k: usize,
     input: &[u8],
     word_count: usize,
     current_suffix_index: usize,
     previous_suffix_index: usize
 ) -> (usize, usize) {
+    let k = k as u32;
+
     let mut length = 0;
     let mut stop_accumulating_length = false;
 
@@ -344,6 +271,9 @@ fn find_length_and_lcp_value(
             let bitmask = simd_word_current.simd_eq(b'$').to_bitmask();
             length += bitmask.trailing_zeros();
             if bitmask != 0 {
+                stop_accumulating_length = true;
+            }
+            if length >= k {
                 stop_accumulating_length = true;
             }
         }
@@ -429,3 +359,280 @@ fn keep_predecessors(
     }
 }
 
+pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
+    threads: usize, mut input: Vec<u8>, k: usize, build_lcs: bool, build_counts: bool
+) -> Output<SS> {
+    log::info!("[build_without_redundant_dummies] begin");
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+    let mut result: Option<Vec<usize>> = None;
+    thread_pool.scope(|scope| {
+        scope.spawn(|_| {
+            result = Some(par_bounded_context_suffix_array(&mut input, k));
+        });
+    });
+    let bounded_context_suffix_array = result.unwrap();
+    let word_count = k.div_ceil(LANES);
+    let length = bounded_context_suffix_array.len();
+
+    let mut rows = Vec::<BitVec<u64>>::new();
+    for _ in 0..4 {
+        rows.push(BitVec::with_capacity(length));
+    }
+
+    let mut lcs: Option<IntVector> = if build_lcs {
+        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+        let bit_width = bit_width as usize;
+        let mut value = IntVector::with_capacity(length, bit_width).unwrap();
+        value.push(0); // '$...$' dummy k-mer
+        Some(value)
+    } else {
+        None
+    };
+
+    let mut counts: Option<Counts> = if build_counts {
+        let sample_capacity = length / Counts::DEFAULT_SAMPLE_DISTANCE;
+        let mut value = Counts {
+            individual_counts: Vec::with_capacity(length),
+            sample_distance: Counts::DEFAULT_SAMPLE_DISTANCE,
+            sample_information: Vec::with_capacity(sample_capacity + 2),
+            large_counts: Vec::with_capacity(sample_capacity),
+        };
+        value.sample_information.push(Sample { count: 0, large_counts_up_to_sample: 0 });
+        Some(value)
+    } else {
+        None
+    };
+
+    let mut current_set: u8 = 0;
+
+    let mut kmer_count: usize = 0;
+    let mut sets_count: usize = 1;
+
+    let mut k_range_count   : u64 = 1; // Always output the $ set.
+    let mut count           : u64 = 0;
+    let mut individual_count: u64 = 0;
+    let mut large_counts_up_to_sample: usize = 0;
+
+    let mut start_of_k_range;
+    let mut start_of_k_minus_one_range;
+
+    for rank in 1..length {
+        let current_suffix_index = bounded_context_suffix_array[rank];
+
+        let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
+        let previous_character = input[previous_character_index_in_input];
+        let outedge = CHAR_TO_INDEX[previous_character as usize];
+
+        let first_character = input[current_suffix_index];
+        let first_character_index = CHAR_TO_INDEX[first_character as usize];
+
+        let (length, lcp_value) = if first_character_index == 0 {
+            (0, 0)
+        } else {
+            let previous_suffix_index = bounded_context_suffix_array[rank - 1];
+            let (length, lcp_value) = find_length_and_lcp_value(
+                k,
+                &input,
+                word_count,
+                current_suffix_index,
+                previous_suffix_index
+            );
+            let length = length.min(k);
+            let lcp_value = lcp_value.min(length);
+            (length, lcp_value)
+        };
+
+        start_of_k_range           = lcp_value < length;
+        start_of_k_minus_one_range = start_of_k_range && (length < k || lcp_value < k - 1);
+
+        if start_of_k_minus_one_range {
+            while k_range_count > 0 {
+                push_set(&mut rows, current_set);
+                current_set = 0;
+                k_range_count -= 1;
+            }
+
+            current_set = 0;
+        }
+
+        if start_of_k_range {
+            k_range_count += 1;
+            if length >= k {
+                kmer_count += 1;
+            }
+
+            if build_lcs {
+                lcs.as_mut().unwrap().push(lcp_value as u64);
+            }
+
+            if build_counts {
+                let counts = counts.as_mut().unwrap();
+                if sets_count % Counts::DEFAULT_SAMPLE_DISTANCE == 0 {
+                    counts.sample_information.push(Sample {
+                        count,
+                        large_counts_up_to_sample,
+                    });
+                }
+                if individual_count >= u8::MAX as u64 {
+                    counts.individual_counts.push(u8::MAX);
+                    counts.large_counts.push(individual_count - u8::MAX as u64);
+                } else {
+                    counts.individual_counts.push(individual_count as u8);
+                }
+                individual_count = 0;
+            }
+
+            sets_count += 1;
+        }
+
+        if build_counts && length > 0 {
+            count += 1;
+            individual_count += 1;
+            if  individual_count == u8::MAX as u64 {
+                large_counts_up_to_sample += 1;
+            }
+        }
+
+        current_set |= (1 << outedge) as u8;
+    }
+
+    while k_range_count > 0 {
+        push_set(&mut rows, current_set);
+        current_set = 0;
+        k_range_count -= 1;
+    }
+
+    if build_counts {
+        let counts = counts.as_mut().unwrap();
+        counts.sample_information.push(Sample {
+            count,
+            large_counts_up_to_sample,
+        });
+        if individual_count >= u8::MAX as u64 {
+            counts.individual_counts.push(u8::MAX);
+            counts.large_counts.push(individual_count - u8::MAX as u64);
+        } else {
+            counts.individual_counts.push(individual_count as u8);
+        }
+    }
+
+    super::alternative_construction::collect_output(k, rows, lcs, counts, kmer_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alternative_construction::make_concatenation;
+    use crate::{BitPackedKmerSortingMem, SbwtIndexBuilder, SubsetMatrix, VecSeqStream};
+
+    #[test]
+    fn randomised_kmers() {
+        use rand_chacha::ChaCha20Rng;
+        use rand_chacha::rand_core::SeedableRng;
+        use rand_chacha::rand_core::RngCore;
+
+        let k: usize = 16;
+        let kmer_length: usize = 48;
+        let kmer_count = 256;
+        let mut rng = ChaCha20Rng::from_seed([42; 32]);
+
+        let mut seqs = Vec::<Vec<u8>>::new();
+        for _ in 0..kmer_count {
+            let kmer: Vec<u8> = (0..kmer_length).map(|_| match rng.next_u32() % 4 {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'T',
+            }).collect();
+            seqs.push(kmer);
+        }
+
+        seqs.push(b"WITH_INCORRECT_CHARACTERS".to_vec());
+        seqs.push(vec![b'A'; 1024]);
+
+        seqs.sort();
+        seqs.dedup();
+
+        let concatenation = make_concatenation(&seqs);
+
+        {
+            // Without redundant dummies.
+            let (correct_sbwt, correct_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                .k(k).build_lcs(true)
+                .run_from_vecs(&seqs);
+
+            let Output {
+                sbwt: constructed_sbwt,
+                lcs: constructed_lcs,
+                counts
+            } = build::<SubsetMatrix>(2, concatenation.clone(), k, true, false, false);
+
+            assert!(counts.is_none());
+
+            let mut correct_buf = Vec::<u8>::new();
+            let mut constructed_buf = Vec::<u8>::new();
+
+            correct_sbwt.serialize(&mut correct_buf).unwrap();
+            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(correct_buf, constructed_buf);
+
+            correct_buf.clear();
+            constructed_buf.clear();
+
+            let correct_lcs = correct_lcs.unwrap();
+            let constructed_lcs = constructed_lcs.unwrap();
+
+            correct_lcs    .serialize(&mut correct_buf).unwrap();
+            constructed_lcs.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(correct_buf, constructed_buf);
+        }
+
+        {
+            // With all dummies.
+            let (mut correct_sbwt, correct_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                .k(k).build_lcs(true)
+                .add_all_dummy_paths(true)
+                .run_from_vecs(&seqs);
+
+            let Output {
+                sbwt: constructed_sbwt,
+                lcs: constructed_lcs,
+                counts
+            } = build::<SubsetMatrix>(2, concatenation, k, true, true, true);
+
+            let mut correct_buf = Vec::<u8>::new();
+            let mut constructed_buf = Vec::<u8>::new();
+
+            correct_sbwt.serialize(&mut correct_buf).unwrap();
+            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(correct_buf, constructed_buf);
+
+            correct_buf.clear();
+            constructed_buf.clear();
+
+            let correct_lcs = correct_lcs.unwrap();
+            let constructed_lcs = constructed_lcs.unwrap();
+            assert_eq!(correct_lcs.len(), constructed_lcs.len());
+
+            correct_lcs    .serialize(&mut correct_buf).unwrap();
+            constructed_lcs.serialize(&mut constructed_buf).unwrap();
+            assert_eq!(correct_buf, constructed_buf);
+
+            correct_sbwt.build_select();
+            let pnsv = crate::vodbg::pnsv::PnsvTuned::new_default(&correct_sbwt, &correct_lcs, k);
+            let mut vodbg = crate::vodbg::VoDbg::new(&correct_sbwt, &pnsv);
+            vodbg.build_counts(
+                VecSeqStream::new(&seqs),
+                true,
+                Counts::DEFAULT_SAMPLE_DISTANCE,
+                1, 4, Counts::DEFAULT_BATCH_SIZE_IN_BYTES).unwrap();
+
+            correct_buf.clear();
+            constructed_buf.clear();
+
+            vodbg.counts().unwrap().serialize(&mut correct_buf).unwrap();
+            counts.unwrap().serialize(&mut constructed_buf).unwrap();
+            assert_eq!(correct_buf, constructed_buf);
+        }
+    }
+}

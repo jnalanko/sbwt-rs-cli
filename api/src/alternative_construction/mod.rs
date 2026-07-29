@@ -76,6 +76,7 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     k: usize,
     build_lcs: bool,
 ) -> Output<SS> {
+    log::info!("[build_without_redundant_dummies] begin");
     let aux = build_full_auxiliary_bitvectors(bwt, lcp, k);
     let dummy_marks = build_dummy_marks(bwt, k, &aux);
 
@@ -88,18 +89,63 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     } = aux;
     drop(equal_to_k);
 
+    let separator_count = bwt.counts[1];
+    let (rows, lcs) = _build_without_redundant_dummies(
+        k,
+        separator_count,
+        bwt.len(),
+        lcp,
+        &k_minus_one_ranges,
+        &k_ranges,
+        &shorter_than_k,
+        &dummy_marks.keep_dummy,
+        build_lcs,
+        |current_set: &mut u8, index| {
+            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
+                *current_set = include_letter(bwt, index, *current_set);
+            }
+        },
+        |current_set: &mut u8, index| {
+            *current_set = include_letter(bwt, index, *current_set);
+        },
+    );
+    log::info!("[build_without_redundant_dummies] constructing sbwt");
+    let result = collect_output(k, rows, lcs, None, kmer_count);
+    log::info!("[build_without_redundant_dummies] done");
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn _build_without_redundant_dummies<FDummy, FNonDummy>(
+    k: usize,
+    separator_count: usize,
+    length: usize,
+    lcp: &Lcp,
+    k_minus_one_ranges: &BitVector,
+    k_ranges: &RawVector,
+    shorter_than_k: &BitVector,
+    keep_dummy: &RawVector,
+    build_lcs: bool,
+    mut add_dummy_outedge: FDummy,
+    mut add_non_dummy_outedge: FNonDummy,
+) -> (Vec<Row>, Option<IntVector>)
+where
+    FDummy: FnMut(&mut u8, usize),
+    FNonDummy: FnMut(&mut u8, usize)
+{
     let mut rows = Vec::<BitVec<u64>>::new();
     for _ in 0..4 {
         // note(mk): These overestimating allocations should reserve the pages in the virtual
         // memory space of the process, but it shouldn't actually use all of them. Potential
         // breaking point!
-        rows.push(BitVec::with_capacity(bwt.len()));
+        rows.push(BitVec::with_capacity(length));
     }
 
     let mut lcs: Option<IntVector> = if build_lcs {
         let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
         let bit_width = bit_width as usize;
-        let mut value = IntVector::with_capacity(bwt.len(), bit_width).unwrap();
+        let mut value = IntVector::with_capacity(length, bit_width).unwrap();
         value.push(0); // '$...$' dummy k-mer
         Some(value)
     } else {
@@ -107,25 +153,22 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     };
 
     let mut current_set: u8 = 0;
-    let separator_count = bwt.counts[1];
 
     for index in 1..separator_count {
-        if dummy_marks.keep_dummy.bit(index) {
-            current_set = include_letter(bwt, index, current_set);
-            if current_set & FULL_SET == FULL_SET {
-                break;
-            }
+        add_dummy_outedge(&mut current_set, index);
+        if current_set & FULL_SET == FULL_SET {
+            break;
         }
     }
     push_set(&mut rows, current_set);
-    log::info!("[build_without_redundant_dummies] done with $ range");
 
-    current_set = 0;
+    let mut current_set = 0;
     let mut current_lcs_value  = k - 1;
     let mut include_dummy_kmer = false;
     let mut has_dummy_kmer     = false;
     let mut k_range_count = 0;
-    for index in separator_count..bwt.len() {
+
+    for index in separator_count..length {
         if k_minus_one_ranges.get(index) {
             if has_dummy_kmer && !include_dummy_kmer {
                 k_range_count -= 1;
@@ -153,23 +196,20 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
 
         if shorter_than_k.get(index) {
             has_dummy_kmer = true;
-            if dummy_marks.keep_dummy.bit(index) {
+            if keep_dummy.bit(index) {
                 if build_lcs && !include_dummy_kmer {
                     lcs.as_mut().unwrap().push(current_lcs_value as u64);
                     current_lcs_value = k - 1;
                 }
                 include_dummy_kmer = true;
-                current_set = include_letter(bwt, index, current_set);
             }
-            if dummy_marks.keep_outedge.bit(index) {
-                current_set = include_letter(bwt, index, current_set);
-            }
+            add_dummy_outedge(&mut current_set, index);
         } else {
             if build_lcs && is_start_of_k_range {
                 lcs.as_mut().unwrap().push(current_lcs_value as u64);
                 current_lcs_value = k - 1;
             }
-            current_set = include_letter(bwt, index, current_set);
+            add_non_dummy_outedge(&mut current_set, index);
         }
     }
 
@@ -181,29 +221,8 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
         current_set = 0;
         k_range_count -= 1;
     }
-    log::info!("[build_without_redundant_dummies] done with other ranges");
 
-    let C: Vec<usize> = crate::util::get_C_array(&rows);
-    let mut subset_rank = SS::new_from_bit_vectors(rows);
-    subset_rank.build_rank();
-    let n_sets  = subset_rank.len();
-    let n_kmers = kmer_count;
-    let mut index = SbwtIndex::<SS>::from_components(
-        subset_rank,
-        n_kmers,
-        k,
-        C,
-        crate::PrefixLookupTable::new_empty(n_sets)
-    );
-    let prefix_lookup_table = crate::PrefixLookupTable::new(&index, 8);
-    index.set_lookup_table(prefix_lookup_table);
-    let lcs = lcs.map(LcsArray::new);
-
-    Output {
-        sbwt: index,
-        lcs,
-        counts: None,
-    }
+    (rows, lcs)
 }
 
 pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
@@ -216,7 +235,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     let aux = build_parital_auxiliary_bitvectors(bwt, lcp, k);
     let set_count = aux.set_count;
 
-    let mut rows = Vec::<BitVec<u64>>::new();
+    let mut rows = Vec::<Row>::new();
     for _ in 0..4 {
         rows.push(BitVec::with_capacity(set_count));
     }
@@ -236,7 +255,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
         let mut value = Counts {
             individual_counts: Vec::with_capacity(set_count),
             sample_distance: Counts::DEFAULT_SAMPLE_DISTANCE,
-            sample_information: Vec::with_capacity(sample_capacity),
+            sample_information: Vec::with_capacity(sample_capacity + 2),
             large_counts: Vec::with_capacity(sample_capacity),
         };
         value.sample_information.push(Sample { count: 0, large_counts_up_to_sample: 0 });
@@ -261,7 +280,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     let mut k_range_count = 0;
     let mut sbwt_index = 0;
     let mut count: u64 = 0;
-    let mut kmer_count: u64 = 0;
+    let mut individual_count: u64 = 0;
     let mut large_counts_up_to_sample: usize = 0;
     for index in separator_count..bwt.len() {
         if aux.k_minus_one_ranges.bit(index) {
@@ -290,20 +309,20 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
                         large_counts_up_to_sample ,
                     });
                 }
-                if kmer_count >= u8::MAX as u64 {
+                if individual_count >= u8::MAX as u64 {
                     counts.individual_counts.push(u8::MAX);
-                    counts.large_counts.push(kmer_count - u8::MAX as u64);
+                    counts.large_counts.push(individual_count - u8::MAX as u64);
                 } else {
-                    counts.individual_counts.push(kmer_count as u8);
+                    counts.individual_counts.push(individual_count as u8);
                 }
-                kmer_count = 0;
+                individual_count = 0;
             }
         }
 
         if build_counts {
             count += 1;
-            kmer_count += 1;
-            if kmer_count == u8::MAX as u64 {
+            individual_count += 1;
+            if individual_count == u8::MAX as u64 {
                 large_counts_up_to_sample += 1;
             }
         }
@@ -324,21 +343,31 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
             count,
             large_counts_up_to_sample,
         });
-        if kmer_count >= u8::MAX as u64 {
+        if individual_count >= u8::MAX as u64 {
             counts.individual_counts.push(u8::MAX);
-            counts.large_counts.push(kmer_count - u8::MAX as u64);
+            counts.large_counts.push(individual_count - u8::MAX as u64);
         } else {
-            counts.individual_counts.push(kmer_count as u8);
+            counts.individual_counts.push(individual_count as u8);
         }
     }
 
     log::info!("[build_with_all_dummies] done with other ranges");
 
+    collect_output(k, rows, lcs, counts, aux.kmer_count)
+}
+
+pub(crate) fn collect_output<SS: SubsetSeq + Send>(
+    k: usize,
+    rows: Vec<Row>,
+    lcs: Option<IntVector>,
+    counts: Option<Counts>,
+    kmer_count: usize
+) -> Output<SS> {
     let C: Vec<usize> = crate::util::get_C_array(&rows);
     let mut subset_rank = SS::new_from_bit_vectors(rows);
     subset_rank.build_rank();
     let n_sets  = subset_rank.len();
-    let n_kmers = aux.kmer_count;
+    let n_kmers = kmer_count;
     let mut index = SbwtIndex::<SS>::from_components(
         subset_rank,
         n_kmers,
@@ -356,6 +385,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
         counts,
     }
 }
+
 
 /// Auxiliary BitVectors needed for the calculation of the SbwtIndex without redundant dummies.
 struct FullAuxiliaryBitVectors {
@@ -600,6 +630,9 @@ fn include_letter(bwt: &Bwt, index: usize, current_set: u8) -> u8 {
 }
 
 #[cfg(test)]
+pub(crate) use tests::make_concatenation;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BitPackedKmerSortingMem, SbwtIndexBuilder, SubsetMatrix, VecSeqStream};
@@ -635,7 +668,7 @@ mod tests {
         }
     }
 
-    fn make_concatenation(seqs: &[Vec<u8>]) -> Vec<u8> {
+    pub fn make_concatenation(seqs: &[Vec<u8>]) -> Vec<u8> {
         let mut stream = RevVecSeqStream::new(seqs);
         let capacity: usize = seqs.iter().map(|seq| seq.len() + 1).sum::<usize>() + 2;
         let mut concatenation = Vec::<u8>::with_capacity(capacity);
@@ -713,7 +746,7 @@ mod tests {
             order = new_order;
         }
 
-        let correct = &[0, 0, 1, 2, 3, 3, 1, 1,  3, 2, 0, 2, 1, 1, 0, 1, 2, 2, 1, 2, 0, 1, 3, 1, 0];
+        let correct = &[0, 0, 1, 2, 3, 3, 1, 1, 3, 2, 0, 2, 1, 1, 0, 1, 2, 2, 1, 2, 0, 1, 3, 1, 0];
         let values = (&mut lcp).collect::<Vec<_>>();
         assert_eq!(correct, values.as_slice());
     }
