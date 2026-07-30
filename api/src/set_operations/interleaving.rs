@@ -585,6 +585,32 @@ pub(super) fn compute_piece_ranges_three_way(
 // Count result positions per piece. When `difference` is false: `(s1 && s2) || s3`
 // (intersection with auxiliary). When `difference` is true: `(s1 && !s2) || s3`
 // (set-difference with auxiliary).
+/// Counts the result nodes per piece for the dummy-repair pass, where a node is a result node
+/// iff it comes from the auxiliary index (`s3`) or is a real result k-mer of `index1`.
+///
+/// `result_kmer_mask_s1` is indexed by `index1` colex position and marks the latter; see
+/// `compute_result_kmer_mask_s1`. `s1_piece_pops[t]` is the number of `s1` positions in piece `t`,
+/// used to derive each piece's starting `s1` colex position so the pieces stay independent.
+pub(super) fn count_result_nodes_per_piece_masked(
+    merged_piece_ranges: &[Range<usize>],
+    interleaving: &ThreeWayInterleaving,
+    s1_piece_pops: &[usize],
+    result_kmer_mask_s1: &BitSlice,
+) -> Vec<usize> {
+    (0..merged_piece_ranges.len()).into_par_iter().map(|piece_idx| {
+        let colex_range = &merged_piece_ranges[piece_idx];
+        let mut s1_colex: usize = s1_piece_pops[..piece_idx].iter().sum();
+        let mut count = 0usize;
+        for merged_colex in colex_range.clone() {
+            let is_result = interleaving.s3[merged_colex]
+                || (interleaving.s1[merged_colex] && result_kmer_mask_s1[s1_colex]);
+            if is_result { count += 1; }
+            s1_colex += interleaving.s1[merged_colex] as usize;
+        }
+        count
+    }).collect()
+}
+
 pub(super) fn count_result_nodes_per_piece(
     merged_piece_ranges: &[Range<usize>],
     interleaving: &ThreeWayInterleaving,

@@ -46,8 +46,9 @@ pub(super) fn build_index<SS: SubsetSeq>(new_rows: Vec<bitvec::vec::BitVec<u64, 
     index
 }
 
-/// Popcount of `(a[range] & !b[range])` using word-level operations.
-pub(super) fn word_diff_popcount_range(a: &[u64], b: &[u64], range: Range<usize>) -> usize {
+/// Popcount of `(a[range] & !b[range] & !d[range])` using word-level operations.
+/// With `d` the dummy marking, this counts the real (non-dummy) set-difference k-mers.
+pub(super) fn word_diff_nondummy_popcount_range(a: &[u64], b: &[u64], d: &[u64], range: Range<usize>) -> usize {
     if range.is_empty() { return 0; }
     let start_word = range.start / 64;
     let end_word   = (range.end - 1) / 64;
@@ -55,18 +56,18 @@ pub(super) fn word_diff_popcount_range(a: &[u64], b: &[u64], range: Range<usize>
     let end_bit    = range.end % 64; // exclusive; 0 means full last word
 
     if start_word == end_word {
-        let mut w = a[start_word] & !b[start_word];
+        let mut w = a[start_word] & !b[start_word] & !d[start_word];
         w &= !0u64 << start_bit;
         if end_bit != 0 { w &= (1u64 << end_bit) - 1; }
         return w.count_ones() as usize;
     }
 
     let mut count = 0usize;
-    count += ((a[start_word] & !b[start_word]) & (!0u64 << start_bit)).count_ones() as usize;
+    count += ((a[start_word] & !b[start_word] & !d[start_word]) & (!0u64 << start_bit)).count_ones() as usize;
     for w in (start_word + 1)..end_word {
-        count += (a[w] & !b[w]).count_ones() as usize;
+        count += (a[w] & !b[w] & !d[w]).count_ones() as usize;
     }
-    let mut w = a[end_word] & !b[end_word];
+    let mut w = a[end_word] & !b[end_word] & !d[end_word];
     if end_bit != 0 { w &= (1u64 << end_bit) - 1; }
     count += w.count_ones() as usize;
     count

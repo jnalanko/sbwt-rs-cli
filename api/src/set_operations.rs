@@ -11,6 +11,7 @@ pub use intersect_difference::{intersect, difference};
 mod tests {
 
     use crate::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem, SbwtIndexBuilder};
+    use crate::subsetseq::SubsetSeq;
 
     use super::*;
     use super::interleaving::split_to_pieces_par;
@@ -524,6 +525,62 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
             let seq2 = crate::util::gen_random_dna_string(1000, seed2);
             for n_threads in [1, 3] {
                 check_difference(&seq1, &seq2, k, n_threads);
+            }
+        }
+    }
+
+    #[test]
+    fn test_difference_random_wide_k() {
+        // test_difference_random uses k=5 on 1000-base strings, which saturates all 4^5 5-mers
+        // and so barely exercises dummy chains at all.  Larger k leaves the k-mer space sparse,
+        // giving long dummy chains in both inputs, chains that index2 removes the real k-mers
+        // from, and chains index1 has no counterpart for.
+        for k in [3, 5, 8, 12, 20] {
+            for (seed1, seed2) in [(1, 2), (31, 32)] {
+                for (len1, len2) in [(60, 200), (500, 500)] {
+                    let a = crate::util::gen_random_dna_string(len1, seed1);
+                    let b = crate::util::gen_random_dna_string(len2, seed2);
+                    // Partial overlap: b prefixed with the first half of a.
+                    let shared: Vec<u8> = a[..len1 / 2].iter().chain(b.iter()).copied().collect();
+                    for (x, y) in [(&a, &b), (&a, &shared), (&shared, &a)] {
+                        check_difference(x, y, k, 1);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_difference_thread_and_low_ram_consistency() {
+        // Thread count and low-RAM mode must not change the result.  Compared directly rather
+        // than via check_difference, which reconstructs the ground-truth spectrum with
+        // n_threads and panics when the difference is empty (a 1-row index cannot be split).
+        for k in [5, 12] {
+            let a = crate::util::gen_random_dna_string(2000, 1);
+            let b = crate::util::gen_random_dna_string(2000, 2);
+            let shared: Vec<u8> = a[..1000].iter().chain(b.iter()).copied().collect();
+            for (x, y) in [(&a, &b), (&a, &shared), (&shared, &a)] {
+                let (s1, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                    .k(k).n_threads(1).run_from_slices(&[x.as_slice()]);
+                let (s2, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+                    .k(k).n_threads(1).run_from_slices(&[y.as_slice()]);
+                let mut reference = None;
+                for n_threads in [1, 2, 4] {
+                    for opt_ram in [false, true] {
+                        let il = MergeInterleaving::new(&s1, &s2, opt_ram, n_threads);
+                        let d = difference(Arc::new(s1.clone()), Arc::new(s2.clone()),
+                            Arc::new(il), 0, opt_ram, n_threads);
+                        let rows: Vec<Vec<bool>> = (0..d.n_sets()).map(|i| {
+                            (0..4).map(|c| d.sbwt().set_contains(i, c)).collect()
+                        }).collect();
+                        let got = (d.n_kmers(), d.n_sets(), rows);
+                        match &reference {
+                            None => reference = Some(got),
+                            Some(r) => assert_eq!(*r, got,
+                                "k={k} n_threads={n_threads} opt_ram={opt_ram}"),
+                        }
+                    }
+                }
             }
         }
     }

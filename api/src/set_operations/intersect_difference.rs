@@ -11,9 +11,10 @@ use crate::subsetseq::*;
 use crate::sbwt::*;
 use crate::atomic_bitmap::AtomicBitmap;
 use super::interleaving::{MergeInterleaving, ThreeWayInterleaving,
-    compute_piece_ranges, compute_piece_ranges_three_way, count_result_nodes_per_piece};
+    compute_piece_ranges, compute_piece_ranges_three_way, count_result_nodes_per_piece,
+    count_result_nodes_per_piece_masked};
 use super::common::{allocate_rows, transpose_and_concat_pieces, build_index,
-    word_and_popcount_range, word_diff_popcount_range};
+    word_and_popcount_range, word_diff_nondummy_popcount_range};
 
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;
 
@@ -199,6 +200,52 @@ fn collect_result_source_nodes(
     let mut result = Vec::with_capacity(expected_count);
     for v in piece_results.drain(..) { result.extend(v); }
     result
+}
+
+/// Builds a bitmap in `index1` colex space marking the rows that are real (non-dummy) k-mers
+/// of the result: bit `p` is set iff `index1` row `p` is a result k-mer. When `difference` is
+/// false the predicate is `s1 & s2 & !is_dummy` (intersection); when true it is
+/// `s1 & !s2 & !is_dummy` (set difference).
+///
+/// The dummy-repair pass tracks `s1` colex positions but has no dummy marking of its own
+/// ([ThreeWayInterleaving] does not compute one), so this carries the verdict from the two-way
+/// interleaving into that pass. It costs `index1.n_sets()` bits, versus one dummy bitmap per
+/// input if the three-way interleaving marked dummies itself.
+///
+/// The scan is split into `n_threads` pieces; each piece writes the contiguous slice of `s1`
+/// colex space that it covers, and the pieces are concatenated in order.
+fn compute_result_kmer_mask_s1(
+    interleaving: &MergeInterleaving,
+    difference: bool,
+    n_threads: usize,
+    thread_pool: &rayon::ThreadPool,
+) -> BitVec {
+    let merged_length = interleaving.s1.len();
+    let piece_len = merged_length.div_ceil(n_threads);
+    let pieces: Vec<Range<usize>> = (0..n_threads)
+        .map(|t| t * piece_len..min((t + 1) * piece_len, merged_length))
+        .collect();
+
+    let piece_masks: Vec<BitVec> = thread_pool.install(|| {
+        pieces.par_iter().map(|range| {
+            let mut mask = BitVec::new();
+            mask.resize(interleaving.s1[range.clone()].count_ones(), false);
+            let mut piece_rel_s1_colex = 0usize;
+            for merged_colex in range.clone() {
+                if interleaving.s1[merged_colex] {
+                    let in_result = if difference { !interleaving.s2[merged_colex] }
+                                    else          {  interleaving.s2[merged_colex] };
+                    if in_result && !interleaving.is_dummy[merged_colex] {
+                        mask.set(piece_rel_s1_colex, true);
+                    }
+                    piece_rel_s1_colex += 1;
+                }
+            }
+            mask
+        }).collect()
+    });
+
+    crate::util::parallel_bitvec_concat(piece_masks)
 }
 
 /// Reconstructs k-mers from s1 colex positions via inverse-LF walks.
@@ -542,11 +589,20 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
 
 // ── difference helpers ──────────────────────────────────────────────────────
 
+/// Pass 1 for the set difference: marks every real difference k-mer that receives an incoming
+/// edge from another real difference k-mer, in `index1` colex space.
+///
+/// Only real k-mers may vouch for their successors. The dummies of `index1` are not carried into
+/// the result — the result's dummies are rebuilt from the auxiliary index — so a dummy must not
+/// mark its successor as covered, or a real k-mer whose only `index1` predecessor is a dummy
+/// would be left without a dummy chain of its own.
+///
+/// The unmarked real difference k-mers are exactly the ones needing fresh dummy chains, i.e. the
+/// set `R'` of Definition 3 of the paper for the k-mer set `index1 \ index2`.
 fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
     interleaving: &MergeInterleaving,
-    diff_length: usize,
     sigma: usize,
     piece_ranges: &[Range<usize>],
     s1_pops: &[usize],
@@ -555,11 +611,8 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     thread_pool: &rayon::ThreadPool,
 ) -> AtomicBitmap {
     let has_incoming = AtomicBitmap::new(index1.n_sets());
-    // Do NOT pre-set position 0: the shared root ($$...$) is never a difference node
-    // and pre-setting it would inflate n_incoming, corrupting the dummy-repair check.
-    // (Contrast with pass1_has_incoming for intersection, where the root IS always an
-    // intersection node and IS counted in isec_length.)
-    let _ = diff_length; // parameter kept for a symmetric API; used by caller only
+    // Do NOT pre-set position 0: the shared root ($$...$) is never a real difference k-mer,
+    // and the root of the result comes from the auxiliary index instead.
 
     thread_pool.install(|| {
         (0..n_threads).into_par_iter().for_each(|thread_idx| {
@@ -574,14 +627,16 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
             let mut s1_group_read = false;
             let mut s2_group_read = false;
             let mut s1_first_in_group = 0usize;
-            // True iff the current group contains at least one difference (s1 && !s2) position.
-            let mut group_has_diff = false;
+            // True iff the current group contains at least one real difference k-mer.
+            let mut group_has_real_diff = false;
 
             for merged_colex in colex_range.clone() {
                 if interleaving.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    if group_has_diff {
+                    if group_has_real_diff {
                         for c in 0..sigma {
-                            // Edge exists iff successor is in s1 but not s2
+                            // Edge exists iff successor is in s1 but not s2. A group holding a
+                            // real k-mer has a $-free (k-1)-suffix, so all of its successors are
+                            // real, and "in s1 but not s2" means exactly "is a difference k-mer".
                             if s1_group_or[c] && !s2_group_or[c] {
                                 has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
                             }
@@ -591,7 +646,7 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
                     s2_group_read = false;
                     s1_group_or.fill(false);
                     s2_group_or.fill(false);
-                    group_has_diff = false;
+                    group_has_real_diff = false;
                 }
 
                 if !s1_group_read && interleaving.s1[merged_colex] {
@@ -603,9 +658,10 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
                     for c in 0..sigma { s2_group_or[c] = index2.sbwt.set_contains(s2_colex, c as u8); }
                     s2_group_read = true;
                 }
-                // A position contributes to difference iff s1 && !s2
-                if interleaving.s1[merged_colex] && !interleaving.s2[merged_colex] {
-                    group_has_diff = true;
+                // Only real (non-dummy) difference k-mers may vouch for their successors.
+                if interleaving.s1[merged_colex] && !interleaving.s2[merged_colex]
+                    && !interleaving.is_dummy[merged_colex] {
+                    group_has_real_diff = true;
                 }
 
                 s1_colex += interleaving.s1[merged_colex] as usize;
@@ -613,7 +669,7 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
             }
 
             // Flush the last group in this piece.
-            if group_has_diff {
+            if group_has_real_diff {
                 for c in 0..sigma {
                     if s1_group_or[c] && !s2_group_or[c] {
                         has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
@@ -626,6 +682,11 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     has_incoming
 }
 
+/// Direct pass 2 for the set difference: builds the SBWT bit-rows when no difference k-mer needs
+/// a fresh dummy chain, which happens only when every difference k-mer has a difference k-mer as
+/// its predecessor, i.e. when the result's de Bruijn graph consists of cycles (or is empty). The
+/// padded spectrum then needs no dummies at all beyond the root, so the only rows are the real
+/// difference k-mers plus a prepended, edge-free root.
 fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -638,11 +699,12 @@ fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
     thread_pool: &rayon::ThreadPool,
 ) -> Vec<BitVec> {
     thread_pool.install(|| {
-        // Count difference positions per piece: s1 & !s2
+        // Count real difference positions per piece: s1 & !s2 & !is_dummy
         let diff_piece_pops: Vec<usize> = piece_ranges.par_iter().map(|range| {
-            word_diff_popcount_range(
+            word_diff_nondummy_popcount_range(
                 interleaving.s1.as_raw_slice(),
                 interleaving.s2.as_raw_slice(),
+                interleaving.is_dummy.as_raw_slice(),
                 range.clone(),
             )
         }).collect();
@@ -685,7 +747,8 @@ fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
                     for c in 0..sigma { s2_group_or[c] = index2.sbwt.set_contains(s2_colex, c as u8); }
                     s2_group_read = true;
                 }
-                if interleaving.s1[merged_colex] && !interleaving.s2[merged_colex] {
+                if interleaving.s1[merged_colex] && !interleaving.s2[merged_colex]
+                    && !interleaving.is_dummy[merged_colex] {
                     if piece_rel_diff_leader.is_none() {
                         piece_rel_diff_leader = Some(diff_colex_in_piece);
                     }
@@ -715,15 +778,13 @@ fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
         log::info!("[difference] Transposing and concatenating pieces");
         let mut rows = transpose_and_concat_pieces(pieces_vecvec, sigma);
 
-        // The SBWT invariant requires position 0 to be the root node ($$$…$).  The root is
-        // always shared (s1 = s2 = 1) so it never appears among the s1 & !s2 diff positions.
-        // We prepend it here with the appropriate edge bits: edge c is set iff $$$$c is
-        // exclusive to index1 (i.e. the immediately following dummy is a diff node).
+        // The SBWT invariant requires position 0 to be the root node ($$$…$). The root is a
+        // dummy, so it is never among the real difference positions; we prepend it here. Its
+        // successors are the dummies $$$…$c, none of which exist on this path, so it gets no
+        // outgoing edges.
         for c in 0..sigma {
-            let root_edge = index1.sbwt.set_contains(0, c as u8)
-                && !index2.sbwt.set_contains(0, c as u8);
             let mut new_row = std::mem::take(&mut rows[c]);
-            new_row.insert(0, root_edge);
+            new_row.insert(0, false);
             rows[c] = new_row;
         }
 
@@ -734,10 +795,15 @@ fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
     })
 }
 
+/// Dummy-repair pass 2 for the set difference. The result's real k-mers are the real difference
+/// k-mers of `index1` (marked in `result_kmer_mask_s1`); all of its dummies come from the
+/// auxiliary index built from the k-mers in `source_colexes`, whose padded spectrum supplies
+/// exactly the minimal dummy chains the result needs.
 fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     mut index1: SbwtIndex<SS>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
+    result_kmer_mask_s1: BitVec,
     sigma: usize,
     k: usize,
     optimize_peak_ram: bool,
@@ -768,11 +834,21 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[difference] Dummy repair: building difference SBWT bit-rows via three-way pass (parallel)");
     let (tw_ranges, s1_pc, s2_pc, s3_pc) =
         thread_pool.install(|| compute_piece_ranges_three_way(three_way_len, n_threads, &three_way));
-    let result_piece_counts =
-        thread_pool.install(|| count_result_nodes_per_piece(&tw_ranges, &three_way, true));
+    let result_piece_counts = thread_pool.install(|| {
+        count_result_nodes_per_piece_masked(&tw_ranges, &three_way, &s1_pc, &result_kmer_mask_s1)
+    });
 
-    // For each (k-1)-suffix group: result node exists iff (s1 && !s2) || s3.
-    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && !s2_or[c]).
+    // For each (k-1)-suffix group: a result node exists iff s3 || (s1 && it is a real difference
+    // k-mer).  Edge bits come from whichever of the two supplies the group's successors:
+    //
+    //   * A group holding a real difference k-mer has a $-free (k-1)-suffix, so its successors
+    //     are real and are result nodes exactly when they are in index1 but not index2.
+    //   * Any other group's successors are dummies, which exist only if the auxiliary index
+    //     has them. The (s1_or && !s2_or) rule must NOT be applied here: it would set edges to
+    //     index1 dummy chains that the result dropped, pointing at rows that do not exist.
+    //
+    // The two cases are disjoint: if a group holds a real difference k-mer then none of its
+    // successors needs a fresh chain, so the auxiliary index contributes nothing to it.
     thread_pool.install(|| {
         let pieces_vecvec: Vec<Vec<BitVec>> = (0..n_threads).into_par_iter().map(|thread_idx| {
             let colex_range = &tw_ranges[thread_idx];
@@ -792,17 +868,22 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
             let mut s3_read = false;
             let mut piece_rel_result_leader: Option<usize> = None;
             let mut result_colex_in_piece = 0usize;
+            // True iff the current group contains at least one real difference k-mer.
+            let mut group_has_real_diff = false;
 
             for merged_colex in colex_range.clone() {
                 if three_way.is_leader[merged_colex] && merged_colex > colex_range.start {
                     if let Some(l) = piece_rel_result_leader {
                         for c in 0..sigma {
-                            if s3_or[c] || (s1_or[c] && !s2_or[c]) { piece_rows[c].set(l, true); }
+                            let edge = if group_has_real_diff { s1_or[c] && !s2_or[c] }
+                                       else                   { s3_or[c] };
+                            if edge { piece_rows[c].set(l, true); }
                         }
                     }
                     s1_read = false; s2_read = false; s3_read = false;
                     s1_or.fill(false); s2_or.fill(false); s3_or.fill(false);
                     piece_rel_result_leader = None;
+                    group_has_real_diff = false;
                 }
 
                 if !s1_read && three_way.s1[merged_colex] {
@@ -818,8 +899,10 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                     s3_read = true;
                 }
 
-                let is_result = (three_way.s1[merged_colex] && !three_way.s2[merged_colex])
-                    || three_way.s3[merged_colex];
+                let is_real_diff = three_way.s1[merged_colex] && result_kmer_mask_s1[s1_colex];
+                group_has_real_diff |= is_real_diff;
+
+                let is_result = is_real_diff || three_way.s3[merged_colex];
                 if is_result {
                     if piece_rel_result_leader.is_none() {
                         piece_rel_result_leader = Some(result_colex_in_piece);
@@ -835,7 +918,9 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
             // Flush the last group.
             if let Some(l) = piece_rel_result_leader {
                 for c in 0..sigma {
-                    if s3_or[c] || (s1_or[c] && !s2_or[c]) { piece_rows[c].set(l, true); }
+                    let edge = if group_has_real_diff { s1_or[c] && !s2_or[c] }
+                               else                   { s3_or[c] };
+                    if edge { piece_rows[c].set(l, true); }
                 }
             }
 
@@ -859,16 +944,20 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// Computes the set difference `index1 \ index2`: the [SbwtIndex] containing exactly the k-mers
 /// that are present in `index1` but **not** in `index2`.
 ///
-/// The algorithm mirrors [`intersect`] but uses the complement predicate: a position in the
-/// merged SBWT is a result node iff `s1[i] && !s2[i]`. Incoming-edge bits follow the same
-/// group-OR logic but the AND is replaced by `s1_or[c] && !s2_or[c]`: an outgoing character `c`
-/// is kept iff the successor k-mer (first character `c` followed by the current (k-1)-suffix)
-/// is in `index1` but not in `index2`.
+/// The result's **real** k-mers are the positions of the merged SBWT with `s1[i] && !s2[i] &&
+/// !is_dummy[i]`. Its **dummy** k-mers, however, cannot be obtained by differencing the dummies
+/// of the inputs: a dummy present in both inputs may still be needed by the result, and a dummy
+/// exclusive to `index1` may be dead in it. They are therefore always rebuilt from scratch.
 ///
-/// Like [`intersect`], a direct pass is taken when no difference k-mer becomes a source node.
-/// If source nodes are detected, an auxiliary SBWT is built from their reconstructed k-mers and
-/// a three-way interleaving with edge rule `s3_or[c] || (s1_or[c] && !s2_or[c])` is used to
-/// repair the missing dummy chains.
+/// Pass 1 marks each real difference k-mer that has another real difference k-mer as its
+/// predecessor. The unmarked ones are exactly those needing a dummy chain (the set `R'` of
+/// Definition 3 of the paper, for the k-mer set `index1 \ index2`); they are reconstructed and
+/// fed to the SBWT builder, and the padded spectrum of that auxiliary index supplies the
+/// result's minimal dummy set, root included. A three-way interleaving of `index1`, `index2` and
+/// the auxiliary index then assembles the rows.
+///
+/// The direct pass is taken only when no dummy chain is needed at all, which means the result is
+/// either empty or made up entirely of cycles in the de Bruijn graph.
 pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -885,10 +974,11 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
 
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
+    // The number of sets in the result is not known until the dummy chains are known, so only
+    // the k-mer count is computed here.
     let (diff_length, n_dummies) = thread_pool.install(|| compute_result_counts(&interleaving, true));
     let n_kmers = diff_length - n_dummies;
     log::info!("Differencing into {} distinct k-mers", n_kmers);
-    log::info!("Number of sets in difference SBWT: {}", diff_length);
 
     let (piece_ranges, s1_pops, s2_pops) =
         thread_pool.install(|| compute_piece_ranges(merged_length, n_threads, &interleaving));
@@ -896,7 +986,7 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[difference] Pass 1: computing incoming-edge coverage (parallel)");
     let has_incoming = pass1_has_incoming_diff(
         &index1, &index2, &interleaving,
-        diff_length, sigma, &piece_ranges, &s1_pops, &s2_pops,
+        sigma, &piece_ranges, &s1_pops, &s2_pops,
         n_threads, &thread_pool,
     );
 
@@ -907,7 +997,7 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     );
 
     let new_rows = if source_colexes.is_empty() {
-        log::info!("[difference] All real difference k-mers have incoming edges; no auxiliary dummy chains needed");
+        log::info!("[difference] No difference k-mer needs a dummy chain; the result is cyclic or empty");
         log::info!("[difference] Pass 2: building difference SBWT bit-rows (parallel)");
         difference_rows_direct(
             index1, index2, interleaving,
@@ -915,13 +1005,15 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
             n_threads, &thread_pool,
         )
     } else {
-        log::info!("[difference] {} real source k-mer(s) need fresh dummy chains; merging with auxiliary index",
+        log::info!("[difference] {} difference k-mer(s) need fresh dummy chains; merging with auxiliary index",
             source_colexes.len());
+        let result_kmer_mask_s1 =
+            compute_result_kmer_mask_s1(&interleaving, true, n_threads, &thread_pool);
         drop(interleaving);
         // Unwrap the Arc; refcount is 1 here since nothing else cloned it.
         let index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
         difference_rows_with_dummy_repair(
-            index1, index2, source_colexes,
+            index1, index2, source_colexes, result_kmer_mask_s1,
             sigma, k, optimize_peak_ram, n_threads, &thread_pool,
         )
     };
