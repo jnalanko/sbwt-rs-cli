@@ -442,6 +442,50 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
     }
 
     #[test]
+    fn test_difference_dead_dummy_chain() {
+        // k=5, index1 = {ACCTT}, index2 = S_5(CACCTT) = {CACCT, ACCTT}.  The difference is
+        // empty, so the only correct output is the padded spectrum of the empty set, {$$$$$}.
+        //
+        // But index1's dummy chain $$$$A, $$$AC, $$ACC, $ACCT is exclusive to index1 (index2
+        // pads CACCT instead, giving $$$$C, $$$CA, $$CAC, $CACC), so the s1 && !s2 predicate
+        // keeps all four rows even though the real k-mer they were introduced to support is
+        // gone.  The result is a dangling dummy chain leading nowhere.
+        let seq1 = b"ACCTT" as &[u8];
+        let seq2 = b"CACCTT" as &[u8];
+        let n_threads = 1;
+
+        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .k(5)
+            .n_threads(n_threads)
+            .run_from_slices(&[seq1]);
+        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .k(5)
+            .n_threads(n_threads)
+            .run_from_slices(&[seq2]);
+
+        for optimize_peak_ram in [false, true] {
+            let interleaving = MergeInterleaving::new(&sbwt1, &sbwt2, optimize_peak_ram, n_threads);
+            let sbwt_diff = difference(
+                Arc::new(sbwt1.clone()),
+                Arc::new(sbwt2.clone()),
+                Arc::new(interleaving),
+                0,
+                true,
+                n_threads,
+            );
+
+            assert_eq!(sbwt_diff.n_kmers(), 0,
+                "optimize_peak_ram={optimize_peak_ram}");
+            assert_eq!(
+                sbwt_diff.n_sets(), 1,
+                "optimize_peak_ram={optimize_peak_ram}: expected only the root row $$$$$, \
+                 got {} rows (dangling dummy chain retained)",
+                sbwt_diff.n_sets()
+            );
+        }
+    }
+
+    #[test]
     fn test_difference_with_dummy_repair() {
         // seq1 and seq2 share a common prefix; unique tails ensure seq1 has k-mers not in seq2.
         let seq1 = b"AAGTACGAAAAAAAAAAACCCC";
