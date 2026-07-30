@@ -900,10 +900,6 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
         n_threads, &thread_pool,
     );
 
-    // Collect real (non-dummy) difference k-mers that have no incoming edge.
-    // Diff-dummy nodes at the top of a "fresh" dummy chain (e.g. $$$$A when $$$$$ is shared)
-    // are valid structural roots in the difference SBWT and do NOT need an auxiliary dummy chain.
-    // Only real k-mers with no incoming diff-edge require one.
     let source_colexes = collect_result_source_nodes(
         &interleaving, &has_incoming, merged_length,
         n_kmers, // upper-bound capacity hint
