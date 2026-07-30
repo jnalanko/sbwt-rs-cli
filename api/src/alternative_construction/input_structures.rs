@@ -18,11 +18,6 @@ const fn make_char_to_index_table() -> [usize; TABLE_SIZE] {
     table
 }
 
-#[inline(always)]
-pub fn char_index(byte: u8) -> usize {
-    CHAR_TO_INDEX[byte as usize]
-}
-
 pub struct Bwt {
     pub data: Vec<BitVector>,
     pub counts: [usize; 5],

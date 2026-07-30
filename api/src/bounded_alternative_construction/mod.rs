@@ -17,8 +17,10 @@ use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
 use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
 
-type Word = wide::u8x32;
+type Word = wide::u8x16;
 const LANES: usize = Word::LANES as usize;
+type Bitmask = u16;
+const _: () = assert!(Bitmask::BITS as usize == LANES);
 
 pub fn build<SS: SubsetSeq + Send>(
     threads: usize,
@@ -96,9 +98,9 @@ pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<us
     let length = input.len();
     let word_count = k.div_ceil(LANES);
 
-    // Pad the input with '#' characters so that the comparisons need not do bound checks.
+    // Pad the input so that the comparisons need not do bound checks.
     for _ in 1..(word_count * LANES) {
-        input.push(b'#');
+        input.push(b'$');
     }
 
     let mut suffix_array: Vec<usize> = Vec::<usize>::with_capacity(length);
@@ -117,21 +119,20 @@ pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<us
             let simd_word_b = Word::new(slice_b.try_into().unwrap());
             cursor_b += LANES;
 
-            let equal = simd_word_a.simd_eq(simd_word_b).to_bitmask();
-            if equal == u32::MAX {
+            let equal = simd_word_a.simd_eq(simd_word_b).to_bitmask() as Bitmask;
+            if equal == Bitmask::MAX {
                 continue;
             }
 
-            let less    = simd_word_a.simd_lt(simd_word_b).to_bitmask();
-            let greater = simd_word_a.simd_gt(simd_word_b).to_bitmask();
+            let less    = simd_word_a.simd_lt(simd_word_b).to_bitmask() as Bitmask;
+            let greater = !(equal | less);
             if less.trailing_zeros() < greater.trailing_zeros() {
                 return std::cmp::Ordering::Less;
             }
             return std::cmp::Ordering::Greater;
         }
 
-        // Ensure the suffixes are stably sorted.
-        suffix_a.cmp(suffix_b)
+        std::cmp::Ordering::Equal
     });
 
     log::info!("[par_bounded_context_suffix_array] done");
@@ -154,7 +155,7 @@ fn build_full_auxiliary_data(
     k: usize
 ) -> FullAuxiliaryData {
     log::info!("[build_full_auxiliary_data] begin");
-    // The input should still be padded with '#'.
+    // The input should still be padded.
     let length = bounded_context_suffix_array.len();
     let word_count = k.div_ceil(LANES);
 
@@ -206,8 +207,6 @@ fn build_full_auxiliary_data(
             current_suffix_index,
             previous_suffix_index
         );
-        let length = length.min(k);
-        let lcp_value = lcp_value.min(length);
         lcp.push(lcp_value);
 
         if length < k {
@@ -261,8 +260,8 @@ fn find_length_and_lcp_value(
     k: usize,
     input: &[u8],
     word_count: usize,
-    current_suffix_index: usize,
-    previous_suffix_index: usize
+    mut current_suffix_index: usize,
+    mut previous_suffix_index: usize
 ) -> (usize, usize) {
     let k = k as u32;
 
@@ -273,29 +272,34 @@ fn find_length_and_lcp_value(
     let mut found_lcp = false;
     for _ in 0..word_count {
         let slice_for_current = &input[current_suffix_index..current_suffix_index + LANES];
+        current_suffix_index += LANES;
         let simd_word_current = Word::new(slice_for_current.try_into().unwrap());
+
         let slice_for_previous = &input[previous_suffix_index..previous_suffix_index + LANES];
+        previous_suffix_index += LANES;
         let simd_word_previous = Word::new(slice_for_previous.try_into().unwrap());
 
         if !stop_accumulating_length {
-            let bitmask = simd_word_current.simd_eq(b'$').to_bitmask();
+            let bitmask = simd_word_current.simd_eq(b'$').to_bitmask() as Bitmask;
             length += bitmask.trailing_zeros();
-            if bitmask != 0 {
-                stop_accumulating_length = true;
-            }
             if length >= k {
+                stop_accumulating_length = true;
+                length = k;
+            }
+            if bitmask != 0 {
                 stop_accumulating_length = true;
             }
         }
 
         if !found_lcp {
-            let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask();
+            let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask() as Bitmask;
             lcp_value += bitmask.trailing_ones();
-            if bitmask != u32::MAX {
+            if stop_accumulating_length && lcp_value >= length {
                 found_lcp = true;
+                lcp_value = length;
             }
-            if lcp_value >= length {
-                found_lcp = true
+            if bitmask != Bitmask::MAX {
+                found_lcp = true;
             }
         }
 
@@ -442,16 +446,13 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
             (0, 0)
         } else {
             let previous_suffix_index = bounded_context_suffix_array[rank - 1];
-            let (length, lcp_value) = find_length_and_lcp_value(
+            find_length_and_lcp_value(
                 k,
                 &input,
                 word_count,
                 current_suffix_index,
                 previous_suffix_index
-            );
-            let length = length.min(k);
-            let lcp_value = lcp_value.min(length);
-            (length, lcp_value)
+            )
         };
 
         start_of_k_range           = lcp_value < length;
@@ -545,7 +546,7 @@ mod tests {
         use rand_chacha::rand_core::SeedableRng;
         use rand_chacha::rand_core::RngCore;
 
-        let k: usize = 16;
+        let k: usize = 17;
         let kmer_length: usize = 48;
         let kmer_count = 256;
         let mut rng = ChaCha20Rng::from_seed([42; 32]);
