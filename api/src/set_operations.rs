@@ -373,6 +373,13 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         check_intersect(seq1, seq2, 5, 1);
     }
 
+    #[test]
+    fn test_difference_single_disjoint_kmers() {
+        let seq1 = b"ACCTT";
+        let seq2 = b"ATGCG";
+        check_difference(seq1, seq2, 5, 1);
+    }
+
     // ── Difference helpers and tests ──────────────────────────────────────────
 
     fn check_difference(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
