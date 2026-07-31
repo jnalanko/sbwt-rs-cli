@@ -381,10 +381,7 @@ impl<E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'_
 #[cfg(test)]
 mod tests {
 
-    use crate::builder::BitPackedKmerSortingDisk;
-
-    use crate::builder::BitPackedKmerSortingMem;
-use crate::init_bitpacked_kmer_sorting_from_slices;
+    use crate::init_bitpacked_kmer_sorting_from_slices;
 
     use super::*;
 

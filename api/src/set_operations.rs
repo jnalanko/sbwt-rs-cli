@@ -10,7 +10,7 @@ pub use intersect_difference::{intersect, difference};
 #[cfg(test)]
 mod tests {
 
-    use crate::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem, SbwtIndexBuilder};
+    use crate::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem, SbwtIndexBuilder, init_bitpacked_kmer_sorting_disk_from_slices, init_bitpacked_kmer_sorting_disk_from_vecs, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs};
 
     use super::*;
     use super::interleaving::split_to_pieces_par;
@@ -129,17 +129,20 @@ mod tests {
 
 fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // Original logic: Build individual indices
-        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new()
+        let (sbwt1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq1]))
             .k(k)
-            .run_from_slices(vec![seq1].as_slice());
-        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new()
+            .n_threads(n_threads)
+            .run();
+        let (sbwt2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq2]))
             .k(k)
-            .run_from_slices(vec![seq2].as_slice());
+            .n_threads(n_threads)
+            .run();
 
         // Original logic: Build ground truth index
-        let (sbwt_both, _) = SbwtIndexBuilder::<BitPackedKmerSortingDisk>::new()
+        let (sbwt_both, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_disk_from_slices(&vec![seq1, seq2]))
             .k(k)
-            .run_from_slices(vec![seq1, seq2].as_slice());
+            .run();
+
 
         // Verify interleaving consistency
         let inter_high_ram = MergeInterleaving::new(&sbwt1, &sbwt2, false, n_threads); 
@@ -234,20 +237,20 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // Ensure deterministic order for ground-truth SBWT construction
         isec_kmers.sort();
 
-        let (sbwt_true, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+        let (sbwt_true, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_disk_from_vecs(&isec_kmers))
             .k(k)
             .n_threads(n_threads)
-            .run_from_vecs(&isec_kmers);
+            .run();
 
         // Build the two individual SBWTs.
-        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+        let (sbwt1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq1]))
             .k(k)
             .n_threads(n_threads)
-            .run_from_slices(&[seq1]);
-        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .run();
+        let (sbwt2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq2]))
             .k(k)
             .n_threads(n_threads)
-            .run_from_slices(&[seq2]);
+            .run();
 
         let spectrum_true_raw = sbwt_true.reconstruct_padded_spectrum(n_threads);
         let mut kmers_true: Vec<Vec<u8>> = spectrum_true_raw
@@ -372,19 +375,19 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         let mut diff_kmers: Vec<Vec<u8>> = kmers1.difference(&kmers2).cloned().collect();
         diff_kmers.sort();
 
-        let (sbwt_true, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+        let (sbwt_true, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&diff_kmers))
             .k(k)
             .n_threads(n_threads)
-            .run_from_vecs(&diff_kmers);
+            .run();
 
-        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+        let (sbwt1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq1]))
             .k(k)
             .n_threads(n_threads)
-            .run_from_slices(&[seq1]);
-        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .run();
+        let (sbwt2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq2]))
             .k(k)
             .n_threads(n_threads)
-            .run_from_slices(&[seq2]);
+            .run();
 
         let spectrum_true_raw = sbwt_true.reconstruct_padded_spectrum(n_threads);
         let mut kmers_true: Vec<Vec<u8>> = spectrum_true_raw.chunks(k).map(|c| c.to_vec()).collect();
