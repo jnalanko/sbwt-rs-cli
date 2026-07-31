@@ -11,7 +11,6 @@ use crate::alternative_construction::{
     }
 };
 
-use rayon::slice::ParallelSliceMut;
 use bitvec::vec::BitVec;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
 use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select};
@@ -26,6 +25,7 @@ pub fn build<SS: SubsetSeq + Send>(
     threads: usize,
     mut input: Vec<u8>,
     k: usize,
+    prefix_length_for_bucket_sort: usize,
     build_lcs: bool,
     add_all_dummies: bool,
     build_counts: bool
@@ -35,7 +35,8 @@ pub fn build<SS: SubsetSeq + Send>(
     let mut result: Option<Vec<usize>> = None;
     thread_pool.scope(|scope| {
         scope.spawn(|_| {
-            result = Some(par_bounded_context_suffix_array(&mut input, k));
+            // result = Some(par_bounded_context_suffix_array(&mut input, k));
+            result = Some(par_bounded_context_suffix_array_bucket_sort(&mut input, k, prefix_length_for_bucket_sort));
         });
     });
     let bounded_context_suffix_array = result.unwrap();
@@ -106,37 +107,144 @@ pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<us
     let mut suffix_array: Vec<usize> = Vec::<usize>::with_capacity(length);
     suffix_array.extend(0..length);
 
+    use rayon::slice::ParallelSliceMut;
     suffix_array.par_sort_by(|suffix_a, suffix_b| {
-        let mut cursor_a = *suffix_a;
-        let mut cursor_b = *suffix_b;
-
-        for _ in 0..word_count {
-            let slice_a = &input[cursor_a..cursor_a + LANES];
-            let simd_word_a = Word::new(slice_a.try_into().unwrap());
-            cursor_a += LANES;
-
-            let slice_b = &input[cursor_b..cursor_b + LANES];
-            let simd_word_b = Word::new(slice_b.try_into().unwrap());
-            cursor_b += LANES;
-
-            let equal = simd_word_a.simd_eq(simd_word_b).to_bitmask() as Bitmask;
-            if equal == Bitmask::MAX {
-                continue;
-            }
-
-            let less    = simd_word_a.simd_lt(simd_word_b).to_bitmask() as Bitmask;
-            let greater = !(equal | less);
-            if less.trailing_zeros() < greater.trailing_zeros() {
-                return std::cmp::Ordering::Less;
-            }
-            return std::cmp::Ordering::Greater;
-        }
-
-        std::cmp::Ordering::Equal
+        compare_suffixes(input, word_count, *suffix_a, *suffix_b)
     });
 
     log::info!("[par_bounded_context_suffix_array] done");
     suffix_array
+}
+
+
+const CHARACTER_COUNT: usize = 5;
+const MAX_PREFIX_LENGTH_FOR_BUCKET_SORT: usize = 8;
+
+pub fn par_bounded_context_suffix_array_bucket_sort(input: &mut Vec<u8>, k: usize, prefix_length_for_bucket_sort: usize) -> Vec<usize> {
+    log::info!("[par_bounded_context_suffix_array_bucket_sort] begin");
+    let length = input.len();
+    let word_count = k.div_ceil(LANES);
+    let prefix_length_for_bucket_sort = prefix_length_for_bucket_sort.min(MAX_PREFIX_LENGTH_FOR_BUCKET_SORT);
+    let bucket_count: usize = CHARACTER_COUNT.pow(prefix_length_for_bucket_sort as u32);
+
+    // Pad the input so that the comparisons need not do bound checks.
+    for _ in 1..(word_count * LANES) {
+        input.push(b'$');
+    }
+
+    use rayon::prelude::*;
+    rayon::scope(|s| {
+        s.spawn(|_| {
+            input.par_iter_mut().for_each(|character| {
+                *character = CHAR_TO_INDEX[*character as usize] as u8;
+            });
+        });
+    });
+
+    let identify_bucket = |index: usize| -> usize {
+        if input[index] == 0 {
+            return 0;
+        }
+        let mut power = 1;
+        let mut bucket = 0;
+        for i in (0..prefix_length_for_bucket_sort).rev() {
+            let digit = input[index + i] as usize;
+            bucket += digit * power;
+            power *= CHARACTER_COUNT;
+        }
+        bucket
+    };
+
+    // Count for the bucket sort step.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let buckets = vec![0_usize; bucket_count].into_iter().map(AtomicUsize::new).collect::<Vec<_>>();
+    rayon::scope(|s| {
+        s.spawn(|_| {
+            (1..length).into_par_iter().for_each(|index| {
+                let bucket = identify_bucket(index);
+                buckets[bucket].fetch_add(1, Ordering::AcqRel);
+            });
+        });
+    });
+    let buckets = buckets.into_iter().map(|value| value.load(Ordering::Relaxed)).collect::<Vec<_>>();
+
+    let mut result = vec![0_usize; length];
+
+    {
+        // Sort the suffixes into buckets.
+        let mut indices = Vec::<usize>::with_capacity(length);
+        indices.extend(0..length);
+
+        let mut buckets_scratch = Vec::<usize>::with_capacity(buckets.len());
+        let mut last = 1;
+        buckets_scratch.push(last);
+        for i in 1..buckets.len() {
+            last += buckets[i - 1];
+            buckets_scratch.push(last);
+        }
+
+
+        #[allow(clippy::needless_range_loop)]
+        for i in 1..indices.len() {
+            let item = indices[i];
+            let bucket = identify_bucket(item);
+            let index_in_swap = buckets_scratch[bucket];
+            buckets_scratch[bucket] += 1;
+            result[index_in_swap] = item;
+        }
+    }
+
+    rayon::scope(|s| {
+        use super::alternative_construction::input_structures::INDEX_TO_CHAR;
+        s.spawn(|_| {
+            input.par_iter_mut().for_each(|character| *character = INDEX_TO_CHAR[*character as usize]);
+        });
+    });
+
+    rayon::scope(|s| {
+        // Sort the buckets.
+        let start = 1 + buckets[0];
+        let mut slice = &mut result[start..];
+        #[allow(clippy::needless_range_loop)]
+        for i in 1..buckets.len() {
+            let (to_sort, residual) = slice.split_at_mut(buckets[i]);
+            s.spawn(|_| {
+                to_sort.sort_unstable_by(|a, b| {
+                    compare_suffixes(input, word_count, *a, *b)
+                });
+            });
+            slice = residual;
+        }
+    });
+
+    log::info!("[par_bounded_context_suffix_array_bucket_sort] done");
+    result
+}
+
+fn compare_suffixes(input: &[u8], word_count: usize, mut cursor_a: usize, mut cursor_b: usize) -> std::cmp::Ordering {
+    for _ in 0..word_count {
+        let slice_a = &input[cursor_a..cursor_a + LANES];
+        let simd_word_a = Word::new(slice_a.try_into().unwrap());
+        cursor_a += LANES;
+
+        let slice_b = &input[cursor_b..cursor_b + LANES];
+        let simd_word_b = Word::new(slice_b.try_into().unwrap());
+        cursor_b += LANES;
+
+        let equal = simd_word_a.simd_eq(simd_word_b).to_bitmask() as Bitmask;
+        if equal == Bitmask::MAX {
+            continue;
+        }
+
+        let less    = simd_word_a.simd_lt(simd_word_b).to_bitmask() as Bitmask;
+        let greater = !(equal | less);
+        if less.trailing_zeros() < greater.trailing_zeros() {
+            return std::cmp::Ordering::Less;
+        }
+        return std::cmp::Ordering::Greater;
+    }
+
+    std::cmp::Ordering::Equal
 }
 
 struct FullAuxiliaryData {
@@ -572,7 +680,7 @@ mod tests {
                 sbwt: constructed_sbwt,
                 lcs: constructed_lcs,
                 counts
-            } = build::<SubsetMatrix>(2, concatenation.clone(), k, true, false, false);
+            } = build::<SubsetMatrix>(2, concatenation.clone(), k, 4, true, false, false);
 
             assert!(counts.is_none());
 
@@ -605,7 +713,7 @@ mod tests {
                 sbwt: constructed_sbwt,
                 lcs: constructed_lcs,
                 counts
-            } = build::<SubsetMatrix>(2, concatenation, k, true, true, true);
+            } = build::<SubsetMatrix>(2, concatenation, k, 4, true, true, true);
 
             let mut correct_buf = Vec::<u8>::new();
             let mut constructed_buf = Vec::<u8>::new();
