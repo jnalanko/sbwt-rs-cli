@@ -6,12 +6,11 @@ use std::io::BufRead;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
+use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
 use sbwt::*;
 use sbwt::benchmark;
 use std::sync::Arc;
-
-use jseqio::reader::*;
 
 struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
@@ -191,7 +190,7 @@ fn build_command(matches: &clap::ArgMatches){
     // have a measurable performance hit? It's probably alright if the input sequences
     // are long (100+ base pairs?), but I'm not sure about shorter sequences. We could switch 
     //to enum dispatch or even monomorphized IO.
-    let reader: Box<dyn SeqStream> = match input_mode {
+    let reader: Box<dyn crate::SeqStream + Send> = match input_mode {
         InputMode::SingleFile(path_buf) => {
             let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(&path_buf).unwrap()};
             Box::new(reader)
@@ -214,11 +213,11 @@ fn build_command(matches: &clap::ArgMatches){
     let start_time = std::time::Instant::now();
     let (sbwt, lcs) = if in_memory {
         let algo = BitPackedKmerSortingMem::new(reader).mem_gb(mem_gb).dedup_batches(dedup_batches);
-        let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        let builder = SbwtIndexBuilder::new(algo).k(k).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     } else {
         let algo = BitPackedKmerSortingDisk::new(reader).mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
-        let builder = SbwtIndexBuilder::new().k(k).n_threads(n_threads).add_rev_comp(add_revcomp).algorithm(algo).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        let builder = SbwtIndexBuilder::new(algo).k(k).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     };
     let end_time = std::time::Instant::now();

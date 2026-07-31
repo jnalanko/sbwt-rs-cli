@@ -203,6 +203,13 @@ pub trait SeqStream{
     fn stream_next(&mut self) -> Option<&[u8]>;
 }
 
+// Convenience: Make Box<Seqstream> also be a SeqStream
+impl<SS: SeqStream + ?Sized> SeqStream for Box<SS> {
+    fn stream_next(&mut self) -> Option<&[u8]> {
+        (**self).stream_next()
+    }
+}
+
 pub(crate) struct UnitigFlipperSeqStreamWrapper<SS: SeqStream> {
     inner: SS,
 }

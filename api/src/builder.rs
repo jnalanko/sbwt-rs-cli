@@ -261,12 +261,6 @@ impl<A: SbwtConstructionAlgorithm> SbwtIndexBuilder<A> {
         self
     }
 
-    /// Set the algorithm to use for constructing the SBWT index.
-    pub fn algorithm(mut self, alg: A) -> Self {
-        self.algorithm = alg;
-        self
-    }
-
     /// Whether to build the LCS array.
     pub fn build_lcs(mut self, enable: bool) -> Self {
         self.build_lcs = enable;
