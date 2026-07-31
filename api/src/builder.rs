@@ -7,21 +7,21 @@ use crate::{subsetseq::SubsetMatrix, SeqStream};
 use crate::sbwt::{PrefixLookupTable, SbwtIndex};
 use crate::streaming_index::LcsArray;
 
-// 'a must be a higher-ranked lifetime because it's tied to the lifetime
-// of the borrow in stream_next? That function should be callabed with
-// *any* borrow length, so that's why a regular generic lifetime parameter
-// does not compile?
 #[derive(Clone, Eq, PartialEq, Debug)]
-struct SeqStreamWithRevComp<SS: SeqStream + Send>{
+struct SeqStreamWithPossiblyRevComp<SS: SeqStream + Send>{
     inner: SS, 
     rc_buf: Vec<u8>,
     parity: bool, // Every other sequence we return is a reverse complement of the previous. Initialize to false.
+    enable_rev_comp: bool,
 }
 
-impl<SS: SeqStream + Send> crate::SeqStream for SeqStreamWithRevComp<SS>{
+impl<SS: SeqStream + Send> crate::SeqStream for SeqStreamWithPossiblyRevComp<SS>{
     fn stream_next(&mut self) -> Option<&[u8]> {
-        self.parity = !self.parity;
+        if !self.enable_rev_comp {
+            return self.inner.stream_next();
+        }
 
+        self.parity = !self.parity;
         if self.parity {
             #[allow(clippy::question_mark)] // More space to write comments on the cases
             let new = match self.inner.stream_next() {
@@ -44,7 +44,7 @@ impl<SS: SeqStream + Send> crate::SeqStream for SeqStreamWithRevComp<SS>{
 
 /// Any struct implementing this interface can be used in [SbwtIndexBuilder] to construct the SBWT index and optionally the LCS array.
 pub trait SbwtConstructionAlgorithm {
-    fn run(self, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>);
+    fn run(self, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool, add_rev_comp: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>);
 }
 
 /// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
@@ -114,25 +114,26 @@ pub fn init_bitpacked_kmer_sorting_disk_from_fastq<R: std::io::Read + Send + Syn
 } 
 
 impl<SS: SeqStream + Send> SbwtConstructionAlgorithm for BitPackedKmerSortingDisk<SS> {
-    fn run(self, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    fn run(self, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool, add_rev_comp: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mem_gb = self.mem_gb;
         let dedup_batches = self.dedup_batches;
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
+        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: add_rev_comp };
         match k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(self.input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(self.input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(self.input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(self.input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(self.input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, mem_gb, n_threads, dedup_batches, build_lcs, add_all_dummy_paths, &mut temp_file_manager)
             }
             _ => {
                 panic!("k > 256 not supported with bitpacked sorting algorithm.");
@@ -202,24 +203,25 @@ pub fn init_bitpacked_kmer_sorting_from_fastq<R: std::io::Read + Send + Sync + '
 } 
 
 impl<SS: SeqStream + Send> SbwtConstructionAlgorithm for BitPackedKmerSortingMem<SS> {
-    fn run(self, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    fn run(self, k: usize, n_threads: usize, build_lcs: bool, add_all_dummy_paths: bool, add_rev_comp: bool) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let dedup_batches = self.dedup_batches;
         let mem_gb = self.mem_gb;
+        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: add_rev_comp };
         match k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(self.input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(self.input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(self.input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(self.input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(self.input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, k, n_threads, mem_gb, dedup_batches, build_lcs, add_all_dummy_paths)
             }
             _ => {
                 panic!("k > 256 not supported with bitpacked sorting algorithm.");
@@ -307,8 +309,7 @@ impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
     /// Run the algorithm and return the SBWT index and optionally the LCS array if [build_lcs](SbwtIndexBuilder::build_lcs) was set.
     /// See also [run_from_slices](SbwtIndexBuilder::run_from_slices), [run_from_fasta](SbwtIndexBuilder::run_from_fasta) and [run_from_fastq](SbwtIndexBuilder::run_from_fastq).
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        let add_all_dummy_paths = self.add_all_dummy_paths;
-        let (mut sbwt, lcs) = self.algorithm.run(self.k, self.n_threads, self.build_lcs, add_all_dummy_paths);
+        let (mut sbwt, lcs) = self.algorithm.run(self.k, self.n_threads, self.build_lcs, self.add_all_dummy_paths, self.add_rev_comp);
 
         if self.build_select_support {
             sbwt.build_select();
