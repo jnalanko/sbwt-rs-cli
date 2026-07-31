@@ -6,7 +6,7 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
-use crate::builder::{SbwtIndexBuilder, BitPackedKmerSortingMem};
+use crate::builder::SbwtIndexBuilder;
 use crate::init_bitpacked_kmer_sorting_from_vecs;
 use crate::subsetseq::*;
 use crate::sbwt::*;

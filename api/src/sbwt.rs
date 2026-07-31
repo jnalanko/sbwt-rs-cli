@@ -928,11 +928,8 @@ mod tests {
 
     
 
-    use crate::builder::{BitPackedKmerSortingDisk, SbwtIndexBuilder};
-
-    use crate::builder::BitPackedKmerSortingMem;
-use crate::init_bitpacked_kmer_sorting_from_slices;
-
+    use crate::builder::SbwtIndexBuilder;
+    use crate::init_bitpacked_kmer_sorting_from_slices;
     use super::*;
 
     #[allow(non_snake_case)]

@@ -89,7 +89,7 @@ mod tests {
         let seq2 = b"NNNNNNNNNN";
         let seq3 = b"ACCCCCCCNNNNTACNNN";
         let seqs: Vec<&[u8]> = vec![seq1, seq2, seq3];
-        let (mut sbwt, lcs) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
+        let (mut sbwt, _lcs) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
             crate::SliceSeqStream::new(seqs.as_slice()),
             k,
             3,     // n_threads

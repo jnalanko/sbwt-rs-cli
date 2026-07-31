@@ -402,10 +402,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 mod tests {
     use std::io::BufRead;
 
-    use crate::{builder::{BitPackedKmerSortingDisk, SbwtIndexBuilder}, init_bitpacked_kmer_sorting_disk_from_slices, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs, util};
-
-    use crate::builder::BitPackedKmerSortingMem;
-
+    use crate::{builder::SbwtIndexBuilder, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs, util};
     use bitvec::prelude::*;
     use rand_chacha::rand_core::RngCore;
     use super::*;

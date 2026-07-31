@@ -10,7 +10,7 @@ pub use intersect_difference::{intersect, difference};
 #[cfg(test)]
 mod tests {
 
-    use crate::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem, SbwtIndexBuilder, init_bitpacked_kmer_sorting_disk_from_slices, init_bitpacked_kmer_sorting_disk_from_vecs, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs};
+    use crate::{SbwtIndexBuilder, init_bitpacked_kmer_sorting_disk_from_slices, init_bitpacked_kmer_sorting_disk_from_vecs, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs};
 
     use super::*;
     use super::interleaving::split_to_pieces_par;
