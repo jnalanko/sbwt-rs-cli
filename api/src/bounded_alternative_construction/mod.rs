@@ -24,26 +24,13 @@ const _: () = assert!(Bitmask::BITS as usize == LANES);
 
 pub fn build<SS: SubsetSeq + Send>(
     threads: usize,
-    input: Vec<u8>,
+    mut input: Vec<u8>,
     k: usize,
     build_lcs: bool,
     add_all_dummies: bool,
     build_counts: bool
 ) -> Output<SS> {
     log::info!("[build] begin [length: {}]", input.len());
-    let result = if !add_all_dummies {
-        build_without_redundant_dummies(threads, input, k, build_lcs)
-    } else {
-        build_with_all_dummies(threads, input, k, build_lcs, build_counts)
-    };
-    log::info!("[build] done");
-    result
-}
-
-pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
-    threads: usize, mut input: Vec<u8>, k: usize, build_lcs: bool
-) -> Output<SS> {
-    log::info!("[build_without_redundant_dummies] begin");
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result: Option<Vec<usize>> = None;
     thread_pool.scope(|scope| {
@@ -52,7 +39,20 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
         });
     });
     let bounded_context_suffix_array = result.unwrap();
+    log::info!("[build] done building bounded context suffix array");
+    let result = if !add_all_dummies {
+        build_without_redundant_dummies(input, bounded_context_suffix_array, k, build_lcs)
+    } else {
+        build_with_all_dummies(input, bounded_context_suffix_array, k, build_lcs, build_counts)
+    };
+    log::info!("[build] done");
+    result
+}
 
+pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
+    input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool
+) -> Output<SS> {
+    log::info!("[build_without_redundant_dummies] begin");
     let aux = build_full_auxiliary_data(input, bounded_context_suffix_array, k);
     let dummy_marks = build_dummy_marks(&aux, k);
 
@@ -376,17 +376,9 @@ fn keep_predecessors(
 }
 
 pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
-    threads: usize, mut input: Vec<u8>, k: usize, build_lcs: bool, build_counts: bool
+    input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool, build_counts: bool
 ) -> Output<SS> {
     log::info!("[build_with_all_dummies] begin");
-    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
-    let mut result: Option<Vec<usize>> = None;
-    thread_pool.scope(|scope| {
-        scope.spawn(|_| {
-            result = Some(par_bounded_context_suffix_array(&mut input, k));
-        });
-    });
-    let bounded_context_suffix_array = result.unwrap();
     let word_count = k.div_ceil(LANES);
     let length = bounded_context_suffix_array.len();
 
