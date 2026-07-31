@@ -48,7 +48,6 @@ pub trait SbwtConstructionAlgorithm {
 }
 
 /// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
-#[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BitPackedKmerSortingDisk<SS: SeqStream + Send> {
     mem_gb: usize,
@@ -145,7 +144,6 @@ impl<SS: SeqStream + Send> SbwtConstructionAlgorithm for BitPackedKmerSortingDis
 /// A construction algorithm based on sorting of bit-packed k-mers in entirely in RAM.
 /// Faster and scales better with parallelism than [BitPackedKmerSortingDisk], but takes
 /// more RAM.
-#[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BitPackedKmerSortingMem<SS: SeqStream + Send>{
     dedup_batches: bool,
@@ -231,9 +229,8 @@ impl<SS: SeqStream + Send> SbwtConstructionAlgorithm for BitPackedKmerSortingMem
 }
 
 /// A builder for constructing an SBWT index.
-#[derive(Default)]
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct SbwtIndexBuilder<A: SbwtConstructionAlgorithm + Default> {
+pub struct SbwtIndexBuilder<A: SbwtConstructionAlgorithm> {
     k: usize,
     n_threads: usize,
     algorithm: A,
@@ -244,7 +241,7 @@ pub struct SbwtIndexBuilder<A: SbwtConstructionAlgorithm + Default> {
     add_all_dummy_paths: bool,
 }
 
-impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
+impl<A: SbwtConstructionAlgorithm> SbwtIndexBuilder<A> {
 
     /// Sets up the builder with default values:
     /// - k = 31.
@@ -254,8 +251,8 @@ impl<A: SbwtConstructionAlgorithm + Default> SbwtIndexBuilder<A> {
     /// - do not build the select support.
     /// - precalc_length = 8.
     /// - default settings for the chosen algorithm.
-    pub fn new() -> Self {
-        Self{k: 31, n_threads: 4, algorithm: A::default(), build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: 8, add_all_dummy_paths: false}
+    pub fn new(algorithm: A) -> Self {
+        Self{k: 31, n_threads: 4, algorithm, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: 8, add_all_dummy_paths: false}
     }
 
     /// Sets the k-mer length.
