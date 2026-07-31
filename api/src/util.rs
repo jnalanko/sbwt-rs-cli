@@ -36,8 +36,17 @@ pub(crate) fn binary_search_leftmost_that_fulfills_pred<T, Access: Fn(usize) -> 
 
 pub const DNA_ALPHABET: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
-// This bit vector of length 256 marks the ascii values of these characters: acgtACGT
-const IS_DNA: BitArray<[u32; 8]> = bitarr![const u32, Lsb0; 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+// This table of length 256 marks the ascii values of these characters: acgtACGT
+const IS_DNA: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < DNA_ALPHABET.len() {
+        table[DNA_ALPHABET[i] as usize] = true;
+        table[DNA_ALPHABET[i].to_ascii_lowercase() as usize] = true;
+        i += 1;
+    }
+    table
+};
 
 pub(crate) fn is_dna(c: u8) -> bool {
     IS_DNA[c as usize]
