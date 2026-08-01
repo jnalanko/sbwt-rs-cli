@@ -136,7 +136,10 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
         self
     }
 
-
+    /// Run the construction algorithm, consuming the input stream, and return the SBWT index and
+    /// the LCS array if [build_lcs](BitPackedKmerSortingDisk::build_lcs) was set, otherwise `None`.
+    ///
+    /// Panics if k > 256.
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
@@ -294,6 +297,10 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
         self
     }
 
+    /// Run the construction algorithm, consuming the input stream, and return the SBWT index and
+    /// the LCS array if [build_lcs](BitPackedKmerSortingMem::build_lcs) was set, otherwise `None`.
+    ///
+    /// Panics if k > 256.
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
         let (mut sbwt, lcs) = match self.k {
