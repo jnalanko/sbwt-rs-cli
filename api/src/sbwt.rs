@@ -484,7 +484,12 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     /// The pattern is given in ascii characters.
     pub fn search_from(&self, interval: std::ops::Range<usize>, pattern: &[u8]) -> Option<std::ops::Range<usize>> {
         let mut left = interval.start;
-        let mut right = interval.end; 
+        let mut right = interval.end;
+        if left >= right {
+            // The starting interval is empty, so the pattern is not found. This needs to be
+            // checked separately because the loop below is not entered for an empty pattern.
+            return None;
+        }
         for chr in pattern.iter() {
             let c = ACGT_TO_0123[*chr as usize];
             if c as usize > DNA_ALPHABET.len() {
