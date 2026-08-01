@@ -185,7 +185,7 @@ mod tests {
     use super::*;
     use crate::vodbg::pnsv::LcsSimd;
     use crate::vodbg::pnsv::scan::Scan;
-    use crate::{BitPackedKmerSortingMem, SbwtIndexBuilder};
+    use crate::{init_bitpacked_kmer_sorting_from_vecs, SbwtIndexBuilder};
     use crate::{SbwtIndex, SubsetMatrix, LcsArray};
 
     fn setup(max_k: usize) -> (SbwtIndex<SubsetMatrix>, LcsArray) {
@@ -210,10 +210,10 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(seqs.as_slice()))
             .k(max_k).build_lcs(true)
             .build_select_support(true)
-            .run_from_vecs(seqs.as_slice());
+            .run();
 
         (sbwt, lcs.unwrap())
     }

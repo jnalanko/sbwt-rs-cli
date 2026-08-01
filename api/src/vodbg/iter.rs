@@ -86,7 +86,7 @@ where P: Pnsv + Send + Sync
 pub mod tests {
     use super::*;
     use crate::vodbg::pnsv::PnsvTuned;
-    use crate::{BitPackedKmerSortingMem, LcsArray, SbwtIndex, SbwtIndexBuilder, SubsetMatrix};
+    use crate::{init_bitpacked_kmer_sorting_from_vecs, LcsArray, SbwtIndex, SbwtIndexBuilder, SubsetMatrix};
     use crate::dbg::Dbg;
 
     #[test]
@@ -118,10 +118,10 @@ pub mod tests {
         let mut graphs = Vec::with_capacity(k);
 
         for i in MIN_K..=k {
-            let (sbwt, lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(seqs.as_slice()))
                 .k(i).build_lcs(true)
                 .build_select_support(true)
-                .run_from_vecs(seqs.as_slice());
+                .run();
             sbwt_indices.push((sbwt, lcs));
         }
 

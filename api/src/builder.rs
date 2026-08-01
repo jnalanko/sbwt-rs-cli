@@ -298,7 +298,7 @@ impl<A: SbwtConstructionAlgorithm> SbwtIndexBuilder<A> {
     }
 
     /// Run the algorithm and return the SBWT index and optionally the LCS array if [build_lcs](SbwtIndexBuilder::build_lcs) was set.
-    /// See also [run_from_slices](SbwtIndexBuilder::run_from_slices), [run_from_fasta](SbwtIndexBuilder::run_from_fasta) and [run_from_fastq](SbwtIndexBuilder::run_from_fastq).
+    /// The input is determined by the construction algorithm given to [new](SbwtIndexBuilder::new).
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let (mut sbwt, lcs) = self.algorithm.run(self.k, self.n_threads, self.build_lcs, self.add_all_dummy_paths, self.add_rev_comp);
 

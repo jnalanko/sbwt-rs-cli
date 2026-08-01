@@ -638,7 +638,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
 mod tests {
     use super::*;
     use crate::alternative_construction::make_concatenation;
-    use crate::{BitPackedKmerSortingMem, SbwtIndexBuilder, SubsetMatrix, VecSeqStream};
+    use crate::{init_bitpacked_kmer_sorting_from_vecs, SbwtIndexBuilder, SubsetMatrix, VecSeqStream};
 
     #[test]
     fn randomised_kmers() {
@@ -672,9 +672,9 @@ mod tests {
 
         {
             // Without redundant dummies.
-            let (correct_sbwt, correct_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            let (correct_sbwt, correct_lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
                 .k(k).build_lcs(true)
-                .run_from_vecs(&seqs);
+                .run();
 
             let Output {
                 sbwt: constructed_sbwt,
@@ -704,10 +704,10 @@ mod tests {
 
         {
             // With all dummies.
-            let (mut correct_sbwt, correct_lcs) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            let (mut correct_sbwt, correct_lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
                 .k(k).build_lcs(true)
                 .add_all_dummy_paths(true)
-                .run_from_vecs(&seqs);
+                .run();
 
             let Output {
                 sbwt: constructed_sbwt,
