@@ -10,7 +10,7 @@ pub use intersect_difference::{intersect, difference};
 #[cfg(test)]
 mod tests {
 
-    use crate::{SbwtIndexBuilder, init_bitpacked_kmer_sorting_disk_from_slices, init_bitpacked_kmer_sorting_disk_from_vecs, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs};
+    use crate::{BitPackedKmerSortingDisk, BitPackedKmerSortingMem};
 
     use super::*;
     use super::interleaving::split_to_pieces_par;
@@ -129,18 +129,15 @@ mod tests {
 
 fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // Original logic: Build individual indices
-        let (sbwt1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq1]))
-            .k(k)
+        let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], k)
             .n_threads(n_threads)
             .run();
-        let (sbwt2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq2]))
-            .k(k)
+        let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[seq2], k)
             .n_threads(n_threads)
             .run();
 
         // Original logic: Build ground truth index
-        let (sbwt_both, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_disk_from_slices(&vec![seq1, seq2]))
-            .k(k)
+        let (sbwt_both, _) = BitPackedKmerSortingDisk::new_from_slices(&vec![seq1, seq2], k)
             .run();
 
 
@@ -237,18 +234,15 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // Ensure deterministic order for ground-truth SBWT construction
         isec_kmers.sort();
 
-        let (sbwt_true, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_disk_from_vecs(&isec_kmers))
-            .k(k)
+        let (sbwt_true, _) = BitPackedKmerSortingDisk::new_from_vecs(&isec_kmers, k)
             .n_threads(n_threads)
             .run();
 
         // Build the two individual SBWTs.
-        let (sbwt1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq1]))
-            .k(k)
+        let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], k)
             .n_threads(n_threads)
             .run();
-        let (sbwt2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq2]))
-            .k(k)
+        let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[seq2], k)
             .n_threads(n_threads)
             .run();
 
@@ -375,17 +369,14 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         let mut diff_kmers: Vec<Vec<u8>> = kmers1.difference(&kmers2).cloned().collect();
         diff_kmers.sort();
 
-        let (sbwt_true, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&diff_kmers))
-            .k(k)
+        let (sbwt_true, _) = BitPackedKmerSortingMem::new_from_vecs(&diff_kmers, k)
             .n_threads(n_threads)
             .run();
 
-        let (sbwt1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq1]))
-            .k(k)
+        let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], k)
             .n_threads(n_threads)
             .run();
-        let (sbwt2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[seq2]))
-            .k(k)
+        let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[seq2], k)
             .n_threads(n_threads)
             .run();
 

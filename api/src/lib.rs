@@ -29,12 +29,11 @@
 //! // Build the sbwt
 //! let seqs: Vec<&[u8]> = vec![b"AACTGACTGATCGTCTTGACTCGTTTATCTACGGT", b"ACTGACAGCTCTGCGATGCGA"];
 //! let seq_stream = sbwt::SliceSeqStream::new(seqs.as_slice());
-//! let algo = init_bitpacked_kmer_sorting_disk_from_slices(&seqs)
+//! let (sbwt, lcs) = BitPackedKmerSortingDisk::new_from_slices(&seqs, 6)
 //!     .mem_gb(2)
 //!     .dedup_batches(false)
-//!     .temp_dir(Path::new("./temp"));
-//! let (sbwt, lcs) = SbwtIndexBuilder::new(algo)
-//!     .k(6).n_threads(4).build_lcs(true).add_rev_comp(true)
+//!     .temp_dir(Path::new("./temp"))
+//!     .n_threads(4).build_lcs(true).add_rev_comp(true)
 //!     .run();
 //!
 //! // Query a k-mer
@@ -70,7 +69,7 @@
 //! its reverse complement. In the use case where a k-mer is considered equal to its reverse
 //! complement, you need to either feed both directions to the index, or feed
 //! just one direction but query each k-mer both ways. The former approach can be easily implemented by
-//! [enabling reverse complements](builder::SbwtIndexBuilder::add_rev_comp) in the builder.
+//! [enabling reverse complements](builder::BitPackedKmerSortingMem::add_rev_comp) in the construction algorithm.
 //! For the latter approach, we recommend using one of the unitig construction tools mentioned above 
 //! to turn the data into canonical unitigs containing each k-mer in only one orientation. After this, it is
 //! **very important** to [reorient the unitigs](optimize_unitig_orientation) to maintain a consistent orientation for neighboring k-mers

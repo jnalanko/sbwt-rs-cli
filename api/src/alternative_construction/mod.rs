@@ -644,7 +644,7 @@ pub(crate) use tests::make_concatenation;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{init_bitpacked_kmer_sorting_from_vecs, SbwtIndexBuilder, SubsetMatrix, VecSeqStream};
+    use crate::{BitPackedKmerSortingMem, SubsetMatrix, VecSeqStream};
 
     struct RevVecSeqStream<'a> {
         seqs: &'a [Vec<u8>],
@@ -793,8 +793,8 @@ mod tests {
 
         {
             // Without redundant dummies.
-            let (correct_sbwt, correct_lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-                .k(k).build_lcs(true)
+            let (correct_sbwt, correct_lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k)
+                .build_lcs(true)
                 .run();
 
             let Output {
@@ -825,8 +825,8 @@ mod tests {
 
         {
             // With all dummies.
-            let (mut correct_sbwt, correct_lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-                .k(k).build_lcs(true)
+            let (mut correct_sbwt, correct_lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k)
+                .build_lcs(true)
                 .add_all_dummy_paths(true)
                 .run();
 

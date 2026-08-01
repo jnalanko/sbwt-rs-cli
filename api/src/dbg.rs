@@ -402,7 +402,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 mod tests {
     use std::io::BufRead;
 
-    use crate::{builder::SbwtIndexBuilder, init_bitpacked_kmer_sorting_from_slices, init_bitpacked_kmer_sorting_from_vecs, util};
+    use crate::{BitPackedKmerSortingMem, util};
     use bitvec::prelude::*;
     use rand_chacha::rand_core::RngCore;
     use super::*;
@@ -419,8 +419,8 @@ mod tests {
         // will have a dummy in-neighbor and a real in-neighbor. The dummy in-neighbor
         // should not be counted into the indegree.
 
-        let (sbwt_1, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(seqs_1)).k(k).build_lcs(true).run();
-        let (sbwt_2, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(seqs_2)).k(k).build_lcs(true).run();
+        let (sbwt_1, _) = BitPackedKmerSortingMem::new_from_slices(seqs_1, k).build_lcs(true).run();
+        let (sbwt_2, _) = BitPackedKmerSortingMem::new_from_slices(seqs_2, k).build_lcs(true).run();
         let merge_plan = crate::MergeInterleaving::new(&sbwt_1, &sbwt_2, true, 3);
         let mut sbwt_merged = crate::merge(Arc::new(sbwt_1), Arc::new(sbwt_2), Arc::new(merge_plan), 0, 3);
         sbwt_merged.build_select();
@@ -443,7 +443,7 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
         let mut seqs_copy: Vec<Vec<u8>> = seqs.iter().map(|x| x.to_vec()).collect(); // For verification in the end
 
-        let (mut sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).build_lcs(true).run();
+        let (mut sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).build_lcs(true).run();
         sbwt.build_select();
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn finimizer_paper_example_dbg_operations(){
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
-        let (mut sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).build_lcs(true).run();
+        let (mut sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).build_lcs(true).run();
         sbwt.build_select();
 
         let lcs = lcs.unwrap();
@@ -598,7 +598,7 @@ mod tests {
         let x2 = seqs[2][0..k].to_vec();
         seqs[2].extend(x2); // Make cyclic
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs)).k(k).build_lcs(true).build_select_support(true).run();
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).build_lcs(true).build_select_support(true).run();
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         let mut unitig_ascii_out = Vec::<u8>::new();
@@ -671,7 +671,7 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs)).k(k).build_lcs(true).build_select_support(true).run();
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).build_lcs(true).build_select_support(true).run();
         let dbg = Dbg::new(&sbwt, lcs.as_ref(), 3);
 
         { // Check that node iterator iterates all k-mers (tests node_iterator, get_kmer)

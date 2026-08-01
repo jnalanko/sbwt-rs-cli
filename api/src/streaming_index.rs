@@ -381,7 +381,7 @@ impl<E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'_
 #[cfg(test)]
 mod tests {
 
-    use crate::init_bitpacked_kmer_sorting_from_slices;
+    use crate::BitPackedKmerSortingMem;
 
     use super::*;
 
@@ -390,7 +390,7 @@ mod tests {
     fn LCS_paper_example() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
-        let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).build_lcs(true).run();
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).build_lcs(true).run();
         let lcs = lcs.unwrap();
         let from_sbwt = LcsArray::from_sbwt(&sbwt, 3, false);
 
@@ -433,7 +433,7 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"GTAAGTCT", b"AGGAAA", b"ACAGG", b"GTAGG", b"AGGTA"];
         let k = 4;
 
-        let (sbwt, lcs) = crate::builder::SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(k).build_lcs(true).run();
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, k).build_lcs(true).run();
         let lcs = lcs.unwrap();
         let SS = StreamingIndex::new(&sbwt, &lcs);
         let MS = SS.matching_statistics(b"AAGTAA");

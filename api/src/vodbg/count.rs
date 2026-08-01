@@ -796,7 +796,7 @@ fn find_large_count_index(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{init_bitpacked_kmer_sorting_from_vecs, SbwtIndexBuilder};
+    use crate::BitPackedKmerSortingMem;
     use crate::vodbg;
     use crate::vodbg::pnsv::PnsvTuned;
 
@@ -809,8 +809,8 @@ mod tests {
             b"ACGTACGT".to_vec()
         ];
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-            .k(max_k).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, max_k)
+            .build_lcs(true)
             .build_select_support(true)
             .run();
         let lcs = lcs.unwrap();
@@ -858,8 +858,8 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-            .k(max_k).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, max_k)
+            .build_lcs(true)
             .add_all_dummy_paths(true)
             .build_select_support(true)
             .run();
@@ -913,8 +913,8 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-            .k(max_k).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, max_k)
+            .build_lcs(true)
             .add_all_dummy_paths(true)
             .build_select_support(true)
             .run();
@@ -985,8 +985,8 @@ mod tests {
     fn sample_positions() {
         let max_k = 4;
         let seqs: Vec<Vec<u8>> = vec![vec![b'A'; 16]; 512];
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-            .k(max_k).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, max_k)
+            .build_lcs(true)
             .add_all_dummy_paths(true)
             .build_select_support(true)
             .run();

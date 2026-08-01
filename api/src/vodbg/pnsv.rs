@@ -475,7 +475,7 @@ pub fn make_ranges(extend: &impl ExtendRight, count: usize, max_k: usize) -> Ran
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{init_bitpacked_kmer_sorting_from_vecs, SbwtIndexBuilder};
+    use crate::BitPackedKmerSortingMem;
     use crate::{SbwtIndex, SubsetMatrix, LcsArray};
 
     fn setup(kmer_count: usize, max_k: usize) -> (SbwtIndex<SubsetMatrix>, LcsArray) {
@@ -498,8 +498,8 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(seqs.as_slice()))
-            .k(max_k).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(seqs.as_slice(), max_k)
+            .build_lcs(true)
             .build_select_support(true)
             .run();
 

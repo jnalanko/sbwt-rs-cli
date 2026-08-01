@@ -928,8 +928,7 @@ mod tests {
 
     
 
-    use crate::builder::SbwtIndexBuilder;
-    use crate::init_bitpacked_kmer_sorting_from_slices;
+    use crate::builder::BitPackedKmerSortingMem;
     use super::*;
 
     #[allow(non_snake_case)]
@@ -955,7 +954,7 @@ mod tests {
     fn doc_example() {
         // The example used in the documentation page for SbwtIndex.
         let seqs: Vec<&[u8]> = vec![b"TGTTTG", b"TTGCTAT", b"ACGTAGTATAT", b"TGTAAA"]; 
-        let (sbwt, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).run();
+        let (sbwt, _) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).run();
         let mut doc_sbwt = vec![vec![b'A',b'T'], vec![b'C'], vec![], vec![b'A'], vec![b'T'], vec![b'T'], vec![b'A',b'G',b'T'], vec![], vec![], vec![b'G'], vec![b'T'], vec![b'T'], vec![b'T'], vec![b'T'], vec![b'C'], vec![b'G'], vec![b'A'], vec![], vec![], vec![b'A'], vec![b'A'], vec![b'A'], vec![b'A',b'T'], vec![b'T'], vec![b'G']];
 
         // ACGT to 0123
@@ -974,7 +973,7 @@ mod tests {
 
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
-        let (mut sbwt, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).run();
+        let (mut sbwt, _) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).run();
 
         assert_eq!(sbwt.sbwt.len(), 18);
 
@@ -1030,7 +1029,7 @@ mod tests {
     fn serialize_and_load() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
 
-        let (sbwt, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).run();
+        let (sbwt, _) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).run();
 
         let mut buf = Vec::<u8>::new();
         sbwt.serialize(&mut buf).unwrap();
@@ -1045,7 +1044,7 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGANAAGGAAAGT"];           
         //..................................................^...................
 
-        let (sbwt, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).run();
+        let (sbwt, _) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).run();
 
         let mut buf = Vec::<u8>::new();
         sbwt.serialize(&mut buf).unwrap();
@@ -1057,7 +1056,7 @@ mod tests {
     #[test]
     fn from_subset_seq() {
         let seqs: Vec<&[u8]> = vec![b"AGGTAAA", b"ACAGGTAGGAAAGGAAAGT"];
-        let (sbwt_index, _) = crate::builder::SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&seqs)).k(4).run();
+        let (sbwt_index, _) = BitPackedKmerSortingMem::new_from_slices(&seqs, 4).run();
         let ss = sbwt_index.sbwt().clone();
         let sbwt_index2 = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss, sbwt_index.n_sets(), sbwt_index.k(), sbwt_index.prefix_lookup_table.prefix_length);
 
@@ -1122,7 +1121,7 @@ mod tests {
 
         let SbwtIndexVariant::SubsetMatrix(cpp_sbwt) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(&data)).unwrap();
 
-        let (rust_sbwt, _lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&[b"ACACTG", b"GCACTAA"])).k(3).precalc_length(2).run();
+        let (rust_sbwt, _lcs) = BitPackedKmerSortingMem::new_from_slices(&[b"ACACTG", b"GCACTAA"], 3).precalc_length(2).run();
 
         assert_eq!(cpp_sbwt, rust_sbwt);
 
@@ -1142,7 +1141,7 @@ mod tests {
         // of push_labels_forward has more than one independent piece.
         let input_seq = crate::util::gen_random_dna_string(2000, 1234);
 
-        let (sbwt, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_slices(&vec![input_seq.as_slice()].as_slice())).k(5).run();
+        let (sbwt, _) = BitPackedKmerSortingMem::new_from_slices(&vec![input_seq.as_slice()].as_slice(), 5).run();
 
         let mut in_labels = crate::util::gen_random_dna_string(sbwt.n_sets(), 1234);
         in_labels[100] = b'$'; // Put in a dollar in the middle for fun

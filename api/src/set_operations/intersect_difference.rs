@@ -6,8 +6,7 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
-use crate::builder::SbwtIndexBuilder;
-use crate::init_bitpacked_kmer_sorting_from_vecs;
+use crate::builder::BitPackedKmerSortingMem;
 use crate::subsetseq::*;
 use crate::sbwt::*;
 use crate::atomic_bitmap::AtomicBitmap;
@@ -349,8 +348,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     let index1 = Arc::new(index1);
 
     log::info!("[intersect] Dummy repair: building auxiliary SBWT from source k-mers");
-    let (aux_submatrix, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&source_kmers))
-        .k(k)
+    let (aux_submatrix, _) = BitPackedKmerSortingMem::new_from_vecs(&source_kmers, k)
         .n_threads(n_threads)
         .run();
     drop(source_kmers);
@@ -753,8 +751,7 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     let index1 = Arc::new(index1);
 
     log::info!("[difference] Dummy repair: building auxiliary SBWT from source k-mers");
-    let (aux_submatrix, _) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&source_kmers))
-        .k(k)
+    let (aux_submatrix, _) = BitPackedKmerSortingMem::new_from_vecs(&source_kmers, k)
         .n_threads(n_threads)
         .run();
     drop(source_kmers);

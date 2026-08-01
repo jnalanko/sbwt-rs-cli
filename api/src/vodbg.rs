@@ -651,7 +651,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LcsArray, SbwtIndexBuilder, SubsetMatrix, init_bitpacked_kmer_sorting_disk_from_vecs, init_bitpacked_kmer_sorting_from_vecs};
+    use crate::{LcsArray, SubsetMatrix, BitPackedKmerSortingDisk, BitPackedKmerSortingMem};
     use crate::dbg::Dbg;
     use pnsv::PnsvTuned;
 
@@ -679,8 +679,8 @@ mod tests {
         seqs.sort();
         seqs.dedup();
 
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-            .k(max_k).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, max_k)
+            .build_lcs(true)
             .add_all_dummy_paths(true)
             .build_select_support(true)
             .run();
@@ -745,8 +745,8 @@ mod tests {
         let mut graphs = Vec::with_capacity(max_k);
 
         for i in MIN_K..=max_k {
-            let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_disk_from_vecs(&seqs))
-                .k(i).build_lcs(true)
+            let (sbwt, lcs) = BitPackedKmerSortingDisk::new_from_vecs(&seqs, i)
+                .build_lcs(true)
                 .build_select_support(true)
                 .run();
             sbwt_indices.push((sbwt, lcs));
@@ -898,8 +898,8 @@ mod tests {
     fn smaller_values_of_k() {
         // All possible 2-mers.
         let seqs = vec![b"AACCGGTTAGCTGATCA".to_vec()];
-        let (sbwt, lcs) = SbwtIndexBuilder::new(init_bitpacked_kmer_sorting_from_vecs(&seqs))
-            .k(3).build_lcs(true)
+        let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, 3)
+            .build_lcs(true)
             .build_select_support(true)
             .run();
         let lcs = lcs.unwrap();
