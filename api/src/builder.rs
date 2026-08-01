@@ -536,3 +536,45 @@ impl BuildByBoundedSuffixSort<JSeqIOSeqStreamWrapper> {
         BuildByBoundedSuffixSort::new(input, k)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All three construction algorithms must produce exactly the same index and LCS array.
+    #[test]
+    fn all_algorithms_agree() {
+        // The input has 540 k-mers in total. With k = 5 there are 4^5 = 1024 distinct k-mers,
+        // so repeated k-mers are a certainty, while only about 40% of all possible k-mers
+        // occur, which keeps the k-mer set sparse.
+        let k = 5;
+        let seqs: Vec<Vec<u8>> = (0..8_u64).map(|i| {
+            crate::util::gen_random_dna_string(50 + 7 * i as usize, 1234 + i)
+        }).collect();
+
+        for add_all_dummy_paths in [false, true] {
+            let (mem_sbwt, mem_lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k)
+                .build_lcs(true)
+                .add_all_dummy_paths(add_all_dummy_paths)
+                .run();
+
+            let (disk_sbwt, disk_lcs) = BitPackedKmerSortingDisk::new_from_vecs(&seqs, k)
+                .build_lcs(true)
+                .add_all_dummy_paths(add_all_dummy_paths)
+                .temp_dir(&std::env::temp_dir())
+                .run();
+
+            let (bounded_sbwt, bounded_lcs) = BuildByBoundedSuffixSort::new_from_vecs(&seqs, k)
+                .build_lcs(true)
+                .add_all_dummy_paths(add_all_dummy_paths)
+                .run();
+
+            assert_eq!(mem_sbwt, disk_sbwt);
+            assert_eq!(mem_sbwt, bounded_sbwt);
+
+            assert!(mem_lcs.is_some());
+            assert_eq!(mem_lcs, disk_lcs);
+            assert_eq!(mem_lcs, bounded_lcs);
+        }
+    }
+}
