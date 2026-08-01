@@ -29,13 +29,13 @@
 //! // Build the sbwt
 //! let seqs: Vec<&[u8]> = vec![b"AACTGACTGATCGTCTTGACTCGTTTATCTACGGT", b"ACTGACAGCTCTGCGATGCGA"];
 //! let seq_stream = sbwt::SliceSeqStream::new(seqs.as_slice());
-//! let (sbwt, lcs) = SbwtIndexBuilder::new()
+//! let algo = init_bitpacked_kmer_sorting_disk_from_slices(&seqs)
+//!     .mem_gb(2)
+//!     .dedup_batches(false)
+//!     .temp_dir(Path::new("./temp"));
+//! let (sbwt, lcs) = SbwtIndexBuilder::new(algo)
 //!     .k(6).n_threads(4).build_lcs(true).add_rev_comp(true)
-//!     .algorithm(BitPackedKmerSortingDisk::new()
-//!         .mem_gb(2)
-//!         .dedup_batches(false)
-//!         .temp_dir(Path::new("./temp")))
-//!     .run(seq_stream);
+//!     .run();
 //!
 //! // Query a k-mer
 //! let query_kmer = b"GACTCG";
