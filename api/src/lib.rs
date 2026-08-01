@@ -128,6 +128,8 @@
 // Construction algorithms
 mod bitpacked_kmer_sorting;
 mod bitpacked_kmer_sorting_mem;
+pub mod alternative_construction;
+pub mod bounded_alternative_construction;
 
 mod tempfile;
 mod util;
@@ -135,6 +137,7 @@ mod kmer;
 mod compact_int_vector;
 
 pub mod dbg;
+pub mod vodbg;
 pub mod benchmark;
 
 mod sdsl_compatibility;

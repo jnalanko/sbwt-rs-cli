@@ -279,7 +279,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                         }
 
                         n_unitigs.fetch_add(1, Release);
-                    });
+                     });
 
                     log::info!("Iterating cyclic unitigs");
 

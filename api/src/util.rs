@@ -160,6 +160,11 @@ impl crate::SeqStream for VecSeqStream<'_> {
     } 
 }
 
+impl<'a> Clone for VecSeqStream<'a> {
+    fn clone(&self) -> Self {
+        Self { seqs: self.seqs, cur_seq_idx: self.cur_seq_idx }
+    }
+}
 
 // This function runs in parallel, so a rayon thread pool must be initialized.
 pub(crate) fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
