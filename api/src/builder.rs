@@ -163,7 +163,7 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
     }
 
 
-    fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
         let (mut sbwt, lcs) = match self.k {
@@ -314,7 +314,7 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
         self
     }
 
-    fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
         let (mut sbwt, lcs) = match self.k {
             0..=32 => {
