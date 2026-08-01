@@ -212,12 +212,10 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
     let (sbwt, lcs) = if in_memory {
-        let algo = BitPackedKmerSortingMem::new(reader).mem_gb(mem_gb).dedup_batches(dedup_batches);
-        let builder = SbwtIndexBuilder::new(algo).k(k).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        let builder = BitPackedKmerSortingMem::new(reader, k).mem_gb(mem_gb).dedup_batches(dedup_batches).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     } else {
-        let algo = BitPackedKmerSortingDisk::new(reader).mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir);
-        let builder = SbwtIndexBuilder::new(algo).k(k).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        let builder = BitPackedKmerSortingDisk::new(reader, k).mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     };
     let end_time = std::time::Instant::now();
