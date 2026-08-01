@@ -164,11 +164,9 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
 
 
     fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        let mem_gb = self.mem_gb;
-        let dedup_batches = self.dedup_batches;
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
-        match self.k {
+        let (mut sbwt, lcs) = match self.k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
@@ -185,9 +183,20 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
                 crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             _ => {
-                panic!("k > 256 not supported with bitpacked sorting algorithm.");
+                panic!("k > 256 not supported with a bitpacked sorting algorithm.");
             }
+        };
+
+        if self.build_select_support {
+            sbwt.build_select();
         }
+
+        if sbwt.get_lookup_table().prefix_length != self.precalc_length {
+            let lut = PrefixLookupTable::new(&sbwt, self.precalc_length);
+            sbwt.set_lookup_table(lut);
+        }
+
+        (sbwt, lcs)
     }
 }
 
@@ -307,7 +316,7 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
 
     fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
-        match self.k {
+        let (mut sbwt, lcs) = match self.k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
@@ -324,85 +333,9 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
                 crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
             _ => {
-                panic!("k > 256 not supported with bitpacked sorting algorithm.");
+                panic!("k > 256 not supported with a bitpacked sorting algorithm.");
             }
-        }
-    }
-}
-
-/// A builder for constructing an SBWT index.
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct SbwtIndexBuilder<A: SbwtConstructionAlgorithm> {
-    k: usize,
-    n_threads: usize,
-    algorithm: A,
-    build_lcs: bool,
-    add_rev_comp: bool,
-    build_select_support: bool,
-    precalc_length: usize,
-    add_all_dummy_paths: bool,
-}
-
-impl<A: SbwtConstructionAlgorithm> SbwtIndexBuilder<A> {
-
-    /// Sets up the builder with default values:
-    /// - k = 31.
-    /// - n_threads = 4.
-    /// - do not build the LCS array.
-    /// - do not add the reverse complement of the input sequences.
-    /// - do not build the select support.
-    /// - precalc_length = 8.
-    /// - default settings for the chosen algorithm.
-    pub fn new(algorithm: A) -> Self {
-        Self{k: 31, n_threads: 4, algorithm, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: 8, add_all_dummy_paths: false}
-    }
-
-    /// Sets the k-mer length.
-    pub fn k(mut self, k: usize) -> Self {
-        self.k = k;
-        self
-    }
-
-    /// Whether to build the LCS array.
-    pub fn build_lcs(mut self, enable: bool) -> Self {
-        self.build_lcs = enable;
-        self
-    }
-
-    /// Whether to build the select support.
-    pub fn build_select_support(mut self, enable: bool) -> Self {
-        self.build_select_support = enable;
-        self
-    }
-
-    /// Whether to add the reverse complement of the input sequences.
-    pub fn add_rev_comp(mut self, enable: bool) -> Self {
-        self.add_rev_comp = enable;
-        self
-    }
-
-    /// Set the length of the prefix in the prefix lookup table.
-    pub fn precalc_length(mut self, precalc_length: usize) -> Self {
-        self.precalc_length = precalc_length;
-        self
-    }
-
-    /// Set the number of threads to use.
-    pub fn n_threads(mut self, n_threads: usize) -> Self {
-        self.n_threads = n_threads;
-        self
-    }
-
-    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
-    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
-        self.add_all_dummy_paths = enable;
-        self
-    }
-
-    /// Run the algorithm and return the SBWT index and optionally the LCS array if [build_lcs](SbwtIndexBuilder::build_lcs) was set.
-    /// The input is determined by the construction algorithm given to [new](SbwtIndexBuilder::new).
-    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        let (mut sbwt, lcs) = self.algorithm.run(self.k, self.n_threads, self.build_lcs, self.add_all_dummy_paths, self.add_rev_comp);
+        };
 
         if self.build_select_support {
             sbwt.build_select();
@@ -414,5 +347,5 @@ impl<A: SbwtConstructionAlgorithm> SbwtIndexBuilder<A> {
         }
 
         (sbwt, lcs)
-    } 
+    }
 }
