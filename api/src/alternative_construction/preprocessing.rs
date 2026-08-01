@@ -133,7 +133,7 @@ impl<'a> Clone for SeqReader<'a> {
     }
 }
 
-pub(super) fn sanitise(data: &mut [u8]) {
+pub(crate) fn sanitise(data: &mut [u8]) {
     for k in data {
         if CHAR_TO_INDEX[(*k) as usize] > 5 {
             *k = b'$';
