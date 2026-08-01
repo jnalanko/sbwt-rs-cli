@@ -75,32 +75,6 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
         Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 1, build_lcs: false, add_rev_comp: true, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, temp_dir: std::path::PathBuf::from_str(".").unwrap()}
     }
 
-    /// Initialize the algorithm for a slice of ASCII sequences, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_slices<'a>(input: &'a[&'a [u8]], k: usize) -> BitPackedKmerSortingDisk<crate::SliceSeqStream<'a>> {
-        let stream = crate::util::SliceSeqStream::new(input);
-        BitPackedKmerSortingDisk::new(stream, k)
-    }
-
-    /// Initialize the algorithm for a slice of owned ASCII sequences, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_vecs<'a>(input: &'a[Vec<u8>], k: usize) -> BitPackedKmerSortingDisk<crate::VecSeqStream<'a>> {
-        let stream = crate::util::VecSeqStream::new(input);
-        BitPackedKmerSortingDisk::new(stream, k)
-    } 
-
-    /// Initialize the algorithm for a fasta file, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> BitPackedKmerSortingDisk<JSeqIOSeqStreamWrapper> {
-        let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
-        BitPackedKmerSortingDisk::new(input, k)
-    } 
-
-    /// Initialize the algorithm for a fastq file, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> BitPackedKmerSortingDisk<JSeqIOSeqStreamWrapper> {
-        let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
-        BitPackedKmerSortingDisk::new(input, k)
-    } 
-
     /// Set the amount of memory to use in gigabytes. This is not strictly enforced, but the algorithm will try to stay within this limit.
     pub fn mem_gb(mut self, mem_gb: usize) -> Self {
         self.mem_gb = mem_gb;
@@ -200,6 +174,38 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
     }
 }
 
+impl<'a> BitPackedKmerSortingDisk<crate::SliceSeqStream<'a>> {
+    /// Initialize the algorithm for a slice of ASCII sequences, with the same defaults as [BitPackedKmerSortingDisk::new].
+    pub fn new_from_slices(input: &'a[&'a [u8]], k: usize) -> Self {
+        let stream = crate::util::SliceSeqStream::new(input);
+        BitPackedKmerSortingDisk::new(stream, k)
+    }
+}
+
+impl<'a> BitPackedKmerSortingDisk<crate::VecSeqStream<'a>> {
+    /// Initialize the algorithm for a slice of owned ASCII sequences, with the same defaults as [BitPackedKmerSortingDisk::new].
+    pub fn new_from_vecs(input: &'a[Vec<u8>], k: usize) -> Self {
+        let stream = crate::util::VecSeqStream::new(input);
+        BitPackedKmerSortingDisk::new(stream, k)
+    }
+}
+
+impl BitPackedKmerSortingDisk<JSeqIOSeqStreamWrapper> {
+    /// Initialize the algorithm for a fasta file, with the same defaults as [BitPackedKmerSortingDisk::new].
+    pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
+        let input = std::io::BufReader::new(input);
+        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        BitPackedKmerSortingDisk::new(input, k)
+    }
+
+    /// Initialize the algorithm for a fastq file, with the same defaults as [BitPackedKmerSortingDisk::new].
+    pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
+        let input = std::io::BufReader::new(input);
+        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        BitPackedKmerSortingDisk::new(input, k)
+    }
+}
+
 /// A construction algorithm based on sorting of bit-packed k-mers in entirely in RAM.
 /// Faster and scales better with parallelism than [BitPackedKmerSortingDisk], but takes
 /// more RAM.
@@ -232,32 +238,6 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
     pub fn new(input: SS, k: usize) -> Self {
         Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 1, build_lcs: false, add_rev_comp: true, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
     }
-
-    /// Initialize the algorithm for a slice of ASCII sequences, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_slices<'a>(input: &'a[&'a [u8]], k: usize) -> BitPackedKmerSortingMem<crate::SliceSeqStream<'a>> {
-        let stream = crate::util::SliceSeqStream::new(input);
-        BitPackedKmerSortingMem::new(stream, k)
-    }
-
-    /// Initialize the algorithm for a slice of owned ASCII sequences, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_vecs<'a>(input: &'a[Vec<u8>], k: usize) -> BitPackedKmerSortingMem<crate::VecSeqStream<'a>> {
-        let stream = crate::util::VecSeqStream::new(input);
-        BitPackedKmerSortingMem::new(stream, k)
-    } 
-
-    /// Initialize the algorithm for a fasta file, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> BitPackedKmerSortingMem<JSeqIOSeqStreamWrapper> {
-        let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
-        BitPackedKmerSortingMem::new(input, k)
-    } 
-
-    /// Initialize the algorithm for a fastq file, with the same defaults as [BitPackedKmerSortingMem::new].
-    pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> BitPackedKmerSortingMem<JSeqIOSeqStreamWrapper> {
-        let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
-        BitPackedKmerSortingMem::new(input, k)
-    } 
 
     /// Whether to deduplicate k-mer batches before sorting. If the input has many duplicate k-mers, this will reduce the disk space required by the algorithm.
     pub fn dedup_batches(mut self, enable: bool) -> Self {
@@ -347,5 +327,37 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
         }
 
         (sbwt, lcs)
+    }
+}
+
+impl<'a> BitPackedKmerSortingMem<crate::SliceSeqStream<'a>> {
+    /// Initialize the algorithm for a slice of ASCII sequences, with the same defaults as [BitPackedKmerSortingMem::new].
+    pub fn new_from_slices(input: &'a[&'a [u8]], k: usize) -> Self {
+        let stream = crate::util::SliceSeqStream::new(input);
+        BitPackedKmerSortingMem::new(stream, k)
+    }
+}
+
+impl<'a> BitPackedKmerSortingMem<crate::VecSeqStream<'a>> {
+    /// Initialize the algorithm for a slice of owned ASCII sequences, with the same defaults as [BitPackedKmerSortingMem::new].
+    pub fn new_from_vecs(input: &'a[Vec<u8>], k: usize) -> Self {
+        let stream = crate::util::VecSeqStream::new(input);
+        BitPackedKmerSortingMem::new(stream, k)
+    }
+}
+
+impl BitPackedKmerSortingMem<JSeqIOSeqStreamWrapper> {
+    /// Initialize the algorithm for a fasta file, with the same defaults as [BitPackedKmerSortingMem::new].
+    pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
+        let input = std::io::BufReader::new(input);
+        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        BitPackedKmerSortingMem::new(input, k)
+    }
+
+    /// Initialize the algorithm for a fastq file, with the same defaults as [BitPackedKmerSortingMem::new].
+    pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
+        let input = std::io::BufReader::new(input);
+        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        BitPackedKmerSortingMem::new(input, k)
     }
 }
