@@ -537,6 +537,221 @@ impl BuildByBoundedSuffixSort<JSeqIOSeqStreamWrapper> {
     }
 }
 
+/// A construction algorithm that uses the `libsais` crate to build a suffix array and an LCP
+/// array of the concatenation of the (reversed) input sequences, and derives the BWT and LCP
+/// that [crate::alternative_construction::build_from_input] expects from them. Like
+/// [BuildByBoundedSuffixSort], this algorithm holds the concatenation of the input sequences in
+/// memory, and is not limited to k <= 256.
+#[cfg(feature = "libsais")]
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct BuildByLibsais<SS: SeqStream + Send> {
+    input: SS,
+
+    k: usize,
+    n_threads: usize,
+    build_lcs: bool,
+    add_rev_comp: bool,
+    build_select_support: bool,
+    precalc_length: usize,
+    add_all_dummy_paths: bool,
+}
+
+#[cfg(feature = "libsais")]
+impl<SS: SeqStream + Send> BuildByLibsais<SS> {
+
+    /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
+    /// - 4 threads
+    /// - no LCS array
+    /// - no reverse complements added
+    /// - no select support
+    /// - precalc length min(8,k)
+    /// - add_all_dummy_paths = false
+    pub fn new(input: SS, k: usize) -> Self {
+        Self{input, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+    }
+
+    /// Sets the k-mer length.
+    pub fn k(mut self, k: usize) -> Self {
+        self.k = k;
+        self
+    }
+
+    /// Whether to build the LCS array.
+    pub fn build_lcs(mut self, enable: bool) -> Self {
+        self.build_lcs = enable;
+        self
+    }
+
+    /// Whether to build the select support.
+    pub fn build_select_support(mut self, enable: bool) -> Self {
+        self.build_select_support = enable;
+        self
+    }
+
+    /// Whether to add the reverse complement of the input sequences.
+    pub fn add_rev_comp(mut self, enable: bool) -> Self {
+        self.add_rev_comp = enable;
+        self
+    }
+
+    /// Set the length of the prefix in the prefix lookup table.
+    pub fn precalc_length(mut self, precalc_length: usize) -> Self {
+        self.precalc_length = precalc_length;
+        self
+    }
+
+    /// Set the number of threads for `libsais` to use to construct the suffix array and the LCP array.
+    pub fn n_threads(mut self, n_threads: usize) -> Self {
+        self.n_threads = n_threads;
+        self
+    }
+
+    /// Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.
+    pub fn add_all_dummy_paths(mut self, enable: bool) -> Self {
+        self.add_all_dummy_paths = enable;
+        self
+    }
+
+    /// Run the construction algorithm, consuming the input stream, and return the SBWT index and
+    /// the LCS array if [build_lcs](BuildByLibsais::build_lcs) was set, otherwise `None`.
+    ///
+    /// The input sequences are first read into a single concatenation in memory, separated by
+    /// the `$` character and preceded by the sentinel `#`. A suffix array and an LCP array of the
+    /// concatenation are then built with `libsais`, from which the BWT and LCP that
+    /// [crate::alternative_construction::build_from_input] expects are derived.
+    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
+        let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
+
+        let mut concatenation = Vec::<u8>::new();
+        crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
+
+        let (bwt_bytes, lcp_bytes) = libsais_bwt_and_lcp(&concatenation, self.n_threads);
+
+        let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
+            crate::alternative_construction::build_from_input::<_, _, SubsetMatrix>(
+                &mut bwt_bytes.as_slice(),
+                &mut lcp_bytes.as_slice(),
+                concatenation.len(),
+                self.k,
+                self.build_lcs,
+                self.add_all_dummy_paths,
+                false, // Counts are not part of the return value of this interface
+            ).unwrap();
+
+        if self.build_select_support {
+            sbwt.build_select();
+        }
+
+        if sbwt.get_lookup_table().prefix_length != self.precalc_length {
+            let lut = PrefixLookupTable::new(&sbwt, self.precalc_length);
+            sbwt.set_lookup_table(lut);
+        }
+
+        (sbwt, lcs)
+    }
+}
+
+#[cfg(feature = "libsais")]
+impl<'a> BuildByLibsais<crate::SliceSeqStream<'a>> {
+    /// Initialize the algorithm for a slice of ASCII sequences, with the same defaults as [BuildByLibsais::new].
+    pub fn new_from_slices(input: &'a[&'a [u8]], k: usize) -> Self {
+        let stream = crate::util::SliceSeqStream::new(input);
+        BuildByLibsais::new(stream, k)
+    }
+}
+
+#[cfg(feature = "libsais")]
+impl<'a> BuildByLibsais<crate::VecSeqStream<'a>> {
+    /// Initialize the algorithm for a slice of owned ASCII sequences, with the same defaults as [BuildByLibsais::new].
+    pub fn new_from_vecs(input: &'a[Vec<u8>], k: usize) -> Self {
+        let stream = crate::util::VecSeqStream::new(input);
+        BuildByLibsais::new(stream, k)
+    }
+}
+
+#[cfg(feature = "libsais")]
+impl BuildByLibsais<JSeqIOSeqStreamWrapper> {
+    /// Initialize the algorithm for a fasta file, with the same defaults as [BuildByLibsais::new].
+    pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
+        let input = std::io::BufReader::new(input);
+        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        BuildByLibsais::new(input, k)
+    }
+
+    /// Initialize the algorithm for a fastq file, with the same defaults as [BuildByLibsais::new].
+    pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
+        let input = std::io::BufReader::new(input);
+        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        BuildByLibsais::new(input, k)
+    }
+}
+
+/// Builds a suffix array and an LCP array of `concatenation` using `libsais`, and derives from
+/// them the ascii BWT bytes and the little-endian 64-bit LCP values that
+/// [crate::alternative_construction::preprocessing::ascii_to_bwt] and
+/// [crate::alternative_construction::preprocessing::truncate_lcp] (used internally by
+/// [crate::alternative_construction::build_from_input]) expect.
+///
+/// This relies on `'#'`, the sentinel character that
+/// [crate::alternative_construction::preprocessing::concatenate_sequences] places at the start
+/// of the concatenation, being byte-value-smaller than every other character used
+/// (`'#' < '$' < A,C,G,T` in ASCII) and occurring exactly once: `libsais`'s suffix array of
+/// `concatenation` (which behaves as if an even smaller, implicit sentinel were appended and
+/// then omitted from the output) then coincides exactly, position by position, with the plain
+/// byte-value suffix sort that [crate::alternative_construction] is built around, and the BWT can
+/// be derived from it with the ordinary `bwt[i] = concatenation[(sa[i] + n - 1) % n]` formula.
+#[cfg(feature = "libsais")]
+fn libsais_bwt_and_lcp(concatenation: &[u8], n_threads: usize) -> (Vec<u8>, Vec<u8>) {
+    if concatenation.len() <= libsais::LIBSAIS_I32_OUTPUT_MAXIMUM_SIZE {
+        run_libsais::<i32>(concatenation, n_threads)
+    } else {
+        run_libsais::<i64>(concatenation, n_threads)
+    }
+}
+
+#[cfg(feature = "libsais")]
+fn run_libsais<O: libsais::OutputElement>(concatenation: &[u8], n_threads: usize) -> (Vec<u8>, Vec<u8>) {
+    let sa_construction = libsais::SuffixArrayConstruction::for_text(concatenation).in_owned_buffer::<O>();
+    let sa_result = if n_threads > 1 {
+        sa_construction.multi_threaded(libsais::ThreadCount::fixed(n_threads as u16)).run()
+    } else {
+        sa_construction.single_threaded().run()
+    }.expect("libsais suffix array construction failed");
+
+    let plcp_construction = sa_result.plcp_construction();
+    let plcp_result = if n_threads > 1 {
+        plcp_construction.multi_threaded(libsais::ThreadCount::fixed(n_threads as u16)).run()
+    } else {
+        plcp_construction.single_threaded().run()
+    }.expect("libsais PLCP construction failed");
+
+    let lcp_construction = plcp_result.lcp_construction();
+    let lcp_result = if n_threads > 1 {
+        lcp_construction.multi_threaded(libsais::ThreadCount::fixed(n_threads as u16)).run()
+    } else {
+        lcp_construction.single_threaded().run()
+    }.expect("libsais LCP construction failed");
+
+    let (sa, lcp, _plcp, _is_generalized_suffix_array) = lcp_result.into_parts();
+    let n = concatenation.len();
+
+    let bwt_bytes: Vec<u8> = sa.iter()
+        .map(|&value| {
+            let i = value.to_usize().expect("suffix array value should fit in usize");
+            concatenation[(i + n - 1) % n]
+        })
+        .collect();
+
+    let mut lcp_bytes = Vec::<u8>::with_capacity(lcp.len() * size_of::<u64>());
+    for value in lcp {
+        let v = value.to_u64().expect("LCP value should fit in u64");
+        lcp_bytes.extend_from_slice(&v.to_le_bytes());
+    }
+
+    (bwt_bytes, lcp_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +790,16 @@ mod tests {
             assert!(mem_lcs.is_some());
             assert_eq!(mem_lcs, disk_lcs);
             assert_eq!(mem_lcs, bounded_lcs);
+
+            #[cfg(feature = "libsais")]
+            {
+                let (libsais_sbwt, libsais_lcs) = BuildByLibsais::new_from_vecs(&seqs, k)
+                    .build_lcs(true)
+                    .add_all_dummy_paths(add_all_dummy_paths)
+                    .run();
+                assert_eq!(mem_sbwt, libsais_sbwt);
+                assert_eq!(mem_lcs, libsais_lcs);
+            }
         }
     }
 }

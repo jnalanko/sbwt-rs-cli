@@ -175,6 +175,10 @@ fn build_command(matches: &clap::ArgMatches){
     let in_memory = matches.get_flag("in-memory");
     let bounded_suffix_sort = matches.get_flag("bounded-suffix-sort");
     let bucket_sort_prefix_length = *matches.get_one::<usize>("bucket-sort-prefix-length").unwrap();
+    #[cfg(feature = "libsais")]
+    let via_libsais = matches.get_flag("via-libsais");
+    #[cfg(not(feature = "libsais"))]
+    let via_libsais = false;
     let add_revcomp = matches.get_flag("add-revcomp");
     let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
     let precalc_length = *matches.get_one::<usize>("prefix-precalc-length").unwrap();
@@ -213,7 +217,17 @@ fn build_command(matches: &clap::ArgMatches){
  
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
-    let (sbwt, lcs) = if bounded_suffix_sort {
+    let (sbwt, lcs) = if via_libsais {
+        #[cfg(feature = "libsais")]
+        {
+            let builder = BuildByLibsais::new(reader, k).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+            builder.run()
+        }
+        #[cfg(not(feature = "libsais"))]
+        {
+            panic!("--via-libsais requires sbwt-cli to be built with `--features libsais`");
+        }
+    } else if bounded_suffix_sort {
         let builder = BuildByBoundedSuffixSort::new(reader, k).prefix_length_for_bucket_sort(bucket_sort_prefix_length).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     } else if in_memory {
@@ -927,6 +941,108 @@ fn stats_command(matches: &clap::ArgMatches) {
     println!("Number of sbwt sets: {}", index.n_sets());
 }
 
+fn build_subcommand() -> clap::Command {
+    #[allow(unused_mut)]
+    let mut cmd = clap::Command::new("build")
+        .about("Build the SBWT and possibly the LCS array")
+        .arg_required_else_help(true)
+        .arg(clap::Arg::new("input")
+            .help("Input fasta or fastq sequence file")
+            .short('i')
+            .long("input")
+            .required(true)
+            .value_parser(clap::value_parser!(std::path::PathBuf))
+        )
+        .arg(clap::Arg::new("input-list")
+            .help("A file containing a list of filenames of sequence lines, one per line")
+            .long("input-list")
+            .conflicts_with("input")
+            .value_parser(clap::value_parser!(std::path::PathBuf))
+        )
+        .arg(clap::Arg::new("output-prefix")
+            .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
+            .short('o')
+            .long("output-prefix")
+            .required(true)
+            .value_parser(clap::value_parser!(std::path::PathBuf))
+        )
+        .arg(clap::Arg::new("temp-dir")
+            .help("Directory for temporary files created during construction.")
+            .long("temp-dir")
+            .default_value(".")
+            .value_parser(clap::value_parser!(std::path::PathBuf))
+        )
+        .arg(clap::Arg::new("in-memory")
+            .help("Sort k-mers in memory. Faster, but requires a lot of memory.")
+            .long("in-memory")
+            .action(clap::ArgAction::SetTrue)
+        )
+        .arg(clap::Arg::new("bounded-suffix-sort")
+            .help("Build by sorting the k-bounded contexts of the input instead of sorting k-mers. Holds the concatenation of the input sequences in memory. Not limited to k <= 256. Ignores --mem-gb, --dedup-batches and --temp-dir.")
+            .long("bounded-suffix-sort")
+            .conflicts_with("in-memory")
+            .action(clap::ArgAction::SetTrue)
+        )
+        .arg(clap::Arg::new("bucket-sort-prefix-length")
+            .help("Length of the prefix used to bucket the contexts before sorting them. Only used with --bounded-suffix-sort.")
+            .long("bucket-sort-prefix-length")
+            .default_value("4")
+            .value_parser(clap::value_parser!(usize)))
+        .arg(clap::Arg::new("build-lcs")
+            .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
+            .short('l')
+            .long("build-lcs")
+            .action(clap::ArgAction::SetTrue)
+        )
+        .arg(clap::Arg::new("k")
+            .help("k-mer length")
+            .short('k')
+            .required(true)
+            .value_parser(clap::value_parser!(usize))
+        )
+        .arg(clap::Arg::new("mem-gb")
+            .help("An approximate memory budget for various buffers, in gigabytes. The total memory usage may be higher. The larger the budget, the more effective the deduplication is with --dedup-batches.")
+            .short('m')
+            .long("mem-gb")
+            .required(false)
+            .value_parser(clap::value_parser!(usize))
+            .default_value("8")
+        )
+        .arg(clap::Arg::new("dedup-batches")
+            .help("Slows down the construction, but reduces temporary disk space usage and memory if the data has many duplicate k-mers.")
+            .long("dedup-batches")
+            .short('d')
+            .action(clap::ArgAction::SetTrue)
+        )
+        .arg(clap::Arg::new("add-revcomp")
+            .help("Add reverse reverse complements of all k-mers to the index.")
+            .long("add-revcomp")
+            .short('r')
+            .action(clap::ArgAction::SetTrue))
+        .arg(clap::Arg::new("add-all-dummy-paths")
+            .help("Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.")
+            .long("add-all-dummy-paths")
+            .action(clap::ArgAction::SetTrue))
+        .arg(clap::Arg::new("prefix-precalc-length")
+            .help("Prefix precalc lookup table prefix length p. Larger p speeds up queries, but the table takes 4^(p+2) bytes of space.")
+            .long("prefix-precalc")
+            .short('p')
+            .default_value("8")
+            .value_parser(clap::value_parser!(usize)));
+
+    #[cfg(feature = "libsais")]
+    {
+        cmd = cmd.arg(clap::Arg::new("via-libsais")
+            .help("Build by constructing a suffix array and LCP array of the concatenation of the input with the libsais library, and deriving the SBWT from those. Holds the concatenation of the input sequences in memory, and is not limited to k <= 256.")
+            .long("via-libsais")
+            .conflicts_with_all(["in-memory", "bounded-suffix-sort"])
+            .action(clap::ArgAction::SetTrue)
+        );
+    }
+
+    cmd
+}
+
 fn main() {
 
     let cli = clap::Command::new("sbwt")
@@ -947,93 +1063,7 @@ fn main() {
             .global(true)
             .action(clap::ArgAction::SetTrue)
         )
-        .subcommand(clap::Command::new("build")
-            .about("Build the SBWT and possibly the LCS array")
-            .arg_required_else_help(true)
-            .arg(clap::Arg::new("input")
-                .help("Input fasta or fastq sequence file")
-                .short('i')
-                .long("input")
-                .required(true)
-                .value_parser(clap::value_parser!(std::path::PathBuf))
-            )
-            .arg(clap::Arg::new("input-list")
-                .help("A file containing a list of filenames of sequence lines, one per line")
-                .long("input-list")
-                .conflicts_with("input")
-                .value_parser(clap::value_parser!(std::path::PathBuf))
-            )
-            .arg(clap::Arg::new("output-prefix")
-                .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
-                .short('o')
-                .long("output-prefix")
-                .required(true)
-                .value_parser(clap::value_parser!(std::path::PathBuf))
-            )
-            .arg(clap::Arg::new("temp-dir")
-                .help("Directory for temporary files created during construction.")
-                .long("temp-dir")
-                .default_value(".")
-                .value_parser(clap::value_parser!(std::path::PathBuf))
-            )
-            .arg(clap::Arg::new("in-memory")
-                .help("Sort k-mers in memory. Faster, but requires a lot of memory.")
-                .long("in-memory")
-                .action(clap::ArgAction::SetTrue)
-            )
-            .arg(clap::Arg::new("bounded-suffix-sort")
-                .help("Build by sorting the k-bounded contexts of the input instead of sorting k-mers. Holds the concatenation of the input sequences in memory. Not limited to k <= 256. Ignores --mem-gb, --dedup-batches and --temp-dir.")
-                .long("bounded-suffix-sort")
-                .conflicts_with("in-memory")
-                .action(clap::ArgAction::SetTrue)
-            )
-            .arg(clap::Arg::new("bucket-sort-prefix-length")
-                .help("Length of the prefix used to bucket the contexts before sorting them. Only used with --bounded-suffix-sort.")
-                .long("bucket-sort-prefix-length")
-                .default_value("4")
-                .value_parser(clap::value_parser!(usize)))
-            .arg(clap::Arg::new("build-lcs")
-                .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
-                .short('l')
-                .long("build-lcs")
-                .action(clap::ArgAction::SetTrue)
-            )
-            .arg(clap::Arg::new("k")
-                .help("k-mer length")
-                .short('k')
-                .required(true)
-                .value_parser(clap::value_parser!(usize))
-            )
-            .arg(clap::Arg::new("mem-gb")
-                .help("An approximate memory budget for various buffers, in gigabytes. The total memory usage may be higher. The larger the budget, the more effective the deduplication is with --dedup-batches.")
-                .short('m')
-                .long("mem-gb")
-                .required(false)
-                .value_parser(clap::value_parser!(usize))
-                .default_value("8")
-            )
-            .arg(clap::Arg::new("dedup-batches")
-                .help("Slows down the construction, but reduces temporary disk space usage and memory if the data has many duplicate k-mers.")
-                .long("dedup-batches")
-                .short('d')
-                .action(clap::ArgAction::SetTrue)
-            )
-            .arg(clap::Arg::new("add-revcomp")
-                .help("Add reverse reverse complements of all k-mers to the index.")
-                .long("add-revcomp")
-                .short('r')
-                .action(clap::ArgAction::SetTrue))
-            .arg(clap::Arg::new("add-all-dummy-paths")
-                .help("Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.")
-                .long("add-all-dummy-paths")
-                .action(clap::ArgAction::SetTrue))
-            .arg(clap::Arg::new("prefix-precalc-length")
-                .help("Prefix precalc lookup table prefix length p. Larger p speeds up queries, but the table takes 4^(p+2) bytes of space.")
-                .long("prefix-precalc")
-                .short('p')
-                .default_value("8")
-                .value_parser(clap::value_parser!(usize)))
-        )
+        .subcommand(build_subcommand())
         .subcommand(clap::Command::new("build-lcs")
             .arg_required_else_help(true)
             .about("Build the LCS array given an existing SBWT. Note that it's also possible build the SBWT and the LCS at the same time with the build-command.")
