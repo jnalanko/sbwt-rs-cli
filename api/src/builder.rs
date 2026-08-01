@@ -64,15 +64,15 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
     /// - Use the current directory as the temporary directory.
     /// - 8 GiB memory
-    /// - 1 thread
+    /// - 4 threads
     /// - no LCS array
-    /// - reverse complements added
+    /// - no reverse complements added
     /// - no select support
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
     /// - dedup_batches = false
     pub fn new(input: SS, k: usize) -> Self {
-        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 1, build_lcs: false, add_rev_comp: true, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, temp_dir: std::path::PathBuf::from_str(".").unwrap()}
+        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, temp_dir: std::path::PathBuf::from_str(".").unwrap()}
     }
 
     /// Set the amount of memory to use in gigabytes. This is not strictly enforced, but the algorithm will try to stay within this limit.
@@ -231,15 +231,15 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
 
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
     /// - 8 GiB memory
-    /// - 1 thread
+    /// - 4 threads
     /// - no LCS array
-    /// - reverse complements added
+    /// - no reverse complements added
     /// - no select support
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
     /// - dedup_batches = false
     pub fn new(input: SS, k: usize) -> Self {
-        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 1, build_lcs: false, add_rev_comp: true, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
     }
 
     /// Whether to deduplicate k-mer batches before sorting. If the input has many duplicate k-mers, this will reduce the disk space required by the algorithm.
