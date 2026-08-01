@@ -29,7 +29,8 @@
 //! // Build the sbwt
 //! let seqs: Vec<&[u8]> = vec![b"AACTGACTGATCGTCTTGACTCGTTTATCTACGGT", b"ACTGACAGCTCTGCGATGCGA"];
 //! let seq_stream = sbwt::SliceSeqStream::new(seqs.as_slice());
-//! let (sbwt, lcs) = BitPackedKmerSortingDisk::new_from_slices(&seqs, 6)
+//! let k = 6;
+//! let (sbwt, lcs) = BitPackedKmerSortingDisk::new_from_slices(&seqs, k)
 //!     .mem_gb(2)
 //!     .dedup_batches(false)
 //!     .temp_dir(Path::new("./temp"))
