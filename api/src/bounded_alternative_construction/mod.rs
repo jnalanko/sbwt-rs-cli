@@ -172,9 +172,6 @@ pub fn par_bounded_context_suffix_array_bucket_sort(input: &mut Vec<u8>, k: usiz
 
     {
         // Sort the suffixes into buckets.
-        let mut indices = Vec::<usize>::with_capacity(length);
-        indices.extend(0..length);
-
         let mut buckets_scratch = Vec::<usize>::with_capacity(buckets.len());
         let mut last = 1;
         buckets_scratch.push(last);
@@ -184,9 +181,7 @@ pub fn par_bounded_context_suffix_array_bucket_sort(input: &mut Vec<u8>, k: usiz
         }
 
 
-        #[allow(clippy::needless_range_loop)]
-        for i in 1..indices.len() {
-            let item = indices[i];
+        for item in 1..length {
             let bucket = identify_bucket(item);
             let index_in_swap = buckets_scratch[bucket];
             buckets_scratch[bucket] += 1;
