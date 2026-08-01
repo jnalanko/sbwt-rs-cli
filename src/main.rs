@@ -173,6 +173,8 @@ fn build_command(matches: &clap::ArgMatches){
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
     let dedup_batches = matches.get_flag("dedup-batches");
     let in_memory = matches.get_flag("in-memory");
+    let bounded_suffix_sort = matches.get_flag("bounded-suffix-sort");
+    let bucket_sort_prefix_length = *matches.get_one::<usize>("bucket-sort-prefix-length").unwrap();
     let add_revcomp = matches.get_flag("add-revcomp");
     let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
     let precalc_length = *matches.get_one::<usize>("prefix-precalc-length").unwrap();
@@ -211,7 +213,10 @@ fn build_command(matches: &clap::ArgMatches){
  
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
-    let (sbwt, lcs) = if in_memory {
+    let (sbwt, lcs) = if bounded_suffix_sort {
+        let builder = BuildByBoundedSuffixSort::new(reader, k).prefix_length_for_bucket_sort(bucket_sort_prefix_length).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        builder.run()
+    } else if in_memory {
         let builder = BitPackedKmerSortingMem::new(reader, k).mem_gb(mem_gb).dedup_batches(dedup_batches).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     } else {
@@ -976,6 +981,17 @@ fn main() {
                 .long("in-memory")
                 .action(clap::ArgAction::SetTrue)
             )
+            .arg(clap::Arg::new("bounded-suffix-sort")
+                .help("Build by sorting the k-bounded contexts of the input instead of sorting k-mers. Holds the concatenation of the input sequences in memory. Not limited to k <= 256. Ignores --mem-gb, --dedup-batches and --temp-dir.")
+                .long("bounded-suffix-sort")
+                .conflicts_with("in-memory")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("bucket-sort-prefix-length")
+                .help("Length of the prefix used to bucket the contexts before sorting them. Only used with --bounded-suffix-sort.")
+                .long("bucket-sort-prefix-length")
+                .default_value("4")
+                .value_parser(clap::value_parser!(usize)))
             .arg(clap::Arg::new("build-lcs")
                 .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
                 .short('l')
