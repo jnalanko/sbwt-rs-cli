@@ -497,6 +497,6 @@ fn strip_redundant_from_rows(
 
 // Converts an SbwtIndex<SubsetMatrix> to SbwtIndex<SS> by re-extracting the bit matrix.
 // Used in the dummy-repair path of intersect when we need to merge the partial intersection (type SS)
-// with an auxiliary index built by SbwtIndexBuilder (which always returns SubsetMatrix).
+// with an auxiliary index built by BitPackedKmerSortingMem (which always returns SubsetMatrix).
 // Since SubsetMatrix is the only SubsetSeq implementation in practice, SS = SubsetMatrix always,
 // and this conversion is effectively a no-op at runtime, but is needed to satisfy the type checker.

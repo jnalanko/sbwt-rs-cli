@@ -17,7 +17,7 @@ fn file_size(path: &Path) -> usize {
     std::fs::metadata(path).unwrap().len() as usize
 }
 
-/// Build using bitpacked k-mer sorting. See [SbwtIndexBuilder](crate::builder::SbwtIndexBuilder) for a wrapper with a more 
+/// Build using bitpacked k-mer sorting. See [BitPackedKmerSortingDisk](crate::builder::BitPackedKmerSortingDisk) for a wrapper with a more
 /// user-friendly interface. B is the number u64 words in a k-mer.
 pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, build_lcs: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (SbwtIndex::<SS>, Option<LcsArray>) {
 

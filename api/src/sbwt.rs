@@ -1,4 +1,5 @@
-//! The [SbwtIndex] data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder).
+//! The [SbwtIndex] data structure. Construct with [BitPackedKmerSortingMem](crate::BitPackedKmerSortingMem)
+//! or [BitPackedKmerSortingDisk](crate::BitPackedKmerSortingDisk).
 
 use std::io::Read;
 use std::io::Write;
@@ -22,7 +23,7 @@ use crate::util::DNA_ALPHABET;
 
 pub const CARGO_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The SBWT index data structure. Construct with [SbwtIndexBuilder](crate::SbwtIndexBuilder). For the [SubsetSeq] trait implementation,  we recommend using the bit matrix implementation [SubsetMatrix]. 
+/// The SBWT index data structure. Construct with [BitPackedKmerSortingMem](crate::BitPackedKmerSortingMem) or [BitPackedKmerSortingDisk](crate::BitPackedKmerSortingDisk). For the [SubsetSeq] trait implementation,  we recommend using the bit matrix implementation [SubsetMatrix].
 ///
 /// # SBWT index 
 /// 

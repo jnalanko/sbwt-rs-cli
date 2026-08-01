@@ -10,7 +10,7 @@ use kmer_splitter::get_bitpacked_sorted_distinct_kmers;
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, util::DNA_ALPHABET};
 /// Build SBWT and optionally the LCS array fully in memory using bitpacked k-mer sorting.
 ///
-/// See [SbwtIndexBuilder](crate::builder::SbwtIndexBuilder) for a wrapper with a more
+/// See [BitPackedKmerSortingMem](crate::builder::BitPackedKmerSortingMem) for a wrapper with a more
 /// user-friendly interface. B is the number u64 words in a k-mer.
 ///
 /// Unused arguments for signature compatibility with the disk based building algorithm.
