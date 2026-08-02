@@ -1,6 +1,7 @@
 //! Standalone harness (not run by `cargo test`) that drives the `sbwt` CLI through all four
 //! construction algorithms on the same input and checks that they all produce byte-identical
-//! `.sbwt` and `.lcs` output.
+//! `.sbwt` and `.lcs` output. Each run is wrapped in `/usr/bin/time -v` to measure wall-clock
+//! time and peak resident memory.
 //!
 //! Usage:
 //!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input <FILE> -k <K>
@@ -9,6 +10,9 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
+
+const TIME_BIN: &str = "/usr/bin/time";
 
 struct Algorithm {
     name: &'static str,
@@ -21,6 +25,14 @@ const ALGORITHMS: &[Algorithm] = &[
     Algorithm { name: "bounded-suffix-sort", extra_args: &["--bounded-suffix-sort"] },
     Algorithm { name: "libsais", extra_args: &["--via-libsais"] },
 ];
+
+struct AlgoRun {
+    name: &'static str,
+    prefix: PathBuf,
+    success: bool,
+    elapsed: Duration,
+    peak_rss_kb: Option<u64>,
+}
 
 fn main() {
     let matches = clap::Command::new("sbwt-construction-test-harness")
@@ -74,6 +86,14 @@ fn main() {
             .action(clap::ArgAction::SetTrue))
         .get_matches();
 
+    if !Path::new(TIME_BIN).is_file() {
+        eprintln!(
+            "error: {TIME_BIN} not found. This harness uses GNU time to measure wall-clock \
+             time and peak memory (e.g. `apt install time` on Debian/Ubuntu)."
+        );
+        std::process::exit(2);
+    }
+
     let input = matches.get_one::<PathBuf>("input");
     let input_list = matches.get_one::<PathBuf>("input-list");
     let (input_arg, input_path) = match (input, input_list) {
@@ -121,16 +141,16 @@ fn main() {
     println!("output dir:      {}", out_dir.display());
     println!("k = {k}\n");
 
-    let mut prefixes = Vec::new();
-    let mut failed = Vec::new();
+    let mut runs = Vec::new();
 
     for algo in ALGORITHMS {
         print!("Building with {:<21} ... ", algo.name);
         std::io::stdout().flush().ok();
 
         let prefix = out_dir.join(algo.name);
-        let mut cmd = Command::new(&sbwt_bin);
-        cmd.arg("--threads").arg(threads.to_string())
+        let mut cmd = Command::new(TIME_BIN);
+        cmd.arg("-v").arg(&sbwt_bin)
+            .arg("--threads").arg(threads.to_string())
             .arg("build")
             .arg(input_arg).arg(input_path)
             .arg("-k").arg(k.to_string())
@@ -145,21 +165,32 @@ fn main() {
         }
         cmd.args(algo.extra_args);
 
-        let output = cmd.output().expect("failed to run sbwt executable");
-        if output.status.success() {
-            println!("ok");
-            prefixes.push((algo.name, prefix));
+        let wall_clock_start = Instant::now();
+        let output = cmd.output().expect("failed to run /usr/bin/time");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        let success = output.status.success();
+        let elapsed = parse_elapsed(&stderr).unwrap_or_else(|| wall_clock_start.elapsed());
+        let peak_rss_kb = parse_max_rss_kb(&stderr);
+
+        if success {
+            println!("ok ({})", format_duration(elapsed));
         } else {
-            println!("FAILED (exit {:?})", output.status.code());
-            eprintln!(
-                "--- stderr for {} ---\n{}",
-                algo.name,
-                String::from_utf8_lossy(&output.stderr)
-            );
-            failed.push(algo.name);
+            println!("FAILED (exit {:?}, {})", output.status.code(), format_duration(elapsed));
+            eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
+            if algo.name == "libsais" && stderr.contains("--features libsais") {
+                eprintln!(
+                    "Rebuild the sbwt binary with the libsais feature enabled: \
+                     `cargo build --release --features \"tests libsais\"`."
+                );
+            }
         }
+        runs.push(AlgoRun { name: algo.name, prefix, success, elapsed, peak_rss_kb });
     }
 
+    print_measurements(&runs);
+
+    let failed: Vec<&str> = runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
     if !failed.is_empty() {
         eprintln!("\n{} algorithm(s) failed to build: {}", failed.len(), failed.join(", "));
         cleanup(&out_dir, keep);
@@ -167,30 +198,30 @@ fn main() {
     }
 
     println!();
+    let successes: Vec<&AlgoRun> = runs.iter().filter(|r| r.success).collect();
     let mut mismatches = Vec::new();
     for ext in ["sbwt", "lcs"] {
-        let (baseline_name, baseline_prefix) = &prefixes[0];
-        let baseline_path = with_ext(baseline_prefix, ext);
+        let baseline = successes[0];
+        let baseline_path = with_ext(&baseline.prefix, ext);
         let baseline_bytes = std::fs::read(&baseline_path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", baseline_path.display()));
 
-        for (name, prefix) in &prefixes[1..] {
-            let path = with_ext(prefix, ext);
+        for run in &successes[1..] {
+            let path = with_ext(&run.prefix, ext);
             let bytes = std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
             match first_difference(&baseline_bytes, &bytes) {
                 None => println!(
-                    "{name:<21} .{ext} matches {baseline_name} ({} bytes)",
-                    bytes.len()
+                    "{:<21} .{ext} matches {} ({} bytes)",
+                    run.name, baseline.name, bytes.len()
                 ),
                 Some(offset) => {
                     println!(
-                        "{name:<21} .{ext} MISMATCH vs {baseline_name} \
+                        "{:<21} .{ext} MISMATCH vs {} \
                          (first differing byte at offset {offset}, sizes {} vs {})",
-                        baseline_bytes.len(),
-                        bytes.len()
+                        run.name, baseline.name, baseline_bytes.len(), bytes.len()
                     );
-                    mismatches.push(format!("{name} .{ext} vs {baseline_name}"));
+                    mismatches.push(format!("{} .{ext} vs {}", run.name, baseline.name));
                 }
             }
         }
@@ -199,11 +230,50 @@ fn main() {
     cleanup(&out_dir, keep);
 
     if mismatches.is_empty() {
-        println!("\nAll {} construction algorithms agree.", prefixes.len());
+        println!("\nAll {} construction algorithms agree.", successes.len());
     } else {
         eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
         std::process::exit(1);
     }
+}
+
+/// Parses the "Maximum resident set size (kbytes): N" line from `/usr/bin/time -v` output.
+/// The value is whatever follows the last "): " on the line (the label's closing paren).
+fn parse_max_rss_kb(time_v_output: &str) -> Option<u64> {
+    let line = time_v_output.lines().find(|l| l.contains("Maximum resident set size"))?;
+    line.rsplit("): ").next()?.trim().parse().ok()
+}
+
+/// Parses the "Elapsed (wall clock) time (h:mm:ss or m:ss): H:MM:SS" or "M:SS.ss" line
+/// from `/usr/bin/time -v` output.
+fn parse_elapsed(time_v_output: &str) -> Option<Duration> {
+    let line = time_v_output.lines().find(|l| l.contains("Elapsed (wall clock) time"))?;
+    let value = line.rsplit("): ").next()?.trim();
+
+    let parts: Vec<&str> = value.split(':').collect();
+    let mut seconds = 0f64;
+    for (i, part) in parts.iter().rev().enumerate() {
+        let unit: f64 = part.parse().ok()?;
+        seconds += unit * 60f64.powi(i as i32);
+    }
+    Some(Duration::from_secs_f64(seconds))
+}
+
+fn print_measurements(runs: &[AlgoRun]) {
+    println!("\n{:<21} {:>10} {:>14}", "algorithm", "time", "peak RSS");
+    for r in runs {
+        let time_str = format_duration(r.elapsed);
+        let mem_str = match r.peak_rss_kb {
+            Some(kb) => format!("{:.1} MiB", kb as f64 / 1024.0),
+            None => "n/a".to_string(),
+        };
+        let name = if r.success { r.name.to_string() } else { format!("{} (failed)", r.name) };
+        println!("{name:<21} {time_str:>10} {mem_str:>14}");
+    }
+}
+
+fn format_duration(d: Duration) -> String {
+    format!("{:.2}s", d.as_secs_f64())
 }
 
 fn cleanup(out_dir: &Path, keep: bool) {
