@@ -180,6 +180,7 @@ fn main() {
     }
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
+    let verbose = matches.get_flag("verbose");
     let fuzz = matches.get_flag("fuzz");
 
     let explicit = |id: &str| matches.value_source(id) == Some(ValueSource::CommandLine);
@@ -245,7 +246,7 @@ fn main() {
     for (i, params) in combos.iter().enumerate() {
         let combo_dir = if combos.len() > 1 { out_dir.join(params.dir_name(i)) } else { out_dir.clone() };
         let label = if combos.len() > 1 { Some(params.label()) } else { None };
-        outcomes.push(run_combo(&sbwt_bin, input_arg, input_path, k, mem_gb, params, &combo_dir, label.as_deref()));
+        outcomes.push(run_combo(&sbwt_bin, input_arg, input_path, k, mem_gb, verbose, params, &combo_dir, label.as_deref()));
     }
 
     cleanup(&out_dir, keep);
@@ -276,6 +277,7 @@ fn run_combo(
     input_path: &Path,
     k: usize,
     mem_gb: usize,
+    verbose: bool,
     params: &Params,
     combo_dir: &Path,
     label: Option<&str>,
@@ -292,8 +294,12 @@ fn run_combo(
 
         let prefix = combo_dir.join(algo.name);
         let mut cmd = Command::new(TIME_BIN);
-        cmd.arg("-v").arg(sbwt_bin)
-            .arg("--threads").arg(params.threads.to_string())
+        // The first "-v" here is /usr/bin/time's own verbose flag, not sbwt's.
+        cmd.arg("-v").arg(sbwt_bin);
+        if verbose {
+            cmd.arg("-v");
+        }
+        cmd.arg("--threads").arg(params.threads.to_string())
             .arg("build")
             .arg(input_arg).arg(input_path)
             .arg("-k").arg(k.to_string())
@@ -322,6 +328,9 @@ fn run_combo(
 
         if success {
             println!("ok ({})", format_duration(elapsed));
+            if verbose {
+                eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
+            }
         } else {
             println!("FAILED (exit {:?}, {})", output.status.code(), format_duration(elapsed));
             eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
