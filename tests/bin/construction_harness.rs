@@ -81,7 +81,61 @@ impl ComboOutcome {
     }
 }
 
+/// Fully parsed and validated configuration for a harness run.
+struct Cli {
+    input_arg: &'static str,
+    input_path: PathBuf,
+    k: usize,
+    mem_gb: usize,
+    verbose: bool,
+    sbwt_bin: PathBuf,
+    out_dir: PathBuf,
+    keep: bool,
+    combos: Vec<Params>,
+}
+
 fn main() {
+    let cli = parse_args();
+
+    println!("sbwt executable: {}", cli.sbwt_bin.display());
+    println!("input ({}): {}", cli.input_arg, cli.input_path.display());
+    println!("output dir:      {}", cli.out_dir.display());
+    println!("k = {}, mem-gb = {}", cli.k, cli.mem_gb);
+    if cli.combos.len() > 1 {
+        println!("fuzzing {} parameter combination(s)\n", cli.combos.len());
+    } else {
+        println!();
+    }
+
+    let mut outcomes = Vec::new();
+    for (i, params) in cli.combos.iter().enumerate() {
+        let combo_dir = if cli.combos.len() > 1 { cli.out_dir.join(params.dir_name(i)) } else { cli.out_dir.clone() };
+        let label = if cli.combos.len() > 1 { Some(params.label()) } else { None };
+        outcomes.push(run_combo(&cli, params, &combo_dir, label.as_deref()));
+    }
+
+    cleanup(&cli.out_dir, cli.keep);
+
+    if cli.combos.len() > 1 {
+        println!("\n=== fuzz summary ===");
+        for outcome in &outcomes {
+            let status = if outcome.is_ok() { "OK" } else { "FAILED" };
+            println!("{status:<6} {}", outcome.label);
+        }
+    }
+
+    if outcomes.iter().all(ComboOutcome::is_ok) {
+        println!("\nAll combination(s) agree across all construction algorithms.");
+    } else {
+        let failed = outcomes.iter().filter(|o| !o.is_ok()).count();
+        eprintln!("\n{failed} of {} combination(s) failed.", outcomes.len());
+        std::process::exit(1);
+    }
+}
+
+/// Defines the CLI schema, parses argv, validates paths, and works out the set of parameter
+/// combinations to run (a single one, unless --fuzz expands some of them).
+fn parse_args() -> Cli {
     let matches = clap::Command::new("sbwt-construction-test-harness")
         .about("Runs all sbwt construction algorithms through the sbwt CLI on the same input \
                 and checks that they produce byte-identical output.")
@@ -170,41 +224,31 @@ fn main() {
     let input = matches.get_one::<PathBuf>("input");
     let input_list = matches.get_one::<PathBuf>("input-list");
     let (input_arg, input_path) = match (input, input_list) {
-        (Some(path), None) => ("--input", path),
-        (None, Some(path)) => ("--input-list", path),
+        (Some(path), None) => ("--input", path.clone()),
+        (None, Some(path)) => ("--input-list", path.clone()),
         _ => unreachable!("clap enforces exactly one of --input / --input-list"),
     };
     if !input_path.is_file() {
         eprintln!("error: input file {} does not exist", input_path.display());
         std::process::exit(2);
     }
+
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
     let verbose = matches.get_flag("verbose");
     let fuzz = matches.get_flag("fuzz");
 
     let explicit = |id: &str| matches.value_source(id) == Some(ValueSource::CommandLine);
-
-    let threads_candidates: Vec<usize> = if fuzz && !explicit("threads") {
-        vec![1, 4]
-    } else {
-        vec![*matches.get_one::<usize>("threads").unwrap()]
-    };
-    let add_revcomp_candidates: Vec<bool> = if fuzz && !explicit("add-revcomp") {
-        vec![false, true]
-    } else {
-        vec![matches.get_flag("add-revcomp")]
-    };
-    let add_all_dummy_paths_candidates: Vec<bool> = if fuzz && !explicit("add-all-dummy-paths") {
-        vec![false, true]
-    } else {
-        vec![matches.get_flag("add-all-dummy-paths")]
-    };
-    let dedup_batches_candidates: Vec<bool> = if fuzz && !explicit("dedup-batches") {
-        vec![false, true]
-    } else {
-        vec![matches.get_flag("dedup-batches")]
-    };
+    let threads_candidates = candidates_usize(
+        fuzz, explicit("threads"), *matches.get_one::<usize>("threads").unwrap(), &[1, 4],
+    );
+    let add_revcomp_candidates =
+        candidates_bool(fuzz, explicit("add-revcomp"), matches.get_flag("add-revcomp"));
+    let add_all_dummy_paths_candidates = candidates_bool(
+        fuzz, explicit("add-all-dummy-paths"), matches.get_flag("add-all-dummy-paths"),
+    );
+    let dedup_batches_candidates =
+        candidates_bool(fuzz, explicit("dedup-batches"), matches.get_flag("dedup-batches"));
 
     let mut combos = Vec::new();
     for &threads in &threads_candidates {
@@ -232,137 +276,123 @@ fn main() {
     std::fs::create_dir_all(&out_dir).expect("failed to create --out-dir");
     let keep = matches.get_flag("keep");
 
-    println!("sbwt executable: {}", sbwt_bin.display());
-    println!("input ({input_arg}): {}", input_path.display());
-    println!("output dir:      {}", out_dir.display());
-    println!("k = {k}, mem-gb = {mem_gb}");
-    if combos.len() > 1 {
-        println!("fuzzing {} parameter combination(s)\n", combos.len());
-    } else {
-        println!();
-    }
+    Cli { input_arg, input_path, k, mem_gb, verbose, sbwt_bin, out_dir, keep, combos }
+}
 
-    let mut outcomes = Vec::new();
-    for (i, params) in combos.iter().enumerate() {
-        let combo_dir = if combos.len() > 1 { out_dir.join(params.dir_name(i)) } else { out_dir.clone() };
-        let label = if combos.len() > 1 { Some(params.label()) } else { None };
-        outcomes.push(run_combo(&sbwt_bin, input_arg, input_path, k, mem_gb, verbose, params, &combo_dir, label.as_deref()));
-    }
+/// Candidate values for a boolean build flag: both `false` and `true` if it's being fuzzed
+/// (i.e. --fuzz was given and the user didn't pin this flag explicitly), otherwise just
+/// whatever value was actually parsed.
+fn candidates_bool(fuzz: bool, explicit: bool, actual: bool) -> Vec<bool> {
+    if fuzz && !explicit { vec![false, true] } else { vec![actual] }
+}
 
-    cleanup(&out_dir, keep);
-
-    if combos.len() > 1 {
-        println!("\n=== fuzz summary ===");
-        for outcome in &outcomes {
-            let status = if outcome.is_ok() { "OK" } else { "FAILED" };
-            println!("{status:<6} {}", outcome.label);
-        }
-    }
-
-    if outcomes.iter().all(ComboOutcome::is_ok) {
-        println!("\nAll combination(s) agree across all construction algorithms.");
-    } else {
-        let failed = outcomes.iter().filter(|o| !o.is_ok()).count();
-        eprintln!("\n{failed} of {} combination(s) failed.", outcomes.len());
-        std::process::exit(1);
-    }
+/// Same as [`candidates_bool`], but for a numeric option, with the fuzzed value set given
+/// explicitly by the caller.
+fn candidates_usize(fuzz: bool, explicit: bool, actual: usize, fuzzed: &[usize]) -> Vec<usize> {
+    if fuzz && !explicit { fuzzed.to_vec() } else { vec![actual] }
 }
 
 /// Builds all four construction algorithms with the given parameters and byte-compares
 /// their `.sbwt` and `.lcs` output. `label`, if given, is printed as a header (used when
 /// running more than one parameter combination under --fuzz).
-fn run_combo(
-    sbwt_bin: &Path,
-    input_arg: &str,
-    input_path: &Path,
-    k: usize,
-    mem_gb: usize,
-    verbose: bool,
-    params: &Params,
-    combo_dir: &Path,
-    label: Option<&str>,
-) -> ComboOutcome {
+fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) -> ComboOutcome {
     if let Some(label) = label {
         println!("--- {label} ---");
     }
     std::fs::create_dir_all(combo_dir).expect("failed to create combo output dir");
 
-    let mut runs = Vec::new();
-    for algo in ALGORITHMS {
-        print!("Building with {:<21} ... ", algo.name);
-        std::io::stdout().flush().ok();
-
-        let prefix = combo_dir.join(algo.name);
-        let mut cmd = Command::new(TIME_BIN);
-        // The first "-v" here is /usr/bin/time's own verbose flag, not sbwt's.
-        cmd.arg("-v").arg(sbwt_bin);
-        if verbose {
-            cmd.arg("-v");
-        }
-        cmd.arg("--threads").arg(params.threads.to_string())
-            .arg("build")
-            .arg(input_arg).arg(input_path)
-            .arg("-k").arg(k.to_string())
-            .arg("--output-prefix").arg(&prefix)
-            .arg("--build-lcs")
-            .arg("--temp-dir").arg(combo_dir)
-            .arg("--mem-gb").arg(mem_gb.to_string());
-        if params.add_revcomp {
-            cmd.arg("--add-revcomp");
-        }
-        if params.add_all_dummy_paths {
-            cmd.arg("--add-all-dummy-paths");
-        }
-        if params.dedup_batches {
-            cmd.arg("--dedup-batches");
-        }
-        cmd.args(algo.extra_args);
-
-        let wall_clock_start = Instant::now();
-        let output = cmd.output().expect("failed to run /usr/bin/time");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        let success = output.status.success();
-        let elapsed = parse_elapsed(&stderr).unwrap_or_else(|| wall_clock_start.elapsed());
-        let peak_rss_kb = parse_max_rss_kb(&stderr);
-
-        if success {
-            println!("ok ({})", format_duration(elapsed));
-            if verbose {
-                eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
-            }
-        } else {
-            println!("FAILED (exit {:?}, {})", output.status.code(), format_duration(elapsed));
-            eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
-            if algo.name == "libsais" && stderr.contains("--features libsais") {
-                eprintln!(
-                    "Rebuild the sbwt binary with the libsais feature enabled: \
-                     `cargo build --release --features \"tests libsais\"`."
-                );
-            }
-        }
-        runs.push(AlgoRun { name: algo.name, prefix, success, elapsed, peak_rss_kb });
-    }
+    let runs: Vec<AlgoRun> = ALGORITHMS.iter()
+        .map(|algo| build_and_measure(cli, params, combo_dir, algo))
+        .collect();
 
     print_measurements(&runs);
 
     let failed_algorithms: Vec<&'static str> =
         runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
+    let label = label.unwrap_or("(default parameters)").to_string();
     if !failed_algorithms.is_empty() {
         eprintln!(
             "\n{} algorithm(s) failed to build: {}",
             failed_algorithms.len(),
             failed_algorithms.join(", ")
         );
-        return ComboOutcome {
-            label: label.unwrap_or("(default parameters)").to_string(),
-            failed_algorithms,
-            mismatches: Vec::new(),
-        };
+        return ComboOutcome { label, failed_algorithms, mismatches: Vec::new() };
     }
 
     println!();
     let successes: Vec<&AlgoRun> = runs.iter().filter(|r| r.success).collect();
+    let mismatches = compare_outputs(&successes);
+    if mismatches.is_empty() {
+        println!("\nAll {} construction algorithms agree.", successes.len());
+    } else {
+        eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
+    }
+
+    ComboOutcome { label, failed_algorithms, mismatches }
+}
+
+/// Runs `/usr/bin/time -v <sbwt> build ...` for one construction algorithm and reports
+/// its success, wall-clock time and peak resident memory.
+fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algorithm) -> AlgoRun {
+    print!("Building with {:<21} ... ", algo.name);
+    std::io::stdout().flush().ok();
+
+    let prefix = combo_dir.join(algo.name);
+    let mut cmd = Command::new(TIME_BIN);
+    // The first "-v" here is /usr/bin/time's own verbose flag, not sbwt's.
+    cmd.arg("-v").arg(&cli.sbwt_bin);
+    if cli.verbose {
+        cmd.arg("-v");
+    }
+    cmd.arg("--threads").arg(params.threads.to_string())
+        .arg("build")
+        .arg(cli.input_arg).arg(&cli.input_path)
+        .arg("-k").arg(cli.k.to_string())
+        .arg("--output-prefix").arg(&prefix)
+        .arg("--build-lcs")
+        .arg("--temp-dir").arg(combo_dir)
+        .arg("--mem-gb").arg(cli.mem_gb.to_string());
+    if params.add_revcomp {
+        cmd.arg("--add-revcomp");
+    }
+    if params.add_all_dummy_paths {
+        cmd.arg("--add-all-dummy-paths");
+    }
+    if params.dedup_batches {
+        cmd.arg("--dedup-batches");
+    }
+    cmd.args(algo.extra_args);
+
+    let wall_clock_start = Instant::now();
+    let output = cmd.output().expect("failed to run /usr/bin/time");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let success = output.status.success();
+    let elapsed = parse_elapsed(&stderr).unwrap_or_else(|| wall_clock_start.elapsed());
+    let peak_rss_kb = parse_max_rss_kb(&stderr);
+
+    if success {
+        println!("ok ({})", format_duration(elapsed));
+        if cli.verbose {
+            eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
+        }
+    } else {
+        println!("FAILED (exit {:?}, {})", output.status.code(), format_duration(elapsed));
+        eprintln!("--- stderr for {} ---\n{stderr}", algo.name);
+        if algo.name == "libsais" && stderr.contains("--features libsais") {
+            eprintln!(
+                "Rebuild the sbwt binary with the libsais feature enabled: \
+                 `cargo build --release --features \"tests libsais\"`."
+            );
+        }
+    }
+
+    AlgoRun { name: algo.name, prefix, success, elapsed, peak_rss_kb }
+}
+
+/// Byte-compares every successful run's `.sbwt` and `.lcs` output against the first
+/// (baseline) run, printing a line per comparison. Returns a description of each mismatch.
+fn compare_outputs(successes: &[&AlgoRun]) -> Vec<String> {
     let mut mismatches = Vec::new();
     for ext in ["sbwt", "lcs"] {
         let baseline = successes[0];
@@ -390,14 +420,7 @@ fn run_combo(
             }
         }
     }
-
-    if mismatches.is_empty() {
-        println!("\nAll {} construction algorithms agree.", successes.len());
-    } else {
-        eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
-    }
-
-    ComboOutcome { label: label.unwrap_or("(default parameters)").to_string(), failed_algorithms, mismatches }
+    mismatches
 }
 
 /// Parses the "Maximum resident set size (kbytes): N" line from `/usr/bin/time -v` output.
