@@ -151,6 +151,12 @@ fn main() {
                    --mem-gb is never fuzzed.")
             .long("fuzz")
             .action(clap::ArgAction::SetTrue))
+        .arg(clap::Arg::new("verbose")
+            .help("Pass -v to the sbwt CLI, and print its stderr for every build \
+                   (not just failed ones).")
+            .short('v')
+            .long("verbose")
+            .action(clap::ArgAction::SetTrue))
         .get_matches();
 
     if !Path::new(TIME_BIN).is_file() {
