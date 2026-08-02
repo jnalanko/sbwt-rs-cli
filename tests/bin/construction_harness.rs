@@ -4,8 +4,8 @@
 //! time and peak resident memory.
 //!
 //! Usage:
-//!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input <FILE> -k <K>
-//!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input-list <FILE> -k <K>
+//!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input <FILE> -k <K> --out-dir <DIR>
+//!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input-list <FILE> -k <K> --out-dir <DIR>
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -62,9 +62,10 @@ fn main() {
             .long("sbwt-bin")
             .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("out-dir")
-            .help("Directory to write build outputs to. Defaults to a fresh temp directory \
-                   that is deleted on success.")
+            .help("Directory to write build outputs (and on-disk algorithm scratch files) to. \
+                   Created if it doesn't exist.")
             .long("out-dir")
+            .required(true)
             .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("keep")
             .help("Do not delete the output directory when done.")
@@ -121,20 +122,9 @@ fn main() {
         std::process::exit(2);
     }
 
-    let out_dir_arg = matches.get_one::<PathBuf>("out-dir").cloned();
-    let (out_dir, out_dir_is_temp) = match &out_dir_arg {
-        Some(dir) => {
-            std::fs::create_dir_all(dir).expect("failed to create --out-dir");
-            (dir.clone(), false)
-        }
-        None => {
-            let dir = std::env::temp_dir()
-                .join(format!("sbwt-construction-harness-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).expect("failed to create temp output dir");
-            (dir, true)
-        }
-    };
-    let keep = matches.get_flag("keep") || !out_dir_is_temp;
+    let out_dir = matches.get_one::<PathBuf>("out-dir").unwrap().clone();
+    std::fs::create_dir_all(&out_dir).expect("failed to create --out-dir");
+    let keep = matches.get_flag("keep");
 
     println!("sbwt executable: {}", sbwt_bin.display());
     println!("input ({input_arg}): {}", input_path.display());
