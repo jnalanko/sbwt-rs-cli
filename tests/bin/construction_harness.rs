@@ -77,6 +77,13 @@ fn main() {
             .short('t')
             .default_value("4")
             .value_parser(clap::value_parser!(usize)))
+        .arg(clap::Arg::new("mem-gb")
+            .help("Memory budget in gigabytes to pass to the sbwt CLI's --mem-gb \
+                   (used by the on-disk and in-memory algorithms only).")
+            .long("mem-gb")
+            .short('m')
+            .default_value("8")
+            .value_parser(clap::value_parser!(usize)))
         .arg(clap::Arg::new("add-revcomp")
             .help("Pass --add-revcomp to every build.")
             .long("add-revcomp")
