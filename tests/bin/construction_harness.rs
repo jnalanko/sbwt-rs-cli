@@ -11,6 +11,9 @@
 //! that were *not* explicitly given try multiple values instead of just their default, and
 //! every resulting combination is built and compared separately. --mem-gb is never fuzzed.
 //!
+//! Every build (one row per parameter combination x algorithm) is recorded in a TSV report,
+//! written to construction-report.tsv inside --out-dir by default, or to --report if given.
+//!
 //! This complements the library-level `all_algorithms_agree` test in `api/src/builder.rs`,
 //! which calls the builders directly. That test can't catch bugs in the CLI's own plumbing
 //! (argument parsing, flag-to-builder wiring, output serialization), since it never goes
@@ -81,11 +84,22 @@ struct AlgoRun {
     peak_rss_kb: Option<u64>,
 }
 
+/// One row of the TSV report: the parameters and algorithm that produced one build, plus
+/// what it cost.
+struct ReportRow {
+    params: Params,
+    algorithm: &'static str,
+    success: bool,
+    elapsed: Duration,
+    peak_rss_kb: Option<u64>,
+}
+
 /// Outcome of building and comparing all four algorithms for one parameter combination.
 struct ComboOutcome {
     label: String,
     failed_algorithms: Vec<&'static str>,
     mismatches: Vec<String>,
+    report_rows: Vec<ReportRow>,
 }
 
 impl ComboOutcome {
@@ -104,6 +118,7 @@ struct Cli {
     out_dir: PathBuf,
     keep: bool,
     combos: Vec<Params>,
+    report_path: PathBuf,
 }
 
 fn main() {
@@ -126,7 +141,11 @@ fn main() {
         outcomes.push(run_combo(&cli, params, &combo_dir, label.as_deref()));
     }
 
-    cleanup(&cli.out_dir, cli.keep);
+    let report_rows: Vec<&ReportRow> = outcomes.iter().flat_map(|o| &o.report_rows).collect();
+    write_report(&cli.report_path, &report_rows).expect("failed to write report");
+    println!("\nreport written to {}", cli.report_path.display());
+
+    cleanup(&cli.out_dir, cli.keep, &cli.report_path);
 
     if cli.combos.len() > 1 {
         println!("\n=== fuzz summary ===");
@@ -184,6 +203,12 @@ fn parse_args() -> Cli {
             .help("Do not delete the output directory when done.")
             .long("keep")
             .action(clap::ArgAction::SetTrue))
+        .arg(clap::Arg::new("report")
+            .help("Path to write the TSV report (one row per build: parameters, time, peak \
+                   memory) to. Defaults to construction-report.tsv inside --out-dir; a path \
+                   given here is used as-is, so it doesn't have to be under --out-dir.")
+            .long("report")
+            .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("threads")
             .help("Number of threads to pass to the sbwt CLI.")
             .long("threads")
@@ -296,7 +321,10 @@ fn parse_args() -> Cli {
     std::fs::create_dir_all(&out_dir).expect("failed to create --out-dir");
     let keep = matches.get_flag("keep");
 
-    Cli { input_arg, input_path, mem_gb, verbose, sbwt_bin, out_dir, keep, combos }
+    let report_path = matches.get_one::<PathBuf>("report").cloned()
+        .unwrap_or_else(|| out_dir.join("construction-report.tsv"));
+
+    Cli { input_arg, input_path, mem_gb, verbose, sbwt_bin, out_dir, keep, combos, report_path }
 }
 
 /// Candidate values for a boolean build flag: both `false` and `true` if it's being fuzzed
@@ -327,6 +355,14 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
 
     print_measurements(&runs);
 
+    let report_rows: Vec<ReportRow> = runs.iter().map(|r| ReportRow {
+        params: *params,
+        algorithm: r.name,
+        success: r.success,
+        elapsed: r.elapsed,
+        peak_rss_kb: r.peak_rss_kb,
+    }).collect();
+
     let failed_algorithms: Vec<&'static str> =
         runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
     let label = label.unwrap_or("(default parameters)").to_string();
@@ -336,7 +372,7 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
             failed_algorithms.len(),
             failed_algorithms.join(", ")
         );
-        return ComboOutcome { label, failed_algorithms, mismatches: Vec::new() };
+        return ComboOutcome { label, failed_algorithms, mismatches: Vec::new(), report_rows };
     }
 
     println!();
@@ -348,7 +384,7 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
         eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
     }
 
-    ComboOutcome { label, failed_algorithms, mismatches }
+    ComboOutcome { label, failed_algorithms, mismatches, report_rows }
 }
 
 /// Runs `/usr/bin/time -v <sbwt> build ...` for one construction algorithm and reports
@@ -482,10 +518,54 @@ fn format_duration(d: Duration) -> String {
     format!("{:.2}s", d.as_secs_f64())
 }
 
-fn cleanup(out_dir: &Path, keep: bool) {
-    if !keep {
-        let _ = std::fs::remove_dir_all(out_dir);
+/// Removes everything under `out_dir` except `report_path`, which is the whole point of a
+/// --fuzz run and must survive even when `keep` is false.
+fn cleanup(out_dir: &Path, keep: bool, report_path: &Path) {
+    if keep {
+        return;
     }
+    let Ok(entries) = std::fs::read_dir(out_dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == report_path {
+            continue;
+        }
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(&path);
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// Writes one TSV row per build: its parameters, whether it succeeded, wall-clock time in
+/// seconds, and peak resident memory in bytes.
+fn write_report(path: &Path, rows: &[&ReportRow]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = std::fs::File::create(path)?;
+    writeln!(
+        out,
+        "k\tthreads\tadd_revcomp\tadd_all_dummy_paths\tdedup_batches\talgorithm\tsuccess\ttime_seconds\tpeak_rss_bytes"
+    )?;
+    for r in rows {
+        let peak_rss_bytes = r.peak_rss_kb.map(|kb| kb * 1024);
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}",
+            r.params.k,
+            r.params.threads,
+            r.params.add_revcomp,
+            r.params.add_all_dummy_paths,
+            r.params.dedup_batches,
+            r.algorithm,
+            r.success,
+            r.elapsed.as_secs_f64(),
+            peak_rss_bytes.map(|b| b.to_string()).unwrap_or_default(),
+        )?;
+    }
+    Ok(())
 }
 
 fn with_ext(prefix: &Path, ext: &str) -> PathBuf {
