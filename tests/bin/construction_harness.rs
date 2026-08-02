@@ -11,8 +11,9 @@
 //! that were *not* explicitly given try multiple values instead of just their default, and
 //! every resulting combination is built and compared separately. --mem-gb is never fuzzed.
 //!
-//! Every build (one row per parameter combination x algorithm) is recorded in a TSV report,
-//! written to construction-report.tsv inside --out-dir by default, or to --report if given.
+//! Every build (one row per parameter combination x algorithm) is appended to a TSV report as
+//! it finishes, written to construction-report.tsv inside --out-dir by default, or to --report
+//! if given.
 //!
 //! This complements the library-level `all_algorithms_agree` test in `api/src/builder.rs`,
 //! which calls the builders directly. That test can't catch bugs in the CLI's own plumbing
@@ -99,7 +100,6 @@ struct ComboOutcome {
     label: String,
     failed_algorithms: Vec<&'static str>,
     mismatches: Vec<String>,
-    report_rows: Vec<ReportRow>,
 }
 
 impl ComboOutcome {
@@ -134,16 +134,18 @@ fn main() {
         println!("{}\n", cli.combos[0].label());
     }
 
+    // Written to as each build finishes (see `append_report_row`), not batched up until the
+    // end, so a partial report still exists if the harness is interrupted or a later build
+    // hangs.
+    init_report(&cli.report_path).expect("failed to create report");
+    println!("report:          {} (appended to as each build finishes)\n", cli.report_path.display());
+
     let mut outcomes = Vec::new();
     for (i, params) in cli.combos.iter().enumerate() {
         let combo_dir = if cli.combos.len() > 1 { cli.out_dir.join(params.dir_name(i)) } else { cli.out_dir.clone() };
         let label = if cli.combos.len() > 1 { Some(params.label()) } else { None };
         outcomes.push(run_combo(&cli, params, &combo_dir, label.as_deref()));
     }
-
-    let report_rows: Vec<&ReportRow> = outcomes.iter().flat_map(|o| &o.report_rows).collect();
-    write_report(&cli.report_path, &report_rows).expect("failed to write report");
-    println!("\nreport written to {}", cli.report_path.display());
 
     cleanup(&cli.out_dir, cli.keep, &cli.report_path);
 
@@ -355,14 +357,6 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
 
     print_measurements(&runs);
 
-    let report_rows: Vec<ReportRow> = runs.iter().map(|r| ReportRow {
-        params: *params,
-        algorithm: r.name,
-        success: r.success,
-        elapsed: r.elapsed,
-        peak_rss_kb: r.peak_rss_kb,
-    }).collect();
-
     let failed_algorithms: Vec<&'static str> =
         runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
     let label = label.unwrap_or("(default parameters)").to_string();
@@ -372,7 +366,7 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
             failed_algorithms.len(),
             failed_algorithms.join(", ")
         );
-        return ComboOutcome { label, failed_algorithms, mismatches: Vec::new(), report_rows };
+        return ComboOutcome { label, failed_algorithms, mismatches: Vec::new() };
     }
 
     println!();
@@ -384,7 +378,7 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
         eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
     }
 
-    ComboOutcome { label, failed_algorithms, mismatches, report_rows }
+    ComboOutcome { label, failed_algorithms, mismatches }
 }
 
 /// Runs `/usr/bin/time -v <sbwt> build ...` for one construction algorithm and reports
@@ -442,6 +436,9 @@ fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algori
             );
         }
     }
+
+    let row = ReportRow { params: *params, algorithm: algo.name, success, elapsed, peak_rss_kb };
+    append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
     AlgoRun { name: algo.name, prefix, success, elapsed, peak_rss_kb }
 }
@@ -538,9 +535,9 @@ fn cleanup(out_dir: &Path, keep: bool, report_path: &Path) {
     }
 }
 
-/// Writes one TSV row per build: its parameters, whether it succeeded, wall-clock time in
-/// seconds, and peak resident memory in bytes.
-fn write_report(path: &Path, rows: &[&ReportRow]) -> std::io::Result<()> {
+/// Creates (truncating any existing file) the report and writes just its header. Rows are
+/// appended one at a time afterwards, by `append_report_row`, as each build finishes.
+fn init_report(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -548,24 +545,29 @@ fn write_report(path: &Path, rows: &[&ReportRow]) -> std::io::Result<()> {
     writeln!(
         out,
         "k\tthreads\tadd_revcomp\tadd_all_dummy_paths\tdedup_batches\talgorithm\tsuccess\ttime_seconds\tpeak_rss_bytes"
-    )?;
-    for r in rows {
-        let peak_rss_bytes = r.peak_rss_kb.map(|kb| kb * 1024);
-        writeln!(
-            out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}",
-            r.params.k,
-            r.params.threads,
-            r.params.add_revcomp,
-            r.params.add_all_dummy_paths,
-            r.params.dedup_batches,
-            r.algorithm,
-            r.success,
-            r.elapsed.as_secs_f64(),
-            peak_rss_bytes.map(|b| b.to_string()).unwrap_or_default(),
-        )?;
-    }
-    Ok(())
+    )
+}
+
+/// Appends one TSV row to the report: a build's parameters, whether it succeeded, wall-clock
+/// time in seconds, and peak resident memory in bytes. Opened and closed fresh for each row
+/// (rather than keeping a file handle open across the whole run) so a row already written is
+/// durable on disk even if the harness is later killed or a subsequent build hangs.
+fn append_report_row(path: &Path, row: &ReportRow) -> std::io::Result<()> {
+    let mut out = std::fs::OpenOptions::new().append(true).open(path)?;
+    let peak_rss_bytes = row.peak_rss_kb.map(|kb| kb * 1024);
+    writeln!(
+        out,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}",
+        row.params.k,
+        row.params.threads,
+        row.params.add_revcomp,
+        row.params.add_all_dummy_paths,
+        row.params.dedup_batches,
+        row.algorithm,
+        row.success,
+        row.elapsed.as_secs_f64(),
+        peak_rss_bytes.map(|b| b.to_string()).unwrap_or_default(),
+    )
 }
 
 fn with_ext(prefix: &Path, ext: &str) -> PathBuf {
