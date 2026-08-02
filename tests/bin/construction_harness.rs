@@ -6,11 +6,17 @@
 //! Usage:
 //!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input <FILE> -k <K> --out-dir <DIR>
 //!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input-list <FILE> -k <K> --out-dir <DIR>
+//!
+//! With --fuzz, any of --add-revcomp, --add-all-dummy-paths, --dedup-batches and --threads
+//! that were *not* explicitly given try multiple values instead of just their default, and
+//! every resulting combination is built and compared separately. --mem-gb is never fuzzed.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+use clap::parser::ValueSource;
 
 const TIME_BIN: &str = "/usr/bin/time";
 
@@ -26,12 +32,53 @@ const ALGORITHMS: &[Algorithm] = &[
     Algorithm { name: "libsais", extra_args: &["--via-libsais"] },
 ];
 
+/// The build parameters that --fuzz may vary across combinations.
+#[derive(Clone, Copy)]
+struct Params {
+    threads: usize,
+    add_revcomp: bool,
+    add_all_dummy_paths: bool,
+    dedup_batches: bool,
+}
+
+impl Params {
+    fn label(&self) -> String {
+        format!(
+            "threads={} add-revcomp={} add-all-dummy-paths={} dedup-batches={}",
+            self.threads, self.add_revcomp, self.add_all_dummy_paths, self.dedup_batches
+        )
+    }
+
+    fn dir_name(&self, index: usize) -> String {
+        format!(
+            "combo-{index}_t{}_rc{}_adp{}_db{}",
+            self.threads,
+            self.add_revcomp as u8,
+            self.add_all_dummy_paths as u8,
+            self.dedup_batches as u8
+        )
+    }
+}
+
 struct AlgoRun {
     name: &'static str,
     prefix: PathBuf,
     success: bool,
     elapsed: Duration,
     peak_rss_kb: Option<u64>,
+}
+
+/// Outcome of building and comparing all four algorithms for one parameter combination.
+struct ComboOutcome {
+    label: String,
+    failed_algorithms: Vec<&'static str>,
+    mismatches: Vec<String>,
+}
+
+impl ComboOutcome {
+    fn is_ok(&self) -> bool {
+        self.failed_algorithms.is_empty() && self.mismatches.is_empty()
+    }
 }
 
 fn main() {
@@ -79,7 +126,7 @@ fn main() {
             .value_parser(clap::value_parser!(usize)))
         .arg(clap::Arg::new("mem-gb")
             .help("Memory budget in gigabytes to pass to the sbwt CLI's --mem-gb \
-                   (used by the on-disk and in-memory algorithms only).")
+                   (used by the on-disk and in-memory algorithms only). Never fuzzed.")
             .long("mem-gb")
             .short('m')
             .default_value("8")
@@ -91,6 +138,18 @@ fn main() {
         .arg(clap::Arg::new("add-all-dummy-paths")
             .help("Pass --add-all-dummy-paths to every build.")
             .long("add-all-dummy-paths")
+            .action(clap::ArgAction::SetTrue))
+        .arg(clap::Arg::new("dedup-batches")
+            .help("Pass --dedup-batches to every build.")
+            .long("dedup-batches")
+            .short('d')
+            .action(clap::ArgAction::SetTrue))
+        .arg(clap::Arg::new("fuzz")
+            .help("For each of --threads, --add-revcomp, --add-all-dummy-paths and \
+                   --dedup-batches that was not explicitly given, try multiple values \
+                   instead of just the default, and build+compare every combination. \
+                   --mem-gb is never fuzzed.")
+            .long("fuzz")
             .action(clap::ArgAction::SetTrue))
         .get_matches();
 
@@ -114,10 +173,42 @@ fn main() {
         std::process::exit(2);
     }
     let k = *matches.get_one::<usize>("k").unwrap();
-    let threads = *matches.get_one::<usize>("threads").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
-    let add_revcomp = matches.get_flag("add-revcomp");
-    let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
+    let fuzz = matches.get_flag("fuzz");
+
+    let explicit = |id: &str| matches.value_source(id) == Some(ValueSource::CommandLine);
+
+    let threads_candidates: Vec<usize> = if fuzz && !explicit("threads") {
+        vec![1, 4]
+    } else {
+        vec![*matches.get_one::<usize>("threads").unwrap()]
+    };
+    let add_revcomp_candidates: Vec<bool> = if fuzz && !explicit("add-revcomp") {
+        vec![false, true]
+    } else {
+        vec![matches.get_flag("add-revcomp")]
+    };
+    let add_all_dummy_paths_candidates: Vec<bool> = if fuzz && !explicit("add-all-dummy-paths") {
+        vec![false, true]
+    } else {
+        vec![matches.get_flag("add-all-dummy-paths")]
+    };
+    let dedup_batches_candidates: Vec<bool> = if fuzz && !explicit("dedup-batches") {
+        vec![false, true]
+    } else {
+        vec![matches.get_flag("dedup-batches")]
+    };
+
+    let mut combos = Vec::new();
+    for &threads in &threads_candidates {
+        for &add_revcomp in &add_revcomp_candidates {
+            for &add_all_dummy_paths in &add_all_dummy_paths_candidates {
+                for &dedup_batches in &dedup_batches_candidates {
+                    combos.push(Params { threads, add_revcomp, add_all_dummy_paths, dedup_batches });
+                }
+            }
+        }
+    }
 
     let sbwt_bin = matches.get_one::<PathBuf>("sbwt-bin").cloned()
         .unwrap_or_else(default_sbwt_bin_path);
@@ -137,30 +228,81 @@ fn main() {
     println!("sbwt executable: {}", sbwt_bin.display());
     println!("input ({input_arg}): {}", input_path.display());
     println!("output dir:      {}", out_dir.display());
-    println!("k = {k}\n");
+    println!("k = {k}, mem-gb = {mem_gb}");
+    if combos.len() > 1 {
+        println!("fuzzing {} parameter combination(s)\n", combos.len());
+    } else {
+        println!();
+    }
+
+    let mut outcomes = Vec::new();
+    for (i, params) in combos.iter().enumerate() {
+        let combo_dir = if combos.len() > 1 { out_dir.join(params.dir_name(i)) } else { out_dir.clone() };
+        let label = if combos.len() > 1 { Some(params.label()) } else { None };
+        outcomes.push(run_combo(&sbwt_bin, input_arg, input_path, k, mem_gb, params, &combo_dir, label.as_deref()));
+    }
+
+    cleanup(&out_dir, keep);
+
+    if combos.len() > 1 {
+        println!("\n=== fuzz summary ===");
+        for outcome in &outcomes {
+            let status = if outcome.is_ok() { "OK" } else { "FAILED" };
+            println!("{status:<6} {}", outcome.label);
+        }
+    }
+
+    if outcomes.iter().all(ComboOutcome::is_ok) {
+        println!("\nAll combination(s) agree across all construction algorithms.");
+    } else {
+        let failed = outcomes.iter().filter(|o| !o.is_ok()).count();
+        eprintln!("\n{failed} of {} combination(s) failed.", outcomes.len());
+        std::process::exit(1);
+    }
+}
+
+/// Builds all four construction algorithms with the given parameters and byte-compares
+/// their `.sbwt` and `.lcs` output. `label`, if given, is printed as a header (used when
+/// running more than one parameter combination under --fuzz).
+fn run_combo(
+    sbwt_bin: &Path,
+    input_arg: &str,
+    input_path: &Path,
+    k: usize,
+    mem_gb: usize,
+    params: &Params,
+    combo_dir: &Path,
+    label: Option<&str>,
+) -> ComboOutcome {
+    if let Some(label) = label {
+        println!("--- {label} ---");
+    }
+    std::fs::create_dir_all(combo_dir).expect("failed to create combo output dir");
 
     let mut runs = Vec::new();
-
     for algo in ALGORITHMS {
         print!("Building with {:<21} ... ", algo.name);
         std::io::stdout().flush().ok();
 
-        let prefix = out_dir.join(algo.name);
+        let prefix = combo_dir.join(algo.name);
         let mut cmd = Command::new(TIME_BIN);
-        cmd.arg("-v").arg(&sbwt_bin)
-            .arg("--threads").arg(threads.to_string())
+        cmd.arg("-v").arg(sbwt_bin)
+            .arg("--threads").arg(params.threads.to_string())
             .arg("build")
             .arg(input_arg).arg(input_path)
             .arg("-k").arg(k.to_string())
             .arg("--output-prefix").arg(&prefix)
             .arg("--build-lcs")
-            .arg("--temp-dir").arg(&out_dir)
+            .arg("--temp-dir").arg(combo_dir)
             .arg("--mem-gb").arg(mem_gb.to_string());
-        if add_revcomp {
+        if params.add_revcomp {
             cmd.arg("--add-revcomp");
         }
-        if add_all_dummy_paths {
+        if params.add_all_dummy_paths {
             cmd.arg("--add-all-dummy-paths");
+        }
+        if params.dedup_batches {
+            cmd.arg("--dedup-batches");
         }
         cmd.args(algo.extra_args);
 
@@ -189,11 +331,19 @@ fn main() {
 
     print_measurements(&runs);
 
-    let failed: Vec<&str> = runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
-    if !failed.is_empty() {
-        eprintln!("\n{} algorithm(s) failed to build: {}", failed.len(), failed.join(", "));
-        cleanup(&out_dir, keep);
-        std::process::exit(1);
+    let failed_algorithms: Vec<&'static str> =
+        runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
+    if !failed_algorithms.is_empty() {
+        eprintln!(
+            "\n{} algorithm(s) failed to build: {}",
+            failed_algorithms.len(),
+            failed_algorithms.join(", ")
+        );
+        return ComboOutcome {
+            label: label.unwrap_or("(default parameters)").to_string(),
+            failed_algorithms,
+            mismatches: Vec::new(),
+        };
     }
 
     println!();
@@ -226,14 +376,13 @@ fn main() {
         }
     }
 
-    cleanup(&out_dir, keep);
-
     if mismatches.is_empty() {
         println!("\nAll {} construction algorithms agree.", successes.len());
     } else {
         eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
-        std::process::exit(1);
     }
+
+    ComboOutcome { label: label.unwrap_or("(default parameters)").to_string(), failed_algorithms, mismatches }
 }
 
 /// Parses the "Maximum resident set size (kbytes): N" line from `/usr/bin/time -v` output.
