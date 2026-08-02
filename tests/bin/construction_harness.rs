@@ -7,9 +7,15 @@
 //!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input <FILE> -k <K> --out-dir <DIR>
 //!   cargo run --release --features libsais --bin sbwt-construction-test-harness -- --input-list <FILE> -k <K> --out-dir <DIR>
 //!
-//! With --fuzz, any of --add-revcomp, --add-all-dummy-paths, --dedup-batches and --threads
+//! With --fuzz, any of -k, --threads, --add-revcomp, --add-all-dummy-paths and --dedup-batches
 //! that were *not* explicitly given try multiple values instead of just their default, and
 //! every resulting combination is built and compared separately. --mem-gb is never fuzzed.
+//!
+//! This complements the library-level `all_algorithms_agree` test in `api/src/builder.rs`,
+//! which calls the builders directly. That test can't catch bugs in the CLI's own plumbing
+//! (argument parsing, flag-to-builder wiring, output serialization), since it never goes
+//! through `main.rs`. This harness runs the actual `sbwt` binary instead, so it exercises
+//! the same code path a real user would.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -25,6 +31,11 @@ struct Algorithm {
     extra_args: &'static [&'static str],
 }
 
+// These are the only construction strategies `sbwt build` currently exposes; despite using
+// unrelated internal algorithms, they're all specified to produce byte-identical output for
+// the same input. "on-disk" is listed first because it becomes the baseline everything else
+// is diffed against in `compare_outputs` (it's the CLI's own default, so it's the one most
+// likely to already be correct if something regresses).
 const ALGORITHMS: &[Algorithm] = &[
     Algorithm { name: "on-disk", extra_args: &[] },
     Algorithm { name: "in-memory", extra_args: &["--in-memory"] },
@@ -35,6 +46,7 @@ const ALGORITHMS: &[Algorithm] = &[
 /// The build parameters that --fuzz may vary across combinations.
 #[derive(Clone, Copy)]
 struct Params {
+    k: usize,
     threads: usize,
     add_revcomp: bool,
     add_all_dummy_paths: bool,
@@ -44,14 +56,15 @@ struct Params {
 impl Params {
     fn label(&self) -> String {
         format!(
-            "threads={} add-revcomp={} add-all-dummy-paths={} dedup-batches={}",
-            self.threads, self.add_revcomp, self.add_all_dummy_paths, self.dedup_batches
+            "k={} threads={} add-revcomp={} add-all-dummy-paths={} dedup-batches={}",
+            self.k, self.threads, self.add_revcomp, self.add_all_dummy_paths, self.dedup_batches
         )
     }
 
     fn dir_name(&self, index: usize) -> String {
         format!(
-            "combo-{index}_t{}_rc{}_adp{}_db{}",
+            "combo-{index}_k{}_t{}_rc{}_adp{}_db{}",
+            self.k,
             self.threads,
             self.add_revcomp as u8,
             self.add_all_dummy_paths as u8,
@@ -85,7 +98,6 @@ impl ComboOutcome {
 struct Cli {
     input_arg: &'static str,
     input_path: PathBuf,
-    k: usize,
     mem_gb: usize,
     verbose: bool,
     sbwt_bin: PathBuf,
@@ -100,11 +112,11 @@ fn main() {
     println!("sbwt executable: {}", cli.sbwt_bin.display());
     println!("input ({}): {}", cli.input_arg, cli.input_path.display());
     println!("output dir:      {}", cli.out_dir.display());
-    println!("k = {}, mem-gb = {}", cli.k, cli.mem_gb);
+    println!("mem-gb = {}", cli.mem_gb);
     if cli.combos.len() > 1 {
         println!("fuzzing {} parameter combination(s)\n", cli.combos.len());
     } else {
-        println!();
+        println!("{}\n", cli.combos[0].label());
     }
 
     let mut outcomes = Vec::new();
@@ -155,7 +167,7 @@ fn parse_args() -> Cli {
         .arg(clap::Arg::new("k")
             .help("k-mer length")
             .short('k')
-            .required(true)
+            .default_value("31")
             .value_parser(clap::value_parser!(usize)))
         .arg(clap::Arg::new("sbwt-bin")
             .help("Path to the sbwt executable to test. Defaults to the `sbwt` binary \
@@ -199,7 +211,7 @@ fn parse_args() -> Cli {
             .short('d')
             .action(clap::ArgAction::SetTrue))
         .arg(clap::Arg::new("fuzz")
-            .help("For each of --threads, --add-revcomp, --add-all-dummy-paths and \
+            .help("For each of -k, --threads, --add-revcomp, --add-all-dummy-paths and \
                    --dedup-batches that was not explicitly given, try multiple values \
                    instead of just the default, and build+compare every combination. \
                    --mem-gb is never fuzzed.")
@@ -233,12 +245,18 @@ fn parse_args() -> Cli {
         std::process::exit(2);
     }
 
-    let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
     let verbose = matches.get_flag("verbose");
     let fuzz = matches.get_flag("fuzz");
 
+    // Only parameters the user left at their default get multiple candidate values; anything
+    // passed explicitly is pinned to that one value. This lets a caller narrow the search
+    // space to whatever they're actually unsure about instead of always paying for the full
+    // combinatorial product.
     let explicit = |id: &str| matches.value_source(id) == Some(ValueSource::CommandLine);
+    let k_candidates = candidates_usize(
+        fuzz, explicit("k"), *matches.get_one::<usize>("k").unwrap(), &[3, 31, 32, 100],
+    );
     let threads_candidates = candidates_usize(
         fuzz, explicit("threads"), *matches.get_one::<usize>("threads").unwrap(), &[1, 4],
     );
@@ -251,11 +269,13 @@ fn parse_args() -> Cli {
         candidates_bool(fuzz, explicit("dedup-batches"), matches.get_flag("dedup-batches"));
 
     let mut combos = Vec::new();
-    for &threads in &threads_candidates {
-        for &add_revcomp in &add_revcomp_candidates {
-            for &add_all_dummy_paths in &add_all_dummy_paths_candidates {
-                for &dedup_batches in &dedup_batches_candidates {
-                    combos.push(Params { threads, add_revcomp, add_all_dummy_paths, dedup_batches });
+    for &k in &k_candidates {
+        for &threads in &threads_candidates {
+            for &add_revcomp in &add_revcomp_candidates {
+                for &add_all_dummy_paths in &add_all_dummy_paths_candidates {
+                    for &dedup_batches in &dedup_batches_candidates {
+                        combos.push(Params { k, threads, add_revcomp, add_all_dummy_paths, dedup_batches });
+                    }
                 }
             }
         }
@@ -276,7 +296,7 @@ fn parse_args() -> Cli {
     std::fs::create_dir_all(&out_dir).expect("failed to create --out-dir");
     let keep = matches.get_flag("keep");
 
-    Cli { input_arg, input_path, k, mem_gb, verbose, sbwt_bin, out_dir, keep, combos }
+    Cli { input_arg, input_path, mem_gb, verbose, sbwt_bin, out_dir, keep, combos }
 }
 
 /// Candidate values for a boolean build flag: both `false` and `true` if it's being fuzzed
@@ -347,7 +367,7 @@ fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algori
     cmd.arg("--threads").arg(params.threads.to_string())
         .arg("build")
         .arg(cli.input_arg).arg(&cli.input_path)
-        .arg("-k").arg(cli.k.to_string())
+        .arg("-k").arg(params.k.to_string())
         .arg("--output-prefix").arg(&prefix)
         .arg("--build-lcs")
         .arg("--temp-dir").arg(combo_dir)
