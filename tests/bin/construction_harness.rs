@@ -115,6 +115,7 @@ fn main() {
     }
     let k = *matches.get_one::<usize>("k").unwrap();
     let threads = *matches.get_one::<usize>("threads").unwrap();
+    let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
     let add_revcomp = matches.get_flag("add-revcomp");
     let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
 
@@ -153,7 +154,8 @@ fn main() {
             .arg("-k").arg(k.to_string())
             .arg("--output-prefix").arg(&prefix)
             .arg("--build-lcs")
-            .arg("--temp-dir").arg(&out_dir);
+            .arg("--temp-dir").arg(&out_dir)
+            .arg("--mem-gb").arg(mem_gb.to_string());
         if add_revcomp {
             cmd.arg("--add-revcomp");
         }
