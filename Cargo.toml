@@ -10,6 +10,11 @@ rust-version = "1.77" # 1.77 needed for File::create_new in sbwt
 name = "sbwt"
 path = "src/main.rs"
 
+[[bin]]
+name = "sbwt-construction-test-harness"
+path = "tests/bin/construction_harness.rs"
+required-features = ["tests"]
+
 [dependencies]
 clap = "4.4"
 jseqio = "0.1.7"
@@ -23,3 +28,4 @@ bitvec = "1.0.1"
 
 [features]
 libsais = ["sbwt/libsais"]
+tests = []

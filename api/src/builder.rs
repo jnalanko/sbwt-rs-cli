@@ -733,7 +733,8 @@ fn run_libsais<O: libsais::OutputElement>(concatenation: &[u8], n_threads: usize
         lcp_construction.single_threaded().run()
     }.expect("libsais LCP construction failed");
 
-    let (sa, lcp, _plcp, _is_generalized_suffix_array) = lcp_result.into_parts();
+    let (sa, lcp, plcp, _is_generalized_suffix_array) = lcp_result.into_parts();
+    drop(plcp); // Free memory
     let n = concatenation.len();
 
     let bwt_bytes: Vec<u8> = sa.iter()
@@ -743,6 +744,7 @@ fn run_libsais<O: libsais::OutputElement>(concatenation: &[u8], n_threads: usize
         })
         .collect();
 
+    // TODO: cast instead of copy here 
     let mut lcp_bytes = Vec::<u8>::with_capacity(lcp.len() * size_of::<u64>());
     for value in lcp {
         let v = value.to_u64().expect("LCP value should fit in u64");
