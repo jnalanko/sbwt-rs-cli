@@ -907,9 +907,10 @@ fn check_command(matches: &clap::ArgMatches) {
 
 fn into_bit_vectors<SS: SubsetSeq + Send>(sbwt: SbwtIndex<SS>) -> [bitvec::vec::BitVec::<u64, Lsb0>; 4] {
     log::info!("Extracting row bit vectors");
-    let rows = b"ACGT".iter().map(|&c| {
+    const ALPHABET_SIZE: usize = 4;
+    let rows = (0..ALPHABET_SIZE).map(|c| {
         let mut row = bitvec![u64, Lsb0; 0; sbwt.n_sets()];
-        sbwt.sbwt().call_on_char_occurrences(0..sbwt.n_sets(), c, |i| {
+        sbwt.sbwt().call_on_char_occurrences(0..sbwt.n_sets(), c as u8, |i| {
             row.set(i, true);
         });
         row
