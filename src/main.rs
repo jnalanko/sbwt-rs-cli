@@ -5,6 +5,7 @@ use std::io::stdout;
 use std::io::BufRead;
 use std::io::BufWriter;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
@@ -624,7 +625,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
     };
 }
 
-fn dump_unitigs(sbwt: &mut SbwtIndexVariant, outfile: Option<&std::path::Path>, lcs: &Option<LcsArray>, n_threads: usize) {
+fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&std::path::Path>, lcs: &Option<LcsArray>, n_threads: usize) {
     let stdout = std::io::stdout();
     let stdout = std::io::BufWriter::new(stdout);
     let mut fileout = outfile.map(|f| BufWriter::new(File::create(f).unwrap()));
@@ -666,12 +667,34 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
         }
     };
 
+    // We unwrap the enum here because Dbg<...> needs a concrete SubsetSeq type
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+            dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
+        },
+        SbwtIndexVariant::SubsetCorrectionSets(mut sbwt) => {
             dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
         }
     };
 
+}
+
+fn run_merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex<SS>, index2: SbwtIndex<SS>, low_ram: bool, n_threads: usize) -> SbwtIndex<SS> {
+    // Open output file (open early to fail early if there is a problem)
+    let lut_len1 = index1.get_lookup_table().prefix_length;
+    let lut_len2 = index2.get_lookup_table().prefix_length;
+    let lut_len = max(lut_len1, lut_len2);
+
+    if lut_len1 != lut_len2 {
+        log::warn!("Different lookup table prefix lengths: {} {}", lut_len1, lut_len2);
+        log::warn!("Using length {} for the merged index", lut_len); 
+    }
+
+    log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
+    let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
+    log::info!("Executing the merge");
+    let merged = merge(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads);
+    merged
 }
 
 fn merge_command(matches: &clap::ArgMatches) {
@@ -683,43 +706,30 @@ fn merge_command(matches: &clap::ArgMatches) {
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
 
-    // Open output file (open early to fail early if there is a problem)
     let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
 
     // Read sbwts
-    let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
-    let index1 = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index1_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index1_reader).unwrap()
+    let index1 = load_index(sbwt1_path, cpp_format);
+    let index2 = load_index(sbwt2_path, cpp_format);
+
+    // To avoid variants^2 match arms, we require that both indices have the same SubsetSeq implementation.
+    match (index1, index2) {
+        (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
+            let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
+            log::info!("Serializing to {}", sbwt_outfile.display());
+            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
+            log::info!("Finished");
+        },
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+            let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
+            log::info!("Serializing to {}", sbwt_outfile.display());
+            sbwt::write_sbwt_index_variant(&&SbwtIndexVariant::SubsetCorrectionSets(merged), &mut out).unwrap();
+            log::info!("Finished");
+        },
+        _ => {
+            panic!("SBWT merge requires that both indices have the same SubsetSeq implementation")
+        }
     };
-
-    let mut index2_reader = std::io::BufReader::new(std::fs::File::open(sbwt2_path).unwrap());
-    let index2 = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index2_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index2_reader).unwrap()
-    };
-
-    // TODO: this needs to be updated once there is support for more variants
-    let SbwtIndexVariant::SubsetMatrix(index1) = index1;
-    let SbwtIndexVariant::SubsetMatrix(index2) = index2;
-
-    let lut_len1 = index1.get_lookup_table().prefix_length;
-    let lut_len2 = index2.get_lookup_table().prefix_length;
-    let lut_len = max(lut_len1, lut_len2);
-    if lut_len1 != lut_len2 {
-        log::warn!("Different lookup table prefix lengths: {} {}", lut_len1, lut_len2);
-        log::warn!("Using length {} for the merged index", lut_len); 
-    }
-
-    log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
-    let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
-    log::info!("Executing the merge");
-    let merged = merge(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads);
-    log::info!("Serializing to {}", sbwt_outfile.display());
-    sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
-    log::info!("Finished");
 }
 
 fn intersect_command(matches: &clap::ArgMatches) {
