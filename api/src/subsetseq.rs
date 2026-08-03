@@ -278,7 +278,7 @@ impl std::fmt::Display for SubsetMatrix{
     }
 }
 
-struct SubsetCorrectionSets {
+pub struct SubsetCorrectionSets {
     // TODO
 }
 

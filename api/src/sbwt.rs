@@ -96,10 +96,10 @@ pub struct SbwtIndex<SS: SubsetSeq> {
 }
 
 /// An enum listing SbwtIndex types built on different subset rank implementations provided in this crate. 
-/// Currently, only the [SubsetMatrix] structure is supported, but in the future there might be more.
 pub enum SbwtIndexVariant {
     SubsetMatrix(SbwtIndex<SubsetMatrix>),
-    //SubsetConcat(SbwtIndex<SubsetConcat>), // Remember to update the doc comment if a variant is added
+    SubsetCorrectionSets(SbwtIndex<SubsetCorrectionSets>),
+    //SubsetConcat(SbwtIndex<SubsetConcat>),
 }
 
 /// Loads an index that is wrapped in an enum describing the used subset rank structure type. 
@@ -109,6 +109,11 @@ pub fn write_sbwt_index_variant(sbwt: &SbwtIndexVariant, out: &mut impl std::io:
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
             out.write_all(&(b"SubsetMatrix".len() as u64).to_le_bytes())?;
             out.write_all(b"SubsetMatrix")?;
+            sbwt.serialize(out)
+        },
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+            out.write_all(&(b"SubsetCorrectionSets".len() as u64).to_le_bytes())?;
+            out.write_all(b"SubsetCorrectionSets")?;
             sbwt.serialize(out)
         }
     }
@@ -123,6 +128,8 @@ pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtInd
 
     if type_id == b"SubsetMatrix" {
         Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::<SubsetMatrix>::load(input)?))
+    } else if type_id == b"SubsetCorrectionSets" {
+        Ok(SbwtIndexVariant::SubsetCorrectionSets(SbwtIndex::<SubsetCorrectionSets>::load(input)?))
     } else {
         Err("Unknown SBWT index type".into())
     }
