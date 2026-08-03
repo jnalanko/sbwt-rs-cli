@@ -1,19 +1,14 @@
 // Code by Martin Kostadinov.
 
-pub mod balanced_parenthesis;
 pub mod matrix;
 pub mod ranges;
 pub mod scan;
 pub mod wavelet;
 
-use balanced_parenthesis as bp;
-
 use crate::ContractLeft;
 use crate::ExtendRight;
 use crate::LcsArray;
 
-pub use balanced_parenthesis::LcsPnsvBp;
-pub use balanced_parenthesis::PnsvBp;
 pub use matrix::Matrix as PnsvMatrix;
 pub use ranges::Ranges;
 pub use scan::abs::AugmentedBoundedScan as ABS;
