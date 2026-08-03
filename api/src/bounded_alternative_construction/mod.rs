@@ -2,7 +2,6 @@
 
 use crate::SubsetSeq;
 
-use crate::vodbg::count::{Counts, Sample};
 use crate::alternative_construction::{
     Output,
     push_set,
@@ -10,10 +9,12 @@ use crate::alternative_construction::{
         Bwt, Lcp, CHAR_TO_INDEX
     }
 };
+use crate::atomic_bitmap::AtomicBitmap;
+use crate::vodbg::count::{Counts, Sample};
 
 use bitvec::vec::BitVec;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
-use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select};
+use simple_sds_sbwt::ops::{BitVec as BitVecTrait, Push, Rank, Select};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
 
 type Word = wide::u8x16;
@@ -35,11 +36,10 @@ pub fn build<SS: SubsetSeq + Send>(
     let mut result = None;
     thread_pool.scope(|scope| {
         scope.spawn(|_| {
-            // result = Some(par_bounded_context_suffix_array(&mut input, k));
             let suffix_array = par_bounded_context_suffix_array_bucket_sort(&mut input, k, prefix_length_for_bucket_sort);
             log::info!("[build] done building bounded context suffix array");
             let output = if !add_all_dummies {
-                build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
+                par_build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
             } else {
                 build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
             };
@@ -50,14 +50,13 @@ pub fn build<SS: SubsetSeq + Send>(
     result.unwrap()
 }
 
-pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
+pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     threads: usize, input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool
 ) -> Output<SS> {
     log::info!("[build_without_redundant_dummies] begin");
     let _ = threads;
-    // let aux = build_full_auxiliary_data(input, bounded_context_suffix_array, k);
     let aux = par_build_full_auxiliary_data(threads, input, bounded_context_suffix_array, k);
-    let dummy_marks = build_dummy_marks(&aux, k);
+    let dummy_marks = par_build_dummy_marks(threads, &aux, k);
 
     let FullAuxiliaryData {
         kmer_count,
@@ -82,7 +81,7 @@ pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
         &dummy_marks.keep_dummy,
         build_lcs,
         |current_set, index| {
-            let outedge = dummy_marks.outedge.get(index);
+            let outedge = get_outedge(&dummy_marks.outedges, index);
             *current_set |= (1 << outedge) as u8;
         },
         |current_set, index| {
@@ -122,6 +121,18 @@ pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<us
 const CHARACTER_COUNT: usize = 5;
 const MAX_PREFIX_LENGTH_FOR_BUCKET_SORT: usize = 8;
 
+/// The length is the length of the original input sequences. If the input buffer has length less
+/// than that, ensure that it is padded.
+fn pad_input(input: &mut Vec<u8>, k: usize, length: usize) {
+    let word_count = k.div_ceil(LANES);
+    if input.len() > length {
+        return;
+    }
+    for _ in 1..(word_count * LANES) {
+        input.push(b'$');
+    }
+}
+
 pub fn par_bounded_context_suffix_array_bucket_sort(input: &mut Vec<u8>, k: usize, prefix_length_for_bucket_sort: usize) -> Vec<usize> {
     log::info!("[par_bounded_context_suffix_array_bucket_sort] begin");
     let length = input.len();
@@ -130,9 +141,7 @@ pub fn par_bounded_context_suffix_array_bucket_sort(input: &mut Vec<u8>, k: usiz
     let bucket_count: usize = CHARACTER_COUNT.pow(prefix_length_for_bucket_sort as u32);
 
     // Pad the input so that the comparisons need not do bound checks.
-    for _ in 1..(word_count * LANES) {
-        input.push(b'$');
-    }
+    pad_input(input, k, input.len());
 
     use rayon::prelude::*;
     rayon::scope(|s| {
@@ -244,25 +253,26 @@ fn compare_suffixes(input: &[u8], word_count: usize, mut cursor_a: usize, mut cu
     std::cmp::Ordering::Equal
 }
 
-struct FullAuxiliaryData {
-    kmer_count: usize,
-    bwtk: Bwt,
-    lcp: Lcp,
-    shorter_than_k: BitVector,
-    equal_to_k: RawVector,
-    k_minus_one_ranges: BitVector,
-    k_ranges: RawVector,
+pub(crate) struct FullAuxiliaryData {
+    pub(crate) kmer_count: usize,
+    pub(crate) bwtk: Bwt,
+    pub(crate) lcp: Lcp,
+    pub(crate) shorter_than_k: BitVector,
+    pub(crate) equal_to_k: RawVector,
+    pub(crate) k_minus_one_ranges: BitVector,
+    pub(crate) k_ranges: RawVector,
 }
 
 #[allow(dead_code)]
-fn build_full_auxiliary_data(
-    input: Vec<u8>,
+pub(crate) fn build_full_auxiliary_data(
+    mut input: Vec<u8>,
     bounded_context_suffix_array: Vec<usize>,
     k: usize
 ) -> FullAuxiliaryData {
     log::info!("[build_full_auxiliary_data] begin");
     // The input should still be padded.
     let length = bounded_context_suffix_array.len();
+    pad_input(&mut input, k, length);
     let word_count = k.div_ceil(LANES);
 
     let mut bwt_raw_vectors = [
@@ -357,17 +367,19 @@ fn build_full_auxiliary_data(
     }
 }
 
-fn par_build_full_auxiliary_data(
+pub(crate) fn par_build_full_auxiliary_data(
     threads: usize,
-    input: Vec<u8>,
+    mut input: Vec<u8>,
     bounded_context_suffix_array: Vec<usize>,
     k: usize
 ) -> FullAuxiliaryData {
-
     use crate::atomic_bitmap::AtomicBitmap;
     use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
+    log::info!("[par_build_full_auxiliary_data] begin");
+
     let length = bounded_context_suffix_array.len();
+    pad_input(&mut input, k, length);
     let word_count = k.div_ceil(LANES);
 
     let bwt_vectors = [
@@ -580,16 +592,40 @@ fn find_length_and_lcp_value(
 const OUTEDGE_WIDTH: usize = 3;
 struct DummyMarks {
     keep_dummy: RawVector,
-    outedge: IntVector,
+    outedges: RawVector,
 }
 
+#[inline]
+fn get_outedge(bitvector: &RawVector, index: usize) -> usize {
+    let mut char_index = 0;
+    for i in 0..OUTEDGE_WIDTH {
+        char_index += (bitvector.bit(index * OUTEDGE_WIDTH + i) as usize) << i;
+    }
+    char_index
+}
+
+#[inline]
+fn set_outedge(outedge: &mut RawVector, index: usize, char_index: usize) {
+    for i in 0..OUTEDGE_WIDTH {
+        outedge.set_bit(index * OUTEDGE_WIDTH + i, (char_index & (1 << i)) != 0);
+    }
+}
+
+#[inline]
+fn set_outedge_atomic(outedge: &AtomicBitmap, index: usize, char_index: usize) {
+    for i in 0..OUTEDGE_WIDTH {
+        outedge.set(index * OUTEDGE_WIDTH + i, (char_index & (1 << i)) != 0);
+    }
+}
+
+#[allow(dead_code)]
 fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
     log::info!("[build_dummy_marks] begin");
     use super::alternative_construction::has_full_kmer_predecessor;
 
     let len = aux.bwtk.len();
-    let mut keep_dummy = RawVector::with_len(len, false);
-    let mut outedge    = IntVector::with_len(len, OUTEDGE_WIDTH, 0).unwrap();
+    let mut keep_dummy  = RawVector::with_len(len, false);
+    let mut outedges    = RawVector::with_len(len * OUTEDGE_WIDTH, false);
 
     let start = aux.bwtk.counts[1];
     let mut predecessor_confirmed = false;
@@ -607,9 +643,9 @@ fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
             }
 
             if predecessor_confirmed {
-                outedge.set(predecessor, char_index as u64);
+                set_outedge(&mut outedges, predecessor, char_index);
             } else {
-                keep_predecessors(predecessor, char_index, &aux.bwtk, k, &mut keep_dummy, &mut outedge);
+                keep_predecessors(predecessor, char_index, &aux.bwtk, k, &mut keep_dummy, &mut outedges);
             }
         } else if !aux.shorter_than_k.get(index) {
             predecessor_confirmed = true;
@@ -619,21 +655,112 @@ fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
     log::info!("[build_dummy_marks] done");
     DummyMarks {
         keep_dummy,
-        outedge,
+        outedges,
     }
 }
 
+fn par_build_dummy_marks(threads: usize, aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
+    log::info!("[par_build_dummy_marks] begin");
+    use super::alternative_construction::has_full_kmer_predecessor;
+
+    let scan_start = aux.bwtk.counts[1];
+    let length = aux.bwtk.len();
+    let keep_dummy  = AtomicBitmap::new(length);
+    let outedges    = AtomicBitmap::new(length * OUTEDGE_WIDTH);
+
+    let scan_length = length - scan_start;
+    let thread_region_length = scan_length.div_ceil(threads);
+
+    rayon::scope(|s| {
+        let keep_dummy = &keep_dummy;
+        let outedges   = &outedges;
+        let bwtk       = &aux.bwtk;
+        for thread_index in 0..threads {
+            s.spawn(move |_| {
+                let start = scan_start + thread_index * thread_region_length;
+                let end = (start + thread_region_length).min(length);
+
+                let mut index = start;
+                while index < end && !aux.k_ranges.bit(index) {
+                    index += 1;
+                }
+
+                let mut predecessor_confirmed = false;
+                while index < length {
+                    if aux.k_ranges.bit(index) {
+                        if index >= end {
+                            break;
+                        }
+                        predecessor_confirmed = false;
+                    }
+
+                    if aux.equal_to_k.bit(index) {
+                        let (predecessor, char_index) = aux.bwtk.inverse_lf_step(index);
+                        if !predecessor_confirmed {
+                            predecessor_confirmed |= has_full_kmer_predecessor(
+                                predecessor, &aux.bwtk, &aux.k_minus_one_ranges, &aux.shorter_than_k
+                            );
+                        }
+
+                        if predecessor_confirmed {
+                            set_outedge_atomic(outedges, predecessor, char_index);
+                        } else {
+                            keep_predecessors_atomic(predecessor, char_index, bwtk, k, keep_dummy, outedges);
+                        }
+                    } else if !aux.shorter_than_k.get(index) {
+                        predecessor_confirmed = true;
+                    }
+                    index += 1;
+                }
+            });
+        }
+    });
+
+    let keep_dummy = crate::util::bitvec_to_simple_sds_raw_bitvec(
+        keep_dummy.into_bitvec_u64()
+    );
+    let outedges = crate::util::bitvec_to_simple_sds_raw_bitvec(
+        outedges.into_bitvec_u64()
+    );
+
+    log::info!("[par_build_dummy_marks] done");
+    DummyMarks {
+        keep_dummy,
+        outedges,
+    }
+}
+
+#[inline]
 fn keep_predecessors(
     mut predecessor: usize,
     mut char_index: usize,
     bwtk: &Bwt,
     mut k: usize,
     keep_dummy: &mut RawVector,
-    outedge: &mut IntVector,
+    outedges: &mut RawVector,
 ) {
     while k > 0 {
         keep_dummy.set_bit(predecessor, true);
-        outedge.set(predecessor, char_index as u64);
+        set_outedge(outedges, predecessor, char_index);
+        let (next_predecessor, next_outedge) = bwtk.inverse_lf_step(predecessor);
+        predecessor = next_predecessor;
+        char_index = next_outedge;
+        k -= 1;
+    }
+}
+
+#[inline]
+fn keep_predecessors_atomic(
+    mut predecessor: usize,
+    mut char_index: usize,
+    bwtk: &Bwt,
+    mut k: usize,
+    keep_dummy: &AtomicBitmap,
+    outedges: &AtomicBitmap,
+) {
+    while k > 0 {
+        keep_dummy.set(predecessor, true);
+        set_outedge_atomic(outedges, predecessor, char_index);
         let (next_predecessor, next_outedge) = bwtk.inverse_lf_step(predecessor);
         predecessor = next_predecessor;
         char_index = next_outedge;
@@ -642,11 +769,12 @@ fn keep_predecessors(
 }
 
 pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
-    input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool, build_counts: bool
+    mut input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool, build_counts: bool
 ) -> Output<SS> {
     log::info!("[build_with_all_dummies] begin");
     let word_count = k.div_ceil(LANES);
     let length = bounded_context_suffix_array.len();
+    pad_input(&mut input, k, length);
 
     let mut rows = Vec::<BitVec<u64>>::new();
     for _ in 0..4 {
