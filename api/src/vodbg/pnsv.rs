@@ -11,7 +11,6 @@ use crate::LcsArray;
 
 pub use matrix::Matrix as PnsvMatrix;
 pub use ranges::Ranges;
-pub use scan::abs::AugmentedBoundedScan as ABS;
 pub use scan::LcsSimd;
 pub use wavelet::WindowedWaveletTree as WWT;
 use scan::Scan;
@@ -101,41 +100,6 @@ impl Pnsv for PnsvDynOwned {
 // Experimentally the scan is fastest if the average length of the ranges it searches is below
 // around 200 i.e. the target length. This value is equal to approx log_4(200).
 const TARGET_LENGTH_LOG_4_FLOOR: usize = 3;
-
-pub fn pnsv_abs_simd(extend: &impl ExtendRight, lcs: &LcsArray) -> PnsvDynOwned {
-    let count = lcs.len();
-
-    log::info!("[pnsv_abs_simd] creating ranges...");
-    let mut ranges_upper_bound = 0;
-    let mut bits_in_current_level_of_ranges = usize::BITS as usize * 4;
-    while bits_in_current_level_of_ranges < count {
-        ranges_upper_bound += 1;
-        bits_in_current_level_of_ranges *= 4;
-    }
-    ranges_upper_bound = ranges_upper_bound.min(Ranges::MAX_K);
-    let ranges = Ranges::new(extend, count, ranges_upper_bound);
-    let ranges_box = Box::new(ranges);
-
-    let iterator = (0..count).map(|index| lcs.access(index) as u8);
-
-    let log_4 = (usize::BITS - count.leading_zeros()).div_ceil(2) as usize;
-
-    // log_4(count / 200) == log_4(count) - log_4(200)
-    let matrix_upper_bound = log_4 - TARGET_LENGTH_LOG_4_FLOOR; 
-    
-    log::info!("[pnsv_abs_simd] creating lcs simd...");
-    let lcs_simd = scan::LcsSimd8x32::from_iterator(iterator.clone(), count, 31);
-
-    log::info!("[pnsv_abs_simd] creating augmented bounded scan...");
-    let abs = ABS::from_iterator(lcs_simd, iterator, 8, ranges_upper_bound + 1, matrix_upper_bound);
-    let abs_box = Box::new(abs);
-
-    log::info!("[pnsv_abs_simd] target length ranges: 1:{}:{}:..", ranges_upper_bound, matrix_upper_bound);
-
-    PnsvDynOwned {
-        structures: vec![ranges_box, abs_box],
-    }
-}
 
 /// A structure which supports previous/next smaller value queries on the LCS array. Internally
 /// uses [Ranges], [PnsvMatrix] and [LcsSimd] based on the target value for efficiency.

@@ -651,7 +651,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LcsArray, SubsetMatrix, BitPackedKmerSortingDisk, BitPackedKmerSortingMem};
+    use crate::{LcsArray, SubsetMatrix, BitPackedKmerSortingMem};
     use crate::dbg::Dbg;
     use pnsv::PnsvTuned;
 
@@ -745,7 +745,7 @@ mod tests {
         let mut graphs = Vec::with_capacity(max_k);
 
         for i in MIN_K..=max_k {
-            let (sbwt, lcs) = BitPackedKmerSortingDisk::new_from_vecs(&seqs, i)
+            let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, i)
                 .build_lcs(true)
                 .build_select_support(true)
                 .run();
