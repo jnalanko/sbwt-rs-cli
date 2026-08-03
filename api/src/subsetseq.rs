@@ -278,6 +278,7 @@ impl std::fmt::Display for SubsetMatrix{
     }
 }
 
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct SubsetCorrectionSets {
     // TODO
 }
