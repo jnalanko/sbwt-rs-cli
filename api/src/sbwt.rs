@@ -16,6 +16,9 @@ use crate::compact_int_vector::CompactIntVector;
 use crate::compact_int_vector::CompactIntVectorMutSlice;
 use crate::sdsl_compatibility::load_known_width_sdsl_int_vector;
 use crate::sdsl_compatibility::load_sdsl_bit_vector;
+use crate::streaming_index::ExtendRight;
+use crate::streaming_index::LcsArray;
+use crate::streaming_index::StreamingIndex;
 use crate::subsetseq::*;
 use crate::util;
 use crate::util::ACGT_TO_0123;
@@ -102,7 +105,117 @@ pub enum SbwtIndexVariant {
     //SubsetConcat(SbwtIndex<SubsetConcat>),
 }
 
-/// Loads an index that is wrapped in an enum describing the used subset rank structure type. 
+/// Calls `sbwt.$method$args` on the [SbwtIndex] wrapped inside whichever variant `$self` is.
+/// Used to forward [SbwtIndex] methods to [SbwtIndexVariant] without repeating the match arms
+/// for every variant at every method.
+macro_rules! forward {
+    ($self:expr, $method:ident $args:tt) => {
+        match $self {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => sbwt.$method $args,
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => sbwt.$method $args,
+        }
+    };
+}
+
+/// Forwarding methods to the [SbwtIndex] wrapped inside the variant, so that callers that don't
+/// care which [SubsetSeq] implementation is in use don't have to match on the enum themselves.
+impl SbwtIndexVariant {
+
+    /// See [SbwtIndex::n_kmers].
+    pub fn n_kmers(&self) -> usize { forward!(self, n_kmers()) }
+
+    /// See [SbwtIndex::n_sets].
+    pub fn n_sets(&self) -> usize { forward!(self, n_sets()) }
+
+    /// See [SbwtIndex::k].
+    pub fn k(&self) -> usize { forward!(self, k()) }
+
+    /// See [SbwtIndex::char_idx].
+    pub fn char_idx(&self, c: u8) -> usize { forward!(self, char_idx(c)) }
+
+    /// See [SbwtIndex::alphabet].
+    pub fn alphabet(&self) -> &[u8] { forward!(self, alphabet()) }
+
+    /// See [SbwtIndex::interval_of_empty_string].
+    pub fn interval_of_empty_string(&self) -> std::ops::Range<usize> { forward!(self, interval_of_empty_string()) }
+
+    /// See [SbwtIndex::serialize]. Note: unlike [write_sbwt_index_variant], this does not
+    /// write a type identifier, so the caller is responsible for keeping track of the variant.
+    pub fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> { forward!(self, serialize(out)) }
+
+    /// See [SbwtIndex::inlabel].
+    pub fn inlabel(&self, i: usize) -> Option<u8> { forward!(self, inlabel(i)) }
+
+    /// See [SbwtIndex::build_select].
+    pub fn build_select(&mut self) { forward!(self, build_select()) }
+
+    /// See [SbwtIndex::lf_step].
+    pub fn lf_step(&self, i: usize, char_idx: usize) -> usize { forward!(self, lf_step(i, char_idx)) }
+
+    /// See [SbwtIndex::inverse_lf_step].
+    pub fn inverse_lf_step(&self, i: usize) -> Option<usize> { forward!(self, inverse_lf_step(i)) }
+
+    /// See [SbwtIndex::push_kmer_to_vec].
+    pub fn push_kmer_to_vec(&self, colex_rank: usize, buf: &mut Vec<u8>) { forward!(self, push_kmer_to_vec(colex_rank, buf)) }
+
+    /// See [SbwtIndex::access_kmer].
+    pub fn access_kmer(&self, colex_rank: usize) -> Vec<u8> { forward!(self, access_kmer(colex_rank)) }
+
+    /// See [SbwtIndex::search].
+    pub fn search(&self, pattern: &[u8]) -> Option<std::ops::Range<usize>> { forward!(self, search(pattern)) }
+
+    /// See [SbwtIndex::search_from].
+    pub fn search_from(&self, interval: std::ops::Range<usize>, pattern: &[u8]) -> Option<std::ops::Range<usize>> { forward!(self, search_from(interval, pattern)) }
+
+    /// See [SbwtIndex::reconstruct_padded_spectrum].
+    pub fn reconstruct_padded_spectrum(&self, n_threads: usize) -> Vec<u8> { forward!(self, reconstruct_padded_spectrum(n_threads)) }
+
+    /// See [SbwtIndex::set_lookup_table].
+    pub fn set_lookup_table(&mut self, prefix_lookup_table: PrefixLookupTable) { forward!(self, set_lookup_table(prefix_lookup_table)) }
+
+    /// See [SbwtIndex::get_lookup_table].
+    pub fn get_lookup_table(&self) -> &PrefixLookupTable { forward!(self, get_lookup_table()) }
+
+    /// Returns the number of sets in the range `[0, i)` that have character `c`. See [SubsetSeq::rank].
+    pub fn rank(&self, c: u8, i: usize) -> usize {
+        match self {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => sbwt.sbwt().rank(c, i),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => sbwt.sbwt().rank(c, i),
+        }
+    }
+
+    /// See [SbwtIndex::push_all_labels_forward].
+    pub fn push_all_labels_forward(&self, labels_in: &[u8], labels_out: &mut [u8], n_threads: usize) { forward!(self, push_all_labels_forward(labels_in, labels_out, n_threads)) }
+
+    /// See [SbwtIndex::push_all_labels_forward_compact].
+    pub fn push_all_labels_forward_compact(&self, labels_in: &CompactIntVector<3>, labels_out: &mut CompactIntVector<3>, n_threads: usize) { forward!(self, push_all_labels_forward_compact(labels_in, labels_out, n_threads)) }
+
+    /// See [SbwtIndex::build_last_column].
+    pub fn build_last_column(&self) -> Vec<u8> { forward!(self, build_last_column()) }
+
+    /// See [SbwtIndex::build_last_column_compact].
+    pub fn build_last_column_compact(&self) -> CompactIntVector<3> { forward!(self, build_last_column_compact()) }
+
+    /// See [SbwtIndex::compute_dummy_node_marks].
+    pub fn compute_dummy_node_marks(&self) -> bitvec::vec::BitVec { forward!(self, compute_dummy_node_marks()) }
+
+    /// Builds the LCS array for this index. See [LcsArray::from_sbwt].
+    pub fn build_lcs(&self, n_threads: usize, optimize_peak_ram: bool) -> LcsArray {
+        match self {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => LcsArray::from_sbwt(sbwt, n_threads, optimize_peak_ram),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => LcsArray::from_sbwt(sbwt, n_threads, optimize_peak_ram),
+        }
+    }
+
+    pub fn build_lookup_table(&self, prefix_len: usize) -> PrefixLookupTable {
+        match self {
+            SbwtIndexVariant::SubsetMatrix(sbwt_index) => PrefixLookupTable::new(sbwt_index, prefix_len),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt_index) => PrefixLookupTable::new(sbwt_index, prefix_len),
+        }
+    }
+}
+
+/// Loads an index that is wrapped in an enum describing the used subset rank structure type.
 /// The format includes a type identifier so the correct variant can later be loaded with [load_sbwt_index_variant].
 pub fn write_sbwt_index_variant(sbwt: &SbwtIndexVariant, out: &mut impl std::io::Write) -> std::io::Result<usize> {
     match sbwt {

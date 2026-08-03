@@ -68,8 +68,19 @@ impl sbwt::SeqStream for MyMultiFileSeqReader {
     }
 }
 
+/// Loads an SBWT index from `path`, either in the native Rust format, or, if `cpp_format` is
+/// set, in the format used by the C++ API (which only supports the plain matrix representation).
+fn load_index(path: &std::path::Path, cpp_format: bool) -> SbwtIndexVariant {
+    let mut reader = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    if cpp_format {
+        SbwtIndexVariant::SubsetMatrix(load_from_cpp_plain_matrix_format(&mut reader).unwrap())
+    } else {
+        load_sbwt_index_variant(&mut reader).unwrap()
+    }
+}
+
 // sbwt is taken as mutable because we need to build select support if all_at_once is true
-fn dump_kmers<SS: SubsetSeq + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&std::path::Path>, all_at_once: bool, include_dummies: bool, n_threads: usize) {
+fn dump_kmers(sbwt: &mut SbwtIndexVariant, outfile: Option<&std::path::Path>, all_at_once: bool, include_dummies: bool, n_threads: usize) {
     let mut fileout = outfile.map(|f| BufWriter::new(File::create(f).unwrap()));
     let mut stdout = BufWriter::new(io::stdout());
     if all_at_once {
@@ -129,18 +140,9 @@ fn dump_kmers_command(matches: &clap::ArgMatches){
     let outfile = matches.get_one::<std::path::PathBuf>("output");
 
     // Don't care if there is LCS support or not
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let mut index = load_index(indexfile, cpp_format);
 
-    match index {
-        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            dump_kmers(&mut sbwt, outfile.map(|f| &**f), all_at_once, include_dummies, n_threads);
-        }
-    };
+    dump_kmers(&mut index, outfile.map(|f| &**f), all_at_once, include_dummies, n_threads);
 
 }
 
@@ -278,19 +280,10 @@ fn build_lcs_command(matches: &clap::ArgMatches) {
 
     // Read sbwt
     log::info!("Loading the SBWT from {}", indexfile.display());
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let index = load_index(indexfile, cpp_format);
 
     log::info!("Computing the LCS array");
-    let lcs = match index {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            LcsArray::from_sbwt(&sbwt, n_threads, low_ram)
-        }
-    };
+    let lcs = index.build_lcs(n_threads, low_ram);
 
     log::info!("Writing to {}", outfile.display());
     let n_bytes = lcs.serialize(&mut out).unwrap();
@@ -359,6 +352,9 @@ fn streaming_search<SS: SubsetSeq>(ss: &StreamingIndex<SbwtIndex<SS>, LcsArray>,
 }
 
 // Writes to stdout if the outfile is not given
+// We take the index as a trait instead of the SbwtIndexVariant enum because
+// the lookups call the index in a tight loop to do the right extension and
+// we don't want a match statement in there to select the right index variant every time.
 fn lookup_query<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, lcs: Option<LcsArray>, queryfile: &std::path::Path, outfile: Option<&std::path::Path>, membership_only: bool) {
     log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
 
@@ -410,12 +406,7 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     let cpp_format = matches.get_flag("load-cpp-format");
 
     // Read sbwt
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let index = load_index(indexfile, cpp_format);
 
     // Load the lcs array either from the given path, or by modifying the
     // file extension of the sbwt file, if available.
@@ -453,12 +444,11 @@ fn lookup_query_command(matches: &clap::ArgMatches){
         }
     };
 
+    // We upwrap the enum here already to avoid having to do this every time in a tight inner loop during lookup.
     match index {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only)
-        }
-    };
-
+        SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
+    }
 }
 
 // Return the number of bytes written
@@ -541,12 +531,7 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
     // Read sbwt
     log::info!("Loading sbwt index from file {}", indexfile.display());
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let index = load_index(indexfile, cpp_format);
 
     // Load the lcs array either from the given path, or by modifying the
     // file extension of the sbwt file.
@@ -572,8 +557,12 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
         }
     };
 
+    // We unwrap the enum here already to avoid having to unwrap it in a tight loop
     match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()))
+        },
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
             matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()))
         }
     };
@@ -599,12 +588,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
     let json_outfile = matches.get_one::<PathBuf>("json-out");
 
     // Read sbwt
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let mut index = load_index(indexfile, cpp_format);
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
@@ -623,20 +607,24 @@ fn benchmark_command(matches: &clap::ArgMatches) {
 
     let mut json_out = json_outfile.map(|path| File::create(path).unwrap());
 
+    if let Some(p) = precalc_length {
+        log::info!("Rebuilding the precalc table with prefix length {}", p);
+        let new_table = index.build_lookup_table(*p);
+        index.set_lookup_table(new_table);
+    }
+
+    // We unwrap the enum here to avoid unwrapping in a tight inner loop.
     match index {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            if let Some(p) = precalc_length {
-                log::info!("Rebuilding the precalc table with prefix length {}", p);
-                let new_table = PrefixLookupTable::new(&sbwt, *p);
-                sbwt.set_lookup_table(new_table);
-            }
-
+            benchmark(sbwt, lcs, json_out.as_mut());
+        },
+        SbwtIndexVariant::SubsetCorrectionSets(mut sbwt) => {
             benchmark(sbwt, lcs, json_out.as_mut());
         }
     };
 }
 
-fn dump_unitigs<SS: SubsetSeq + Send + Sync>(sbwt: &mut SbwtIndex<SS>, outfile: Option<&std::path::Path>, lcs: &Option<LcsArray>, n_threads: usize) {
+fn dump_unitigs(sbwt: &mut SbwtIndexVariant, outfile: Option<&std::path::Path>, lcs: &Option<LcsArray>, n_threads: usize) {
     let stdout = std::io::stdout();
     let stdout = std::io::BufWriter::new(stdout);
     let mut fileout = outfile.map(|f| BufWriter::new(File::create(f).unwrap()));
@@ -661,12 +649,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
     let outfile = matches.get_one::<std::path::PathBuf>("output");
 
     // Read sbwt
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let mut index = load_index(indexfile, cpp_format);
 
     // Load the lcs array, if available
     let mut lcsfile = indexfile.clone();
