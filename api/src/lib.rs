@@ -139,6 +139,7 @@ mod compact_int_vector;
 pub mod dbg;
 pub mod vodbg;
 pub mod benchmark;
+pub mod sbwt_index_variant;
 
 mod sdsl_compatibility;
 

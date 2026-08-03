@@ -3,7 +3,7 @@
 #![allow(unused)]
 
 use crate::streaming_index::{ContractLeft, ExtendRight, StreamingIndex};
-use crate::SbwtIndexVariant;
+use crate::sbwt_index_variant::SbwtIndexVariant;
 use crate::streaming_index::LcsArray;
 
 use super::pnsv::Pnsv;

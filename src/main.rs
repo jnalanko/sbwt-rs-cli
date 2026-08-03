@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
+use sbwt::sbwt_index_variant::SbwtIndexVariant;
 use sbwt::*;
 use sbwt::benchmark;
 use std::sync::Arc;
