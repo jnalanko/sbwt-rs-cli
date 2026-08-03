@@ -32,29 +32,31 @@ pub fn build<SS: SubsetSeq + Send>(
 ) -> Output<SS> {
     log::info!("[build] begin [length: {}]", input.len());
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
-    let mut result: Option<Vec<usize>> = None;
+    let mut result = None;
     thread_pool.scope(|scope| {
         scope.spawn(|_| {
             // result = Some(par_bounded_context_suffix_array(&mut input, k));
-            result = Some(par_bounded_context_suffix_array_bucket_sort(&mut input, k, prefix_length_for_bucket_sort));
+            let suffix_array = par_bounded_context_suffix_array_bucket_sort(&mut input, k, prefix_length_for_bucket_sort);
+            log::info!("[build] done building bounded context suffix array");
+            let output = if !add_all_dummies {
+                build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
+            } else {
+                build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
+            };
+            result = Some(output);
         });
     });
-    let bounded_context_suffix_array = result.unwrap();
-    log::info!("[build] done building bounded context suffix array");
-    let result = if !add_all_dummies {
-        build_without_redundant_dummies(input, bounded_context_suffix_array, k, build_lcs)
-    } else {
-        build_with_all_dummies(input, bounded_context_suffix_array, k, build_lcs, build_counts)
-    };
     log::info!("[build] done");
-    result
+    result.unwrap()
 }
 
 pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
-    input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool
+    threads: usize, input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool
 ) -> Output<SS> {
     log::info!("[build_without_redundant_dummies] begin");
-    let aux = build_full_auxiliary_data(input, bounded_context_suffix_array, k);
+    let _ = threads;
+    // let aux = build_full_auxiliary_data(input, bounded_context_suffix_array, k);
+    let aux = par_build_full_auxiliary_data(threads, input, bounded_context_suffix_array, k);
     let dummy_marks = build_dummy_marks(&aux, k);
 
     let FullAuxiliaryData {
@@ -252,6 +254,7 @@ struct FullAuxiliaryData {
     k_ranges: RawVector,
 }
 
+#[allow(dead_code)]
 fn build_full_auxiliary_data(
     input: Vec<u8>,
     bounded_context_suffix_array: Vec<usize>,
@@ -339,16 +342,176 @@ fn build_full_auxiliary_data(
     k_minus_one_ranges.enable_select();
 
     log::info!("[build_full_auxiliary_data] bwt");
-    let mut bwt_bit_vectors = bwt_raw_vectors.into_iter().map(BitVector::from).collect::<Vec<_>>();
-    bwt_bit_vectors.iter_mut().for_each(|vector| {
-        vector.enable_rank();
-        vector.enable_select();
-    });
+    let bwt_bit_vectors = bwt_raw_vectors.into_iter().map(BitVector::from).collect::<Vec<_>>();
     let bwtk = Bwt::new(bwt_bit_vectors);
 
     log::info!("[build_full_auxiliary_data] done");
     FullAuxiliaryData {
         kmer_count,
+        bwtk,
+        lcp,
+        shorter_than_k,
+        equal_to_k,
+        k_minus_one_ranges,
+        k_ranges
+    }
+}
+
+fn par_build_full_auxiliary_data(
+    threads: usize,
+    input: Vec<u8>,
+    bounded_context_suffix_array: Vec<usize>,
+    k: usize
+) -> FullAuxiliaryData {
+
+    use crate::atomic_bitmap::AtomicBitmap;
+    use std::sync::{Arc, Mutex, atomic::AtomicUsize};
+
+    let length = bounded_context_suffix_array.len();
+    let word_count = k.div_ceil(LANES);
+
+    let bwt_vectors = [
+        AtomicBitmap::new(length), // $
+        AtomicBitmap::new(length), // A
+        AtomicBitmap::new(length), // C
+        AtomicBitmap::new(length), // G
+        AtomicBitmap::new(length), // T
+    ];
+    bwt_vectors[0].set(0, true);
+
+    let mut lcp_result_data = Vec::with_capacity(threads);
+    for _ in 0..threads {
+        lcp_result_data.push(None);
+    }
+    let k_bit_width = usize::BITS - k.leading_zeros();
+    let lcp_width = (k_bit_width.div_ceil(u8::BITS) as usize).next_power_of_two();
+    let lcp_result: Arc<Mutex<Vec<Option<Lcp>>>> = Arc::new(Mutex::new(
+        lcp_result_data
+    ));
+
+    let kmer_count = AtomicUsize::new(0);
+    let shorter_than_k     = AtomicBitmap::new(length);
+    let equal_to_k         = AtomicBitmap::new(length);
+    let k_minus_one_ranges = AtomicBitmap::new(length);
+    let k_ranges           = AtomicBitmap::new(length);
+
+    let region_size = length.div_ceil(threads);
+
+    rayon::scope(|s| {
+        let input              = &input;
+        let bounded_context_suffix_array = &bounded_context_suffix_array;
+        let bwt_vectors        = &bwt_vectors;
+        let lcp_result         = &lcp_result;
+        let kmer_count         = &kmer_count;
+        let shorter_than_k     = &shorter_than_k;
+        let equal_to_k         = &equal_to_k;
+        let k_minus_one_ranges = &k_minus_one_ranges;
+        let k_ranges           = &k_ranges;
+
+        for thread_index in 0..threads {
+            s.spawn(move |_| {
+
+                let start = 1 + thread_index * region_size;
+                let end = (start + region_size).min(length);
+                let local_region_length = end - start;
+
+                let mut local_lcp = {
+                    let mut capacity = local_region_length * lcp_width;
+                    if thread_index == 0 {
+                        capacity += 1;
+                    }
+                    let data = Vec::<u8>::with_capacity(capacity);
+                    Lcp::new_with_width(data, lcp_width)
+                };
+
+                if thread_index == 0 {
+                    local_lcp.push(0);
+                }
+
+                for rank in start..end {
+                    let current_suffix_index = bounded_context_suffix_array[rank];
+
+                    // Set the bit in the bitvector corresponding to the previous character in the input
+                    // for the (bounded) BWT.
+                    let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
+                    let previous_character = input[previous_character_index_in_input];
+                    let previous_character_index = CHAR_TO_INDEX[previous_character as usize];
+                    if previous_character_index < bwt_vectors.len() {
+                        bwt_vectors[previous_character_index].set(rank, true);
+                    }
+
+                    let previous_suffix_index = bounded_context_suffix_array[rank - 1];
+                    let (length, lcp_value) = find_length_and_lcp_value(
+                        k,
+                        input,
+                        word_count,
+                        current_suffix_index,
+                        previous_suffix_index
+                    );
+                    local_lcp.push(lcp_value);
+
+                    if length < k {
+                        shorter_than_k.set(rank, true);
+                    } else if length == k {
+                        equal_to_k.set(rank, true);
+                    }
+
+                    if lcp_value < length {
+                        k_ranges.set(rank, true);
+                        if length >= k {
+                            kmer_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                        }
+                        if length < k || lcp_value < k - 1 {
+                            k_minus_one_ranges.set(rank, true);
+                        }
+                    }
+                }
+
+                let mut lcp_ref = lcp_result.lock().unwrap();
+                lcp_ref[thread_index] = Some(local_lcp);
+            });
+        }
+    });
+
+    log::info!("[par_build_full_auxiliary_data] bwt");
+    let bwt_bit_vectors = bwt_vectors.into_iter()
+        .map(|value| {
+            let intermediate = convert_atomic_bitmap(value);
+            BitVector::from(intermediate)
+        })
+        .collect::<Vec<_>>();
+    let bwtk = Bwt::new(bwt_bit_vectors);
+
+    log::info!("[par_build_full_auxiliary_data] bwt");
+    let mut collected_lcp_data = Vec::<u8>::with_capacity(length * lcp_width);
+    for lcp in lcp_result.lock().unwrap().iter_mut() {
+        let bytes: Vec<u8> = lcp.take().unwrap().into();
+        collected_lcp_data.extend_from_slice(&bytes);
+    }
+    let lcp = Lcp::new_with_width(collected_lcp_data, lcp_width);
+
+    fn convert_atomic_bitmap(value: AtomicBitmap) -> RawVector {
+        let intermediate = value.into_bitvec_u64();
+        crate::util::bitvec_to_simple_sds_raw_bitvec(intermediate)
+    }
+
+    log::info!("[par_build_full_auxiliary_data] shorter_than_k");
+    let shorter_than_k     = convert_atomic_bitmap(shorter_than_k);
+    let mut shorter_than_k = BitVector::from(shorter_than_k);
+    shorter_than_k.enable_rank();
+
+    let equal_to_k         = convert_atomic_bitmap(equal_to_k);
+
+    log::info!("[par_build_full_auxiliary_data] k_minus_one_ranges");
+    let k_minus_one_ranges = convert_atomic_bitmap(k_minus_one_ranges);
+    let mut k_minus_one_ranges = BitVector::from(k_minus_one_ranges);
+    k_minus_one_ranges.enable_rank();
+    k_minus_one_ranges.enable_select();
+
+    let k_ranges           = convert_atomic_bitmap(k_ranges);
+
+    FullAuxiliaryData {
+        kmer_count: kmer_count.load(std::sync::atomic::Ordering::Relaxed),
         bwtk,
         lcp,
         shorter_than_k,
