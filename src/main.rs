@@ -828,32 +828,7 @@ fn difference_command(matches: &clap::ArgMatches) {
     };
 }
 
-fn jaccard_command(matches: &clap::ArgMatches) {
-
-    let n_threads = *matches.get_one::<usize>("threads").unwrap();
-    let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
-    let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
-    let cpp_format = matches.get_flag("load-cpp-format");
-    let low_ram = matches.get_flag("low-ram");
-
-    // Read sbwts
-    let mut index1_reader = std::io::BufReader::new(std::fs::File::open(sbwt1_path).unwrap());
-    let index1 = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index1_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index1_reader).unwrap()
-    };
-
-    let mut index2_reader = std::io::BufReader::new(std::fs::File::open(sbwt2_path).unwrap());
-    let index2 = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index2_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index2_reader).unwrap()
-    };
-
-    let SbwtIndexVariant::SubsetMatrix(index1) = index1;
-    let SbwtIndexVariant::SubsetMatrix(index2) = index2;
-
+fn run_jaccard<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex<SS>, index2: SbwtIndex<SS>, low_ram: bool, n_threads: usize) {
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
 
     let intersection = interl.intersection_size();
@@ -864,32 +839,49 @@ fn jaccard_command(matches: &clap::ArgMatches) {
     println!("Jaccard index: {}", jaccard);
 }
 
+fn jaccard_command(matches: &clap::ArgMatches) {
+
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
+    let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
+
+    // Read sbwts
+    let index1 = load_index(sbwt1_path, cpp_format);
+    let index2 = load_index(sbwt2_path, cpp_format);
+
+    // To avoid variants^2 match arms, we require that both indices have the same SubsetSeq implementation.
+    match (index1, index2) {
+        (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
+            run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
+        },
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+            run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
+        },
+        _ => {
+            panic!("SBWT jaccard requires that both indices have the same SubsetSeq implementation")
+        }
+    };
+}
+
 fn kmer_at_rank_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let rank = *matches.get_one::<usize>("rank").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
 
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(indexfile).unwrap());
-    let index = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let mut sbwt = load_index(indexfile, cpp_format);
 
-    match index {
-        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
-            if rank >= sbwt.n_sets() {
-                eprintln!("Error: rank {} is out of bounds (index has {} sets)", rank, sbwt.n_sets());
-                std::process::exit(1);
-            }
-            log::info!("Building select support");
-            sbwt.build_select();
-            let mut buf = Vec::<u8>::with_capacity(sbwt.k() + 1);
-            sbwt.push_kmer_to_vec(rank, &mut buf);
-            buf.push(b'\n');
-            std::io::stdout().write_all(&buf).unwrap();
-        }
+    if rank >= sbwt.n_sets() {
+        eprintln!("Error: rank {} is out of bounds (index has {} sets)", rank, sbwt.n_sets());
+        std::process::exit(1);
     }
+    log::info!("Building select support");
+    sbwt.build_select();
+    let mut buf = Vec::<u8>::with_capacity(sbwt.k() + 1);
+    sbwt.push_kmer_to_vec(rank, &mut buf);
+    buf.push(b'\n');
+    std::io::stdout().write_all(&buf).unwrap();
 }
 
 fn check_command(matches: &clap::ArgMatches) {
@@ -897,19 +889,14 @@ fn check_command(matches: &clap::ArgMatches) {
     let cpp_format = matches.get_flag("load-cpp-format");
 
     log::info!("Loading index from {:?}", index_path);
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(index_path).unwrap());
-    let SbwtIndexVariant::SubsetMatrix(index) = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let index = load_index(index_path, cpp_format);
 
     let n = index.n_sets();
     let sigma = index.alphabet().len();
     log::info!("Index loaded: {} sets, {} k-mers, k={}, sigma={}", n, index.n_kmers(), index.k(), sigma);
 
     log::info!("Checking SBWT structural invariant: sum_c rank(c, n_sets) + 1 == n_sets");
-    let in_edges: usize = (0..sigma).map(|c| index.sbwt().rank(c as u8, n)).sum();
+    let in_edges: usize = (0..sigma).map(|c| index.rank(c as u8, n)).sum();
     if in_edges + 1 == n {
         log::info!("OK: {} in-edge(s) + root == {} sets", in_edges, n);
         println!("PASS");
@@ -927,12 +914,7 @@ fn stats_command(matches: &clap::ArgMatches) {
     let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
 
-    let mut index_reader = std::io::BufReader::new(std::fs::File::open(index_path).unwrap());
-    let SbwtIndexVariant::SubsetMatrix(index) = if cpp_format {
-        load_from_cpp_plain_matrix_format(&mut index_reader).unwrap()
-    } else {
-        load_sbwt_index_variant(&mut index_reader).unwrap()
-    };
+    let index = load_index(index_path, cpp_format);
 
     println!("Number of k-mers: {}", index.n_kmers());
     println!("Number of sbwt sets: {}", index.n_sets());
