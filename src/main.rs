@@ -80,6 +80,30 @@ fn load_index(path: &std::path::Path, cpp_format: bool) -> SbwtIndexVariant {
     }
 }
 
+/// The default `.lcs` path for the SBWT index file at `indexfile`
+/// (same path with the extension replaced by `.lcs`).
+fn default_lcs_path(indexfile: &std::path::Path) -> PathBuf {
+    let mut p = indexfile.to_path_buf();
+    p.set_extension("lcs");
+    p
+}
+
+/// Loads the LCS array from `lcs_path`, if it exists. If it does not, `not_found_message`
+/// is logged alongside the path to explain what happens without it.
+fn load_lcs_if_exists(lcs_path: &std::path::Path, not_found_message: &str) -> Option<LcsArray> {
+    match std::fs::File::open(lcs_path) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcs_path.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            Some(LcsArray::load(&mut lcs_reader).unwrap())
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> {}", lcs_path.display(), not_found_message);
+            None
+        }
+    }
+}
+
 // sbwt is taken as mutable because we need to build select support if all_at_once is true
 fn dump_kmers(sbwt: &mut SbwtIndexVariant, outfile: Option<&std::path::Path>, all_at_once: bool, include_dummies: bool, n_threads: usize) {
     let mut fileout = outfile.map(|f| BufWriter::new(File::create(f).unwrap()));
@@ -268,11 +292,7 @@ fn build_lcs_command(matches: &clap::ArgMatches) {
     let outfile = matches.get_one::<std::path::PathBuf>("output");
     let outfile = match outfile {
         Some(out) => out.clone(),
-        None => {
-            let mut f = indexfile.clone();
-            f.set_extension("lcs");
-            f
-        }
+        None => default_lcs_path(indexfile),
     };
 
     log::info!("The LCS array will be saved to {}", outfile.display());
@@ -419,8 +439,7 @@ fn lookup_query_command(matches: &clap::ArgMatches){
         },
         None => {
             // Try reading from the default filename
-            let mut p = indexfile.clone();
-            p.set_extension("lcs");
+            let p = default_lcs_path(indexfile);
             log::info!("Attempting locate the LCS array file from default filename {} (use --lcs-file to change)", p.display());
             match File::open(&p) {
                 Ok(f) => {
@@ -540,8 +559,7 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
         log::info!("Loading LCS array filename {}", f.display());
         f.to_owned()
     }).unwrap_or_else(|| {
-        let mut p = indexfile.clone();
-        p.set_extension("lcs");
+        let p = default_lcs_path(indexfile);
         log::info!("Loading LCS array from default filename {} (use --lcs-file to change)", p.display());
         p
     });
@@ -592,19 +610,7 @@ fn benchmark_command(matches: &clap::ArgMatches) {
     let mut index = load_index(indexfile, cpp_format);
 
     // Load the lcs array, if available
-    let mut lcsfile = indexfile.clone();
-    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
-    let lcs = match std::fs::File::open(&lcsfile) {
-        Ok(f) => {
-            log::info!("Loading LCS array from file {}", lcsfile.display());
-            let mut lcs_reader = std::io::BufReader::new(f);
-            Some(LcsArray::load(&mut lcs_reader).unwrap())
-        }
-        Err(_) => {
-            log::info!("No LCS array found at {} -> running without LCS support", lcsfile.display());
-            None
-        }
-    };
+    let lcs = load_lcs_if_exists(&default_lcs_path(indexfile), "running without LCS support");
 
     let mut json_out = json_outfile.map(|path| File::create(path).unwrap());
 
@@ -653,19 +659,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
     let mut index = load_index(indexfile, cpp_format);
 
     // Load the lcs array, if available
-    let mut lcsfile = indexfile.clone();
-    lcsfile.set_extension("lcs"); // Replace .sbwt with .lcs
-    let lcs = match std::fs::File::open(&lcsfile) {
-        Ok(f) => {
-            log::info!("Loading LCS array from file {}", lcsfile.display());
-            let mut lcs_reader = std::io::BufReader::new(f);
-            Some(LcsArray::load(&mut lcs_reader).unwrap())
-        }
-        Err(_) => {
-            log::info!("No LCS array found at {} -> Some extra computation needed to initialize the DBG", lcsfile.display());
-            None
-        }
-    };
+    let lcs = load_lcs_if_exists(&default_lcs_path(indexfile), "some extra computation needed to initialize the DBG");
 
     // We unwrap the enum here because Dbg<...> needs a concrete SubsetSeq type
     match index {
