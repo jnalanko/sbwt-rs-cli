@@ -278,6 +278,81 @@ impl std::fmt::Display for SubsetMatrix{
     }
 }
 
+struct SubsetCorrectionSets {
+    // TODO
+}
+
+// TODO
+impl SubsetSeq for SubsetCorrectionSets {
+    fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self {
+        todo!()
+    }
+
+    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec::<u64, Lsb0>>) -> Self {
+        todo!()
+    }
+
+    fn len(&self) -> usize {
+        todo!()
+    }
+
+    fn build_rank(&mut self) {
+        todo!()
+    }
+
+    fn build_select(&mut self) {
+        todo!()
+    }
+
+    fn has_select_support(&self) -> bool {
+        todo!()
+    }
+
+    fn has_rank_support(&self) -> bool {
+        todo!()
+    }
+
+    fn rank(&self, c: u8, i: usize) -> usize {
+        todo!()
+    }
+
+    fn select(&self, c: u8, i: usize) -> Option<usize> {
+        todo!()
+    }
+
+    fn append_set_to_buf(&self, i: usize, buf: &mut Vec<u8>) {
+        todo!()
+    }
+
+    fn subset_size(&self, i: usize) -> usize {
+        todo!()
+    }
+
+    fn set_contains(&self, set_idx: usize, character: u8) -> bool {
+        todo!()
+    }
+
+    fn next_set_with_char(&self, set_idx: usize, c: u8) -> Option<usize> {
+        todo!()
+    }
+
+    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
+        todo!()
+    }
+
+    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized {
+        todo!()
+    }
+
+    fn call_on_char_occurrences<F: FnMut(usize)>(&self, range: Range<usize>, c: u8, callback: F) {
+        todo!()
+    }
+
+    fn push_labels_forward(&self, labels: &[u8], sbwt_input_range: std::ops::Range<usize>, output_ranges: Vec<&mut[u8]>) {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
