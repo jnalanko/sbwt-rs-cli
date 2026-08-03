@@ -5,7 +5,6 @@ use std::io::stdout;
 use std::io::BufRead;
 use std::io::BufWriter;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
@@ -76,7 +75,7 @@ fn load_index(path: &std::path::Path, cpp_format: bool) -> SbwtIndexVariant {
     if cpp_format {
         SbwtIndexVariant::SubsetMatrix(load_from_cpp_plain_matrix_format(&mut reader).unwrap())
     } else {
-        load_sbwt_index_variant(&mut reader).unwrap()
+        SbwtIndexVariant::load(&mut reader).unwrap()
     }
 }
 
@@ -270,7 +269,7 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Serializing");
     
     let sbwt_kmers = sbwt.n_kmers();
-    let sbwt_bytes = write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(sbwt), &mut sbwt_out).unwrap();
+    let sbwt_bytes = SbwtIndexVariant::SubsetMatrix(sbwt).serialize(&mut sbwt_out).unwrap();
     log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
 
     if let Some(lcs) = lcs{
@@ -622,10 +621,10 @@ fn benchmark_command(matches: &clap::ArgMatches) {
 
     // We unwrap the enum here to avoid unwrapping in a tight inner loop.
     match index {
-        SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
             benchmark(sbwt, lcs, json_out.as_mut());
         },
-        SbwtIndexVariant::SubsetCorrectionSets(mut sbwt) => {
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
             benchmark(sbwt, lcs, json_out.as_mut());
         }
     };
@@ -656,7 +655,7 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
     let outfile = matches.get_one::<std::path::PathBuf>("output");
 
     // Read sbwt
-    let mut index = load_index(indexfile, cpp_format);
+    let index = load_index(indexfile, cpp_format);
 
     // Load the lcs array, if available
     let lcs = load_lcs_if_exists(&default_lcs_path(indexfile), "some extra computation needed to initialize the DBG");
@@ -719,13 +718,13 @@ fn merge_command(matches: &clap::ArgMatches) {
         (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
             let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
-            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(merged), &mut out).unwrap();
+            SbwtIndexVariant::SubsetMatrix(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
-            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetCorrectionSets(merged), &mut out).unwrap();
+            SbwtIndexVariant::SubsetCorrectionSets(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         _ => {
@@ -764,13 +763,13 @@ fn intersect_command(matches: &clap::ArgMatches) {
         (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
             let result = run_intersect(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
-            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(result), &mut out).unwrap();
+            SbwtIndexVariant::SubsetMatrix(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             let result = run_intersect(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
-            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetCorrectionSets(result), &mut out).unwrap();
+            SbwtIndexVariant::SubsetCorrectionSets(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         _ => {
@@ -807,13 +806,13 @@ fn difference_command(matches: &clap::ArgMatches) {
         (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
             let result = run_difference(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
-            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetMatrix(result), &mut out).unwrap();
+            SbwtIndexVariant::SubsetMatrix(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             let result = run_difference(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
-            sbwt::write_sbwt_index_variant(&SbwtIndexVariant::SubsetCorrectionSets(result), &mut out).unwrap();
+            SbwtIndexVariant::SubsetCorrectionSets(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         _ => {

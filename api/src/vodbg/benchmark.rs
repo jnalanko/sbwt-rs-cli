@@ -15,7 +15,7 @@ pub fn read_index_and_lcs(arguments_start: usize) -> (SbwtIndexVariant, LcsArray
     let lcs_path = args.next().expect("expected lcs index path");
 
     let mut index_reader = std::io::BufReader::new(std::fs::File::open(sbwt_path).unwrap());
-    let index = crate::load_sbwt_index_variant(&mut index_reader).unwrap();
+    let index = SbwtIndexVariant::load(&mut index_reader).unwrap();
 
     let mut lcs_reader = std::io::BufReader::new(std::fs::File::open(lcs_path).unwrap());
     let lcs = LcsArray::load(&mut lcs_reader).unwrap();

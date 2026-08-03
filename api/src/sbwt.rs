@@ -139,10 +139,6 @@ impl SbwtIndexVariant {
     /// See [SbwtIndex::interval_of_empty_string].
     pub fn interval_of_empty_string(&self) -> std::ops::Range<usize> { forward!(self, interval_of_empty_string()) }
 
-    /// See [SbwtIndex::serialize]. Note: unlike [write_sbwt_index_variant], this does not
-    /// write a type identifier, so the caller is responsible for keeping track of the variant.
-    pub fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> { forward!(self, serialize(out)) }
-
     /// See [SbwtIndex::inlabel].
     pub fn inlabel(&self, i: usize) -> Option<u8> { forward!(self, inlabel(i)) }
 
@@ -213,38 +209,39 @@ impl SbwtIndexVariant {
             SbwtIndexVariant::SubsetCorrectionSets(sbwt_index) => PrefixLookupTable::new(sbwt_index, prefix_len),
         }
     }
-}
 
-/// Loads an index that is wrapped in an enum describing the used subset rank structure type.
-/// The format includes a type identifier so the correct variant can later be loaded with [load_sbwt_index_variant].
-pub fn write_sbwt_index_variant(sbwt: &SbwtIndexVariant, out: &mut impl std::io::Write) -> std::io::Result<usize> {
-    match sbwt {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            out.write_all(&(b"SubsetMatrix".len() as u64).to_le_bytes())?;
-            out.write_all(b"SubsetMatrix")?;
-            sbwt.serialize(out)
-        },
-        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
-            out.write_all(&(b"SubsetCorrectionSets".len() as u64).to_le_bytes())?;
-            out.write_all(b"SubsetCorrectionSets")?;
-            sbwt.serialize(out)
+    /// Loads an index that is wrapped in an enum describing the used subset rank structure type.
+    /// The format includes a type identifier so the correct variant can later be loaded with [load_sbwt_index_variant].
+    pub fn serialize(&self, out: &mut impl std::io::Write) -> std::io::Result<usize> {
+        match self {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => {
+                out.write_all(&(b"SubsetMatrix".len() as u64).to_le_bytes())?;
+                out.write_all(b"SubsetMatrix")?;
+                sbwt.serialize(out)
+            },
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+                out.write_all(&(b"SubsetCorrectionSets".len() as u64).to_le_bytes())?;
+                out.write_all(b"SubsetCorrectionSets")?;
+                sbwt.serialize(out)
+            }
         }
     }
-}
 
-/// Loads an index that was stored with [write_sbwt_index_variant]. This includes a type identifier
-/// to load the correct subset rank variant.
-pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtIndexVariant, Box<dyn std::error::Error>> {
-    let type_id_len = input.read_u64::<LittleEndian>().unwrap();
-    let mut type_id = vec![0_u8; type_id_len as usize];
-    input.read_exact(&mut type_id)?;
+    /// Loads an index that was stored with [write_sbwt_index_variant]. This includes a type identifier
+    /// to load the correct subset rank variant.
+    pub fn load(input: &mut impl std::io::Read) -> Result<Self, Box<dyn std::error::Error>> {
+        let type_id_len = input.read_u64::<LittleEndian>().unwrap();
+        let mut type_id = vec![0_u8; type_id_len as usize];
+        input.read_exact(&mut type_id)?;
 
-    if type_id == b"SubsetMatrix" {
-        Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::<SubsetMatrix>::load(input)?))
-    } else if type_id == b"SubsetCorrectionSets" {
-        Ok(SbwtIndexVariant::SubsetCorrectionSets(SbwtIndex::<SubsetCorrectionSets>::load(input)?))
-    } else {
-        Err("Unknown SBWT index type".into())
+        if type_id == b"SubsetMatrix" {
+            Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::<SubsetMatrix>::load(input)?))
+        } else if type_id == b"SubsetCorrectionSets" {
+            Ok(SbwtIndexVariant::SubsetCorrectionSets(SbwtIndex::<SubsetCorrectionSets>::load(input)?))
+        } else {
+            Err("Unknown SBWT index type".into())
+        }
+
     }
 
 }
