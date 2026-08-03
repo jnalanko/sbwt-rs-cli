@@ -932,11 +932,11 @@ fn transform_index_command(matches: &clap::ArgMatches) {
     // The target type strings are validated by clap, so no other combinations are possible.
     let transformed = match (index, target_type.as_str()) {
         (SbwtIndexVariant::SubsetMatrix(sbwt), "bit_matrix") => {
-            log::info!("The index is already a bit matrix index");
+            log::warn!("The index is already a bit matrix index");
             SbwtIndexVariant::SubsetMatrix(sbwt)
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "correction_sets") => {
-            log::info!("The index is already a correction sets index");
+            log::warn!("The index is already a correction sets index");
             SbwtIndexVariant::SubsetCorrectionSets(sbwt)
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "bit_matrix") => {
