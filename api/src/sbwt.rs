@@ -139,7 +139,7 @@ pub fn load_sbwt_index_variant(input: &mut impl std::io::Read) -> Result<SbwtInd
 /// Loads an index that was previously serialized either with the C++ API <https://github.com/algbio/SBWT>,
 /// or the associated CLI. Supports only version v0.1.
 #[allow(non_snake_case)] // For C-array
-pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std::io::Result<SbwtIndexVariant> {
+pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std::io::Result<SbwtIndex<SubsetMatrix>> {
 
     // The file format with the CLI is:
     // [type id len] [type id] [version string id] [version string] [data]
@@ -255,7 +255,7 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
 
         let prefix_lut = PrefixLookupTable{ranges, prefix_length: precalc_k};
 
-        Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::from_components(subset_rank, n_kmers, k, C_array, prefix_lut)))
+        Ok(SbwtIndex::from_components(subset_rank, n_kmers, k, C_array, prefix_lut))
 
     } else {
         Err(std::io::ErrorKind::InvalidData.into())
@@ -1132,7 +1132,7 @@ mod tests {
 
         let data = decode_hex(data_hex).unwrap();
 
-        let SbwtIndexVariant::SubsetMatrix(cpp_sbwt) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(&data)).unwrap();
+        let cpp_sbwt = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(&data)).unwrap();
 
         let (rust_sbwt, _lcs) = BitPackedKmerSortingMem::new_from_slices(&[b"ACACTG", b"GCACTAA"], 3).precalc_length(2).run();
 
@@ -1141,7 +1141,7 @@ mod tests {
         // Check also that the loading works when the plain-matrix type id is not present.
 
         let data_without_type_id = &data[20..]; // Skip 8 bytes of (u64 length of type id string) + 12 bytes of "plain-matrix"
-        let SbwtIndexVariant::SubsetMatrix(cpp_sbwt2) = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data_without_type_id)).unwrap();
+        let cpp_sbwt2 = load_from_cpp_plain_matrix_format(&mut std::io::Cursor::new(data_without_type_id)).unwrap();
 
         assert_eq!(cpp_sbwt2, rust_sbwt);
 
