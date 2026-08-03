@@ -6,6 +6,7 @@ use std::io::BufRead;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::PathBuf;
+use bitvec::prelude::*;
 use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
@@ -904,6 +905,64 @@ fn check_command(matches: &clap::ArgMatches) {
     }
 }
 
+fn into_bit_vectors<SS: SubsetSeq + Send>(sbwt: SbwtIndex<SS>) -> [bitvec::vec::BitVec::<u64, Lsb0>; 4] {
+    log::info!("Extracting row bit vectors");
+    let rows = b"ACGT".iter().map(|&c| {
+        let mut row = bitvec![u64, Lsb0; 0; sbwt.n_sets()];
+        sbwt.sbwt().call_on_char_occurrences(0..sbwt.n_sets(), c, |i| {
+            row.set(i, true);
+        });
+        row
+    }).collect::<Vec::<bitvec::vec::BitVec::<u64, Lsb0>>>();
+
+    rows.try_into().unwrap() // Should have exactly four rows 
+}
+
+fn transform_index_command(matches: &clap::ArgMatches) {
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
+    let target_type = matches.get_one::<String>("type").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+
+    // Open output file early to fail fast if path is invalid
+    let mut out = BufWriter::new(File::create(outfile).unwrap());
+
+    let index = load_index(indexfile, cpp_format);
+
+    // The target type strings are validated by clap, so no other combinations are possible.
+    let transformed = match (index, target_type.as_str()) {
+        (SbwtIndexVariant::SubsetMatrix(sbwt), "bit_matrix") => {
+            log::info!("The index is already a bit matrix index");
+            SbwtIndexVariant::SubsetMatrix(sbwt)
+        },
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "correction_sets") => {
+            log::info!("The index is already a correction sets index");
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt)
+        },
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "bit_matrix") => {
+            log::info!("Transform bit matrix -> correction sets");
+            let (n_kmers, k, p) = (sbwt.n_kmers(), sbwt.k(), sbwt.get_lookup_table().prefix_length);
+            let rows: Vec<BitVec<u64, Lsb0>> = into_bit_vectors(sbwt).into();
+            let ss_new = SubsetMatrix::new_from_bit_vectors(rows);
+            let index_new = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss_new, n_kmers, k, p);
+            SbwtIndexVariant::SubsetMatrix(index_new)
+        },
+        (SbwtIndexVariant::SubsetMatrix(sbwt), "correction_sets") => {
+            log::info!("Transform bit matrix -> correction sets");
+            let (n_kmers, k, p) = (sbwt.n_kmers(), sbwt.k(), sbwt.get_lookup_table().prefix_length);
+            let rows: Vec<BitVec<u64, Lsb0>> = into_bit_vectors(sbwt).into();
+            let ss_new = SubsetCorrectionSets::new_from_bit_vectors(rows);
+            let index_new = SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p);
+            SbwtIndexVariant::SubsetCorrectionSets(index_new)
+        },
+        (_, t) => unreachable!("Unknown target index type {}", t),
+    };
+
+    log::info!("Serializing to {}", outfile.display());
+    let n_bytes = transformed.serialize(&mut out).unwrap();
+    log::info!("{} bytes written", n_bytes);
+}
+
 fn stats_command(matches: &clap::ArgMatches) {
     let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
@@ -1339,6 +1398,35 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("transform-index")
+            .about("Transform an SBWT index into a different subset sequence representation")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("index")
+                .help("SBWT index file")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("output")
+                .help("Output filename for the transformed SBWT")
+                .short('o')
+                .long("output")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("type")
+                .help("Target subset sequence representation of the transformed index")
+                .long("type")
+                .required(true)
+                .value_parser(["bit_matrix", "correction_sets"])
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         .subcommand(clap::Command::new("stats")
             .about("Print statistics about the index")
             .arg_required_else_help(true)
@@ -1445,6 +1533,7 @@ fn main() {
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
         Some(("stats", sub_matches)) => stats_command(sub_matches),
+        Some(("transform-index", sub_matches)) => transform_index_command(sub_matches),
         Some(("kmer-at-colex", sub_matches)) => kmer_at_rank_command(sub_matches),
         Some(("check", sub_matches)) => check_command(sub_matches),
         _ => unreachable!(),
