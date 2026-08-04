@@ -24,7 +24,11 @@ pub struct Bwt {
 }
 
 impl Bwt {
-    pub fn new(data: Vec<BitVector>) -> Self {
+    pub fn new(mut data: Vec<BitVector>) -> Self {
+        data.iter_mut().for_each(|vector| {
+            vector.enable_rank();
+            vector.enable_select();
+        });
         let mut counts = [0_usize; 5];
         counts[0] = 1; // '#'
         for i in 1..5 {

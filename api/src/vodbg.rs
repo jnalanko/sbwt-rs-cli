@@ -306,7 +306,6 @@ where
     /// Returns a node only if it exists.
     pub fn extend_left_with_character(&self, node: Node, character: u8, kmer_buffer: &mut Vec<u8>) -> Option<Node> {
         assert!(node.k < self.sbwt.k() || !self.is_dummy(node.start));
-        // let mut kmer_buffer = Vec::<u8>::with_capacity(node.k + 1);
 
         let in_left_half = {
             let half = self.sbwt.alphabet().len() >> 1;
@@ -651,7 +650,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LcsArray, SubsetMatrix, BitPackedKmerSortingDisk, BitPackedKmerSortingMem};
+    use crate::{LcsArray, SubsetMatrix, BitPackedKmerSortingMem};
     use crate::dbg::Dbg;
     use pnsv::PnsvTuned;
 
@@ -745,7 +744,7 @@ mod tests {
         let mut graphs = Vec::with_capacity(max_k);
 
         for i in MIN_K..=max_k {
-            let (sbwt, lcs) = BitPackedKmerSortingDisk::new_from_vecs(&seqs, i)
+            let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, i)
                 .build_lcs(true)
                 .build_select_support(true)
                 .run();

@@ -5,6 +5,9 @@ pub struct AtomicBitmap {
     pub len: usize, // Number of bits stored. The last word may be only partially used.
 } 
 
+const _: () = assert!(1_usize == 1_usize.to_le());
+const _: () = assert!(usize::BITS == u64::BITS);
+
 impl AtomicBitmap {
     pub fn new(len: usize) -> Self {
         let n_words = len.div_ceil(64);
@@ -45,6 +48,15 @@ impl AtomicBitmap {
         // Make sizes not atomic
         let non_atomic: Vec<usize> = self.data.into_iter().map(
             |x| x.load(std::sync::atomic::Ordering::Acquire) as usize
+        ).collect();
+        let mut bv = BitVec::from_vec(non_atomic);
+        bv.truncate(self.len); // Truncate the leftover bits in the last word
+        bv
+    }
+
+    pub fn into_bitvec_u64(self) -> BitVec<u64, bitvec::order::Lsb0> {
+        let non_atomic: Vec<u64> = self.data.into_iter().map(
+            |x| x.load(std::sync::atomic::Ordering::Acquire)
         ).collect();
         let mut bv = BitVec::from_vec(non_atomic);
         bv.truncate(self.len); // Truncate the leftover bits in the last word

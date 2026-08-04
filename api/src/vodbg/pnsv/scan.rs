@@ -1,13 +1,9 @@
 // Code by Martin Kostadinov.
 
-use super::bp::nearest_neighbor_dictionary::NearestNeighbourDictionary as NND;
 use super::Pnsv;
 
-pub mod augmented_bounded_scan;
 mod macros;
 use macros::define_variants;
-
-pub use augmented_bounded_scan as abs;
 
 pub trait Scan: Sized {
     type Word;

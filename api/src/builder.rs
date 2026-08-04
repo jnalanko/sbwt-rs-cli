@@ -482,7 +482,7 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
         crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
         let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
-            crate::bounded_alternative_construction::build::<SubsetMatrix>(
+            crate::alternative_construction::build_with_bounded_suffix_array::<SubsetMatrix>(
                 self.n_threads,
                 concatenation,
                 self.k,
@@ -626,18 +626,22 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
         let mut concatenation = Vec::<u8>::new();
         crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
-        let (bwt_bytes, lcp_bytes) = libsais_bwt_and_lcp(&concatenation, self.n_threads);
+        // let (bwt_bytes, lcp_bytes) = libsais_bwt_and_lcp(&concatenation, self.n_threads);
+        let suffix_array = libsais_suffix_array(&concatenation, self.n_threads);
 
         let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
-            crate::alternative_construction::build_from_input::<_, _, SubsetMatrix>(
-                &mut bwt_bytes.as_slice(),
-                &mut lcp_bytes.as_slice(),
-                concatenation.len(),
+            crate::alternative_construction::build::<SubsetMatrix>(
+                self.n_threads,
+                concatenation,
+                suffix_array,
+                // &mut bwt_bytes.as_slice(),
+                // &mut lcp_bytes.as_slice(),
+                // concatenation.len(),
                 self.k,
                 self.build_lcs,
                 self.add_all_dummy_paths,
                 false, // Counts are not part of the return value of this interface
-            ).unwrap();
+            );
 
         if self.build_select_support {
             sbwt.build_select();
@@ -687,11 +691,7 @@ impl BuildByLibsais<JSeqIOSeqStreamWrapper> {
     }
 }
 
-/// Builds a suffix array and an LCP array of `concatenation` using `libsais`, and derives from
-/// them the ascii BWT bytes and the little-endian 64-bit LCP values that
-/// [crate::alternative_construction::preprocessing::ascii_to_bwt] and
-/// [crate::alternative_construction::preprocessing::truncate_lcp] (used internally by
-/// [crate::alternative_construction::build_from_input]) expect.
+/// Builds a suffix array of `concatenation` using `libsais`.
 ///
 /// This relies on `'#'`, the sentinel character that
 /// [crate::alternative_construction::preprocessing::concatenate_sequences] places at the start
@@ -702,16 +702,16 @@ impl BuildByLibsais<JSeqIOSeqStreamWrapper> {
 /// byte-value suffix sort that [crate::alternative_construction] is built around, and the BWT can
 /// be derived from it with the ordinary `bwt[i] = concatenation[(sa[i] + n - 1) % n]` formula.
 #[cfg(feature = "libsais")]
-fn libsais_bwt_and_lcp(concatenation: &[u8], n_threads: usize) -> (Vec<u8>, Vec<u8>) {
+fn libsais_suffix_array(concatenation: &[u8], n_threads: usize) -> Vec<usize> {
     if concatenation.len() <= libsais::LIBSAIS_I32_OUTPUT_MAXIMUM_SIZE {
-        run_libsais::<i32>(concatenation, n_threads)
+        run_libsais_suffix_array::<i32>(concatenation, n_threads)
     } else {
-        run_libsais::<i64>(concatenation, n_threads)
+        run_libsais_suffix_array::<i64>(concatenation, n_threads)
     }
 }
 
 #[cfg(feature = "libsais")]
-fn run_libsais<O: libsais::OutputElement>(concatenation: &[u8], n_threads: usize) -> (Vec<u8>, Vec<u8>) {
+fn run_libsais_suffix_array<O: libsais::OutputElement>(concatenation: &[u8], n_threads: usize) -> Vec<usize> {
     let sa_construction = libsais::SuffixArrayConstruction::for_text(concatenation).in_owned_buffer::<O>();
     let sa_result = if n_threads > 1 {
         sa_construction.multi_threaded(libsais::ThreadCount::fixed(n_threads as u16)).run()
@@ -719,39 +719,7 @@ fn run_libsais<O: libsais::OutputElement>(concatenation: &[u8], n_threads: usize
         sa_construction.single_threaded().run()
     }.expect("libsais suffix array construction failed");
 
-    let plcp_construction = sa_result.plcp_construction();
-    let plcp_result = if n_threads > 1 {
-        plcp_construction.multi_threaded(libsais::ThreadCount::fixed(n_threads as u16)).run()
-    } else {
-        plcp_construction.single_threaded().run()
-    }.expect("libsais PLCP construction failed");
-
-    let lcp_construction = plcp_result.lcp_construction();
-    let lcp_result = if n_threads > 1 {
-        lcp_construction.multi_threaded(libsais::ThreadCount::fixed(n_threads as u16)).run()
-    } else {
-        lcp_construction.single_threaded().run()
-    }.expect("libsais LCP construction failed");
-
-    let (sa, lcp, plcp, _is_generalized_suffix_array) = lcp_result.into_parts();
-    drop(plcp); // Free memory
-    let n = concatenation.len();
-
-    let bwt_bytes: Vec<u8> = sa.iter()
-        .map(|&value| {
-            let i = value.to_usize().expect("suffix array value should fit in usize");
-            concatenation[(i + n - 1) % n]
-        })
-        .collect();
-
-    // TODO: cast instead of copy here 
-    let mut lcp_bytes = Vec::<u8>::with_capacity(lcp.len() * size_of::<u64>());
-    for value in lcp {
-        let v = value.to_u64().expect("LCP value should fit in u64");
-        lcp_bytes.extend_from_slice(&v.to_le_bytes());
-    }
-
-    (bwt_bytes, lcp_bytes)
+    sa_result.into_vec().into_iter().map(|element| element.to_usize().unwrap()).collect()
 }
 
 #[cfg(test)]
