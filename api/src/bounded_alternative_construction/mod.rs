@@ -31,7 +31,10 @@ pub fn build<SS: SubsetSeq + Send>(
     add_all_dummies: bool,
     build_counts: bool
 ) -> Output<SS> {
-    log::info!("[build] begin [length: {}]", input.len());
+    log::info!(
+        "[build (bounded context)] begin [length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}]",
+        input.len(), build_lcs, add_all_dummies, build_counts
+    );
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result = None;
     thread_pool.scope(|scope| {
@@ -94,7 +97,7 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     result
 }
 
-/// Needs to be executed in a rayon context.
+#[deprecated]
 pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<usize> {
     log::info!("[par_bounded_context_suffix_array] begin");
     let length = input.len();
@@ -254,16 +257,28 @@ fn compare_suffixes(input: &[u8], word_count: usize, mut cursor_a: usize, mut cu
 }
 
 pub(crate) struct FullAuxiliaryData {
+    /// It is easier to calculate the true k-mers while creating the auxiliary bitvectors rather
+    /// than trying to figure out their count later.
     pub(crate) kmer_count: usize,
     pub(crate) bwtk: Bwt,
     pub(crate) lcp: Lcp,
+    /// Used to figure out whether a k-mer at the beginning of a sequence has a true k-mer as a
+    /// predecessor in order to figure out whether the dummy k-mer is necessary. In the final pass
+    /// it is used to figure out if a given (k-1)-range contains a region of dummy k-mers.
     pub(crate) shorter_than_k: BitVector,
+    /// Used in the pass which marks the dummy k-mers that need to be kept in order to identify the
+    /// k-mers which are at the beginning of an input sequence.
     pub(crate) equal_to_k: RawVector,
+    /// Used in order to figure out the bounds at which to check the [Self::shorter_than_k]
+    /// bitvector whether a non-dummy k-mer at the beginning of an input sequence has a non-dummy
+    /// k-mer as a predecessor. In addition, it is used to figure out the bounds at which to
+    /// "collect" outedges for the first k-mer with a given (k-1) suffix in the SBWT.
     pub(crate) k_minus_one_ranges: BitVector,
+    /// Used to enumerate the sets of the SBWT.
     pub(crate) k_ranges: RawVector,
 }
 
-#[allow(dead_code)]
+#[deprecated]
 pub(crate) fn build_full_auxiliary_data(
     mut input: Vec<u8>,
     bounded_context_suffix_array: Vec<usize>,
@@ -605,6 +620,7 @@ fn get_outedge(bitvector: &RawVector, index: usize) -> usize {
 }
 
 #[inline]
+#[deprecated]
 fn set_outedge(outedge: &mut RawVector, index: usize, char_index: usize) {
     for i in 0..OUTEDGE_WIDTH {
         outedge.set_bit(index * OUTEDGE_WIDTH + i, (char_index & (1 << i)) != 0);
@@ -618,7 +634,7 @@ fn set_outedge_atomic(outedge: &AtomicBitmap, index: usize, char_index: usize) {
     }
 }
 
-#[allow(dead_code)]
+#[deprecated]
 fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
     log::info!("[build_dummy_marks] begin");
     use super::alternative_construction::has_full_kmer_predecessor;
@@ -731,6 +747,7 @@ fn par_build_dummy_marks(threads: usize, aux: &FullAuxiliaryData, k: usize) -> D
 }
 
 #[inline]
+#[deprecated]
 fn keep_predecessors(
     mut predecessor: usize,
     mut char_index: usize,

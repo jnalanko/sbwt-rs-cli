@@ -306,7 +306,6 @@ where
     /// Returns a node only if it exists.
     pub fn extend_left_with_character(&self, node: Node, character: u8, kmer_buffer: &mut Vec<u8>) -> Option<Node> {
         assert!(node.k < self.sbwt.k() || !self.is_dummy(node.start));
-        // let mut kmer_buffer = Vec::<u8>::with_capacity(node.k + 1);
 
         let in_left_half = {
             let half = self.sbwt.alphabet().len() >> 1;

@@ -3,6 +3,8 @@
 pub mod preprocessing;
 pub mod input_structures;
 
+use super::bounded_alternative_construction::FullAuxiliaryData;
+
 use crate::atomic_bitmap::AtomicBitmap;
 use crate::vodbg::count::{Counts, Sample};
 use crate::{LcsArray, SbwtIndex, SubsetSeq};
@@ -23,22 +25,46 @@ pub struct Output<SS: SubsetSeq + Send> {
 }
 
 type Row = BitVec<u64>;
+pub(crate) const FULL_SET: u8 = 0b00011110;
 
 /// Constructs an SbwtIndex (and optionally an LCS array and the counts of the k-mers in the input
-/// sequences) from the BWT and a Longest Commond Prefix array of the Suffix Array of the
-/// concatenated input sequences.
-///
-/// Expects the BWT and the LCP to correspond to a concatenation as done by the
-/// [preprocessing::concatenate_sequences] function, that is, the start of the concatenation is the
-/// '#' character and then before each sequence there is a single '$' character as well as at the
-/// end of the concatenated string. The input sequences should be reversed as the k-mers in the
-/// SBWT are sorted colexicographically. The BWT is expected to be in ascii whereas the LCP is
-/// expected to consist of 64 bit unsigned integers. The number of characters in the BWT and the
-/// number of integers in the LCP should be the same.
+/// sequences) from the concatenated input sequences and their Suffix Array.
 ///
 /// The `build_counts` parameter is taken into account only if all dummies are included in the
 /// SBWT, otherwise the Counts data structure will not answer queries about shorter k-mers
 /// correctly.
+pub fn build<SS: SubsetSeq + Send>(
+    threads: usize,
+    input: Vec<u8>,
+    suffix_array: Vec<usize>,
+    k: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool
+) -> Output<SS> {
+    log::info!(
+        "[build (full context)] begin [length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}]",
+        input.len(), build_lcs, add_all_dummies, build_counts
+    );
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+    let mut result = None;
+    thread_pool.scope(|scope| {
+        scope.spawn(|_| {
+            log::info!("[build] done building bounded context suffix array");
+            let output = if !add_all_dummies {
+                par_build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
+            } else {
+                use super::bounded_alternative_construction::build_with_all_dummies;
+                build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
+            };
+            result = Some(output);
+        });
+    });
+    log::info!("[build] done");
+    result.unwrap()
+}
+
+#[deprecated]
 pub fn build_from_input<RBwt, RLcp, SS>(
     bwt_input: &mut RBwt,
     lcp_input: &mut RLcp,
@@ -68,10 +94,9 @@ where
     Ok(result)
 }
 
-pub(crate) const FULL_SET: u8 = 0b00011110;
-
 /// The subroutine of the [build_from_input] function which handles the construction of the
 /// SbwtIndex without the redundant dummies.
+#[deprecated]
 pub fn build_without_redundant_dummies<SS: SubsetSeq + Send>(
     bwt: &Bwt,
     lcp: &Lcp,
@@ -124,33 +149,18 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     build_lcs: bool,
 ) -> Output<SS> {
     use crate::bounded_alternative_construction as bac;
+    let aux = bac::par_build_full_auxiliary_data(threads, input, suffix_array, k);
+
+    let dummy_marks = par_build_dummy_marks(threads, k, &aux);
+
     let bac::FullAuxiliaryData {
-        bwtk,
+        bwtk: bwt,
         lcp,
         kmer_count,
         shorter_than_k,
         equal_to_k,
         k_minus_one_ranges,
         k_ranges,
-    } = bac::par_build_full_auxiliary_data(threads, input, suffix_array, k);
-
-    let bwt = bwtk;
-    let aux = FullAuxiliaryBitVectors {
-        kmer_count,
-        shorter_than_k,
-        equal_to_k,
-        k_minus_one_ranges,
-        k_ranges
-    };
-
-    let dummy_marks = par_build_dummy_marks(threads, &bwt, k, &aux);
-
-    let FullAuxiliaryBitVectors {
-        kmer_count,
-        shorter_than_k,
-        equal_to_k,
-        k_minus_one_ranges,
-        k_ranges
     } = aux;
     drop(equal_to_k);
 
@@ -291,6 +301,7 @@ where
     (rows, lcs)
 }
 
+#[deprecated]
 pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     bwt: &Bwt,
     lcp: &Lcp,
@@ -456,26 +467,16 @@ pub(crate) fn collect_output<SS: SubsetSeq + Send>(
 
 
 /// Auxiliary BitVectors needed for the calculation of the SbwtIndex without redundant dummies.
+#[deprecated]
 struct FullAuxiliaryBitVectors {
-    /// It is easier to calculate the true k-mers while creating the auxiliary bitvectors rather
-    /// than trying to figure out their count later.
     kmer_count: usize,
-    /// Used to figure out whether a k-mer at the beginning of a sequence has a true k-mer as a
-    /// predecessor in order to figure out whether the dummy k-mer is necessary. In the final pass
-    /// it is used to figure out if a given (k-1)-range contains a region of dummy k-mers.
     shorter_than_k: BitVector,
-    /// Used in the pass which marks the dummy k-mers that need to be kept in order to identify the
-    /// k-mers which are at the beginning of an input sequence.
     equal_to_k: RawVector,
-    /// Used in order to figure out the bounds at which to check the [Self::shorter_than_k]
-    /// bitvector whether a non-dummy k-mer at the beginning of an input sequence has a non-dummy
-    /// k-mer as a predecessor. In addition, it is used to figure out the bounds at which to
-    /// "collect" outedges for the first k-mer with a given (k-1) suffix in the SBWT.
     k_minus_one_ranges: BitVector,
-    /// Used to enumerate the sets of the SBWT.
     k_ranges: RawVector,
 }
 
+#[deprecated]
 fn build_full_auxiliary_bitvectors(bwt: &Bwt, lcp: &Lcp, k: usize) -> FullAuxiliaryBitVectors {
     // The prefix of a suffix up to the first '$' will be referred to as the true prefix and
     // its length as the true length.
@@ -557,6 +558,7 @@ struct PartialAuxiliaryBitVectors {
     k_ranges: RawVector,
 }
 
+#[deprecated]
 fn build_parital_auxiliary_bitvectors(bwt: &Bwt, lcp: &Lcp, k: usize) -> PartialAuxiliaryBitVectors {
     log::info!("[build_partial_auxiliary_bitvectors] begin");
     let len = bwt.len();
@@ -615,6 +617,7 @@ struct DummyMarks {
     keep_outedge: RawVector,
 }
 
+#[deprecated]
 fn build_dummy_marks(bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> DummyMarks {
     log::info!("[build_dummy_marks] begin");
     let len = bwt.len();
@@ -658,10 +661,11 @@ fn build_dummy_marks(bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> Dumm
     }
 }
 
-fn par_build_dummy_marks(threads: usize, bwt: &Bwt, k: usize, aux: &FullAuxiliaryBitVectors) -> DummyMarks {
+fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> DummyMarks {
     log::info!("[par_build_dummy_marks] begin");
     use super::alternative_construction::has_full_kmer_predecessor;
 
+    let bwt = &aux.bwtk;
     let scan_start = bwt.counts[1];
     let length = bwt.len();
     let keep_dummy  = AtomicBitmap::new(length);
@@ -752,6 +756,7 @@ pub(crate) fn has_full_kmer_predecessor(
     number_of_prefixes_with_true_length_smaller_than_k < range_length
 }
 
+#[deprecated]
 fn keep_predecessors(mut predecessor: usize, bwt: &Bwt, mut k: usize, keep_dummy: &mut RawVector) {
     while k > 0 {
         keep_dummy.set_bit(predecessor, true);
@@ -848,67 +853,6 @@ mod tests {
         suffix_array
     }
 
-    fn construct_bwt_lcp(concatenation: &[u8], suffix_array: &[usize], k: usize) -> (Bwt, Lcp) {
-        let length = concatenation.len();
-
-        let bwt = suffix_array.iter()
-            .map(|index| concatenation[(index + concatenation.len() - 1) % concatenation.len()])
-            .collect::<Vec<_>>();
-        let bwt = preprocessing::ascii_to_bwt(&mut bwt.as_slice(), length).unwrap();
-
-        let mut lcp = Vec::<u64>::with_capacity(length);
-        lcp.push(0);
-        for i in 1..bwt.len() {
-            let mut it_a = suffix_array[i - 1];
-            let mut it_b = suffix_array[i];
-            let mut lcp_value = 0;
-            while it_a < suffix_array.len() && it_b < suffix_array.len() {
-                if concatenation[it_a] != concatenation[it_b] {
-                    break;
-                }
-                lcp_value += 1;
-                it_a += 1;
-                it_b += 1;
-            }
-            lcp.push(lcp_value);
-        }
-
-        let lcp_bytes: Vec<u8> = lcp.into_iter().map(|value| value.to_le_bytes()).collect::<Vec<_>>().concat();
-        let lcp = preprocessing::truncate_lcp::<_, true>(&mut lcp_bytes.as_slice(), bwt.len(), k).unwrap();
-
-        (bwt, lcp)
-    }
-
-    #[test]
-    fn bwt_lcp() {
-        let seqs = seqs![b"CCACC", b"AGG", b"TACG", b"ACG", b"NOP"];
-        let concatenation = make_concatenation(&seqs);
-        let suffix_array = construct_suffix_array(&concatenation);
-        let (bwt, mut lcp) = construct_bwt_lcp(&concatenation, &suffix_array, 3);
-
-        let mut order = 0;
-        let mut index = bwt.len() - 1;
-        for _ in 0..bwt.len() {
-            let (new_order, character) = bwt.lf_step(order);
-            if character != b'#' {
-                // The inverse step works only for the letters in the alphabet and $, not for #.
-                let (found_order, _) = bwt.inverse_lf_step(new_order);
-                assert_eq!(order, found_order, "{}", index);
-            }
-            assert_eq!(concatenation[index], character, "{}", index);
-            if index == 0 {
-                index = bwt.len() - 1;
-            } else {
-                index -= 1;
-            }
-            order = new_order;
-        }
-
-        let correct = &[0, 0, 1, 2, 3, 3, 1, 1, 3, 2, 0, 2, 1, 1, 0, 1, 2, 2, 1, 2, 0, 1, 3, 1, 0];
-        let values = (&mut lcp).collect::<Vec<_>>();
-        assert_eq!(correct, values.as_slice());
-    }
-
     #[test]
     fn randomised_kmers() {
         use rand_chacha::ChaCha20Rng;
@@ -939,7 +883,6 @@ mod tests {
 
         let concatenation = make_concatenation(&seqs);
         let suffix_array = construct_suffix_array(&concatenation);
-        let (bwt, lcp) = construct_bwt_lcp(&concatenation, &suffix_array, k);
 
         {
             // Without redundant dummies.
@@ -947,40 +890,14 @@ mod tests {
                 .build_lcs(true)
                 .run();
 
-            let Output {
-                sbwt: constructed_sbwt,
-                lcs: constructed_lcs,
-                counts
-            } = build_without_redundant_dummies::<SubsetMatrix>(&bwt, &lcp, k, true);
-
-            assert!(counts.is_none());
-
-            let mut correct_buf = Vec::<u8>::new();
-            let mut constructed_buf = Vec::<u8>::new();
-
-            correct_sbwt.serialize(&mut correct_buf).unwrap();
-            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
-            
-            correct_buf.clear();
-            constructed_buf.clear();
-
-            let correct_lcs = correct_lcs.unwrap();
-            let constructed_lcs = constructed_lcs.unwrap();
-
-            correct_lcs    .serialize(&mut correct_buf).unwrap();
-            constructed_lcs.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
-
-            // Parallel construction.
             let threads = 4;
             let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
             let mut result = None;
             thread_pool.scope(|_| {
                 let output = par_build_without_redundant_dummies::<SubsetMatrix>(
                     threads,
-                    concatenation,
-                    suffix_array,
+                    concatenation.clone(),
+                    suffix_array.clone(),
                     k,
                     true,
                 );
@@ -994,14 +911,15 @@ mod tests {
 
             assert!(counts.is_none());
 
-            correct_buf.clear();
-            constructed_buf.clear();
+            let mut correct_buf = Vec::<u8>::new();
+            let mut constructed_buf = Vec::<u8>::new();
             correct_sbwt.serialize(&mut correct_buf).unwrap();
             constructed_sbwt.serialize(&mut constructed_buf).unwrap();
             assert_eq!(correct_buf, constructed_buf);
             
             correct_buf.clear();
             constructed_buf.clear();
+            let correct_lcs     = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
 
             correct_lcs    .serialize(&mut correct_buf).unwrap();
@@ -1020,7 +938,7 @@ mod tests {
                 sbwt: constructed_sbwt,
                 lcs: constructed_lcs,
                 counts
-            } = build_with_all_dummies::<SubsetMatrix>(&bwt, &lcp, k, true, true);
+            } = build::<SubsetMatrix>(4, concatenation, suffix_array, k, true, true, true);
 
             let mut correct_buf = Vec::<u8>::new();
             let mut constructed_buf = Vec::<u8>::new();
