@@ -384,7 +384,7 @@ impl<SS: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<SS> {
         let seq = self.inner.stream_next()?;
         self.buf.clear();
         self.buf.extend(seq);
-        crate::bounded_alternative_construction::preprocessing::sanitise(&mut self.buf);
+        crate::alternative_construction::preprocessing::sanitise(&mut self.buf);
         self.buf.reverse();
         Some(&self.buf)
     }
@@ -479,10 +479,10 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
         let mut concatenation = Vec::<u8>::new();
-        crate::bounded_alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
+        crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
-        let crate::bounded_alternative_construction::Output{mut sbwt, lcs, counts: _} =
-            crate::bounded_alternative_construction::build_with_bounded_suffix_array::<SubsetMatrix>(
+        let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
+            crate::alternative_construction::build_with_bounded_suffix_array::<SubsetMatrix>(
                 self.n_threads,
                 concatenation,
                 self.k,
@@ -624,13 +624,13 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
         let mut concatenation = Vec::<u8>::new();
-        crate::bounded_alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
+        crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
         // let (bwt_bytes, lcp_bytes) = libsais_bwt_and_lcp(&concatenation, self.n_threads);
         let suffix_array = libsais_suffix_array(&concatenation, self.n_threads);
 
-        let crate::bounded_alternative_construction::Output{mut sbwt, lcs, counts: _} =
-            crate::bounded_alternative_construction::build::<SubsetMatrix>(
+        let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
+            crate::alternative_construction::build::<SubsetMatrix>(
                 self.n_threads,
                 concatenation,
                 suffix_array,
