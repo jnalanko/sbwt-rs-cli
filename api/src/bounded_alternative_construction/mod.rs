@@ -1,16 +1,12 @@
 // Code by Martin Kostadinov.
 
-use crate::SubsetSeq;
+pub mod preprocessing;
+pub mod input_structures;
 
-use crate::alternative_construction::{
-    Output,
-    push_set,
-    input_structures::{
-        Bwt, Lcp, CHAR_TO_INDEX
-    }
-};
+use input_structures::{Bwt, Lcp, CHAR_TO_INDEX};
 use crate::atomic_bitmap::AtomicBitmap;
 use crate::vodbg::count::{Counts, Sample};
+use crate::{LcsArray, SbwtIndex, SubsetSeq};
 
 use bitvec::vec::BitVec;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
@@ -21,8 +17,37 @@ type Word = wide::u8x16;
 const LANES: usize = Word::LANES as usize;
 type Bitmask = u16;
 const _: () = assert!(Bitmask::BITS as usize == LANES);
+const FULL_SET: u8 = 0b00011110;
+
+pub struct Output<SS: SubsetSeq + Send> {
+    pub sbwt: SbwtIndex<SS>,
+    pub lcs: Option<LcsArray>,
+    pub counts: Option<Counts>,
+}
 
 pub fn build<SS: SubsetSeq + Send>(
+    threads: usize,
+    input: Vec<u8>,
+    suffix_array: Vec<usize>,
+    k: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool
+) -> Output<SS> {
+    log::info!("[build] begin");
+    let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+    let mut result = None;
+    thread_pool.scope(|scope| {
+        scope.spawn(|_| {
+            let output = par_build(threads, input, suffix_array, k, build_lcs, add_all_dummies, build_counts);
+            result = Some(output);
+        });
+    });
+    log::info!("[build] done");
+    result.unwrap()
+}
+
+pub fn build_with_bounded_suffix_array<SS: SubsetSeq + Send>(
     threads: usize,
     mut input: Vec<u8>,
     k: usize,
@@ -31,35 +56,49 @@ pub fn build<SS: SubsetSeq + Send>(
     add_all_dummies: bool,
     build_counts: bool
 ) -> Output<SS> {
-    log::info!(
-        "[build (bounded context)] begin [length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}]",
-        input.len(), build_lcs, add_all_dummies, build_counts
-    );
+    log::info!("[build_with_bounded_suffix_array] begin");
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result = None;
     thread_pool.scope(|scope| {
         scope.spawn(|_| {
             let suffix_array = par_bounded_context_suffix_array_bucket_sort(&mut input, k, prefix_length_for_bucket_sort);
-            log::info!("[build] done building bounded context suffix array");
-            let output = if !add_all_dummies {
-                par_build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
-            } else {
-                build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
-            };
+            let output = par_build::<SS>(threads, input, suffix_array, k, build_lcs, add_all_dummies, build_counts);
             result = Some(output);
         });
     });
-    log::info!("[build] done");
+    log::info!("[build_with_bounded_suffix_array] done");
     result.unwrap()
+}
+
+pub fn par_build<SS: SubsetSeq + Send>(
+    threads: usize,
+    input: Vec<u8>,
+    suffix_array: Vec<usize>,
+    k: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool
+) -> Output<SS> {
+    log::info!(
+        "[par_build] begin [length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}]",
+        input.len(), build_lcs, add_all_dummies, build_counts
+    );
+    let output = if !add_all_dummies {
+        par_build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
+    } else {
+        build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
+    };
+    log::info!("[par_build] done");
+    output
 }
 
 pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     threads: usize, input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool
 ) -> Output<SS> {
-    log::info!("[build_without_redundant_dummies] begin");
+    log::info!("[par_build_without_redundant_dummies] begin");
     let _ = threads;
     let aux = par_build_full_auxiliary_data(threads, input, bounded_context_suffix_array, k);
-    let dummy_marks = par_build_dummy_marks(threads, &aux, k);
+    let dummy_marks = par_build_dummy_marks(threads, k, &aux);
 
     let FullAuxiliaryData {
         kmer_count,
@@ -73,7 +112,7 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     drop(equal_to_k);
 
     let separator_count = bwtk.counts[1];
-    let (rows, lcs) = super::alternative_construction::_build_without_redundant_dummies(
+    let (rows, lcs) = _build_without_redundant_dummies(
         k,
         separator_count,
         bwtk.len(),
@@ -83,43 +122,164 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
         &shorter_than_k,
         &dummy_marks.keep_dummy,
         build_lcs,
-        |current_set, index| {
-            let outedge = get_outedge(&dummy_marks.outedges, index);
-            *current_set |= (1 << outedge) as u8;
+        |current_set: &mut u8, index| {
+            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
+                *current_set = include_letter(&bwtk, index, *current_set);
+            }
         },
-        |current_set, index| {
-            let outedge = bwtk.get_char_index(index);
-            *current_set |= (1 << outedge) as u8;
-        }
+        |current_set: &mut u8, index| {
+            *current_set = include_letter(&bwtk, index, *current_set);
+        },
     );
-    let result = super::alternative_construction::collect_output(k, rows, lcs, None, kmer_count);
-    log::info!("[build_without_redundant_dummies] done");
+    let result = collect_output(k, rows, lcs, None, kmer_count);
+    log::info!("[par_build_without_redundant_dummies] done");
     result
 }
 
-#[deprecated]
-pub fn par_bounded_context_suffix_array(input: &mut Vec<u8>, k: usize) -> Vec<usize> {
-    log::info!("[par_bounded_context_suffix_array] begin");
-    let length = input.len();
-    let word_count = k.div_ceil(LANES);
-
-    // Pad the input so that the comparisons need not do bound checks.
-    for _ in 1..(word_count * LANES) {
-        input.push(b'$');
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn _build_without_redundant_dummies<FDummy, FNonDummy>(
+    k: usize,
+    separator_count: usize,
+    length: usize,
+    lcp: &Lcp,
+    k_minus_one_ranges: &BitVector,
+    k_ranges: &RawVector,
+    shorter_than_k: &BitVector,
+    keep_dummy: &RawVector,
+    build_lcs: bool,
+    mut add_dummy_outedge: FDummy,
+    mut add_non_dummy_outedge: FNonDummy,
+) -> (Vec<BitVec<u64>>, Option<IntVector>)
+where
+    FDummy: FnMut(&mut u8, usize),
+    FNonDummy: FnMut(&mut u8, usize)
+{
+    log::info!("[_build_without_redundant_dummies] begin");
+    let mut rows = Vec::<BitVec<u64>>::new();
+    for _ in 0..4 {
+        // note(mk): These overestimating allocations should reserve the pages in the virtual
+        // memory space of the process, but it shouldn't actually use all of them. Potential
+        // breaking point!
+        rows.push(BitVec::with_capacity(length));
     }
 
-    let mut suffix_array: Vec<usize> = Vec::<usize>::with_capacity(length);
-    suffix_array.extend(0..length);
+    let mut lcs: Option<IntVector> = if build_lcs {
+        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+        let bit_width = bit_width as usize;
+        let mut value = IntVector::with_capacity(length, bit_width).unwrap();
+        value.push(0); // '$...$' dummy k-mer
+        Some(value)
+    } else {
+        None
+    };
 
-    use rayon::slice::ParallelSliceMut;
-    suffix_array.par_sort_by(|suffix_a, suffix_b| {
-        compare_suffixes(input, word_count, *suffix_a, *suffix_b)
-    });
+    let mut current_set: u8 = 0;
 
-    log::info!("[par_bounded_context_suffix_array] done");
-    suffix_array
+    for index in 1..separator_count {
+        add_dummy_outedge(&mut current_set, index);
+        if current_set & FULL_SET == FULL_SET {
+            break;
+        }
+    }
+    push_set(&mut rows, current_set);
+
+    let mut current_set = 0;
+    let mut current_lcs_value  = k - 1;
+    let mut include_dummy_kmer = false;
+    let mut has_dummy_kmer     = false;
+    let mut k_range_count = 0;
+
+    for index in separator_count..length {
+        if k_minus_one_ranges.get(index) {
+            if has_dummy_kmer && !include_dummy_kmer {
+                k_range_count -= 1;
+            }
+            while k_range_count > 0 {
+                push_set(&mut rows, current_set);
+                current_set = 0;
+                k_range_count -= 1;
+            }
+
+            current_set = 0;
+            has_dummy_kmer = false;
+            include_dummy_kmer = false;
+            k_range_count = 0;
+        }
+
+        if build_lcs {
+            current_lcs_value = current_lcs_value.min(lcp.get(index));
+        }
+
+        let is_start_of_k_range = k_ranges.bit(index);
+        if is_start_of_k_range {
+            k_range_count += 1;
+        }
+
+        if shorter_than_k.get(index) {
+            has_dummy_kmer = true;
+            if keep_dummy.bit(index) {
+                if build_lcs && !include_dummy_kmer {
+                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
+                    current_lcs_value = k - 1;
+                }
+                include_dummy_kmer = true;
+            }
+            add_dummy_outedge(&mut current_set, index);
+        } else {
+            if build_lcs && is_start_of_k_range {
+                lcs.as_mut().unwrap().push(current_lcs_value as u64);
+                current_lcs_value = k - 1;
+            }
+            add_non_dummy_outedge(&mut current_set, index);
+        }
+    }
+
+    if has_dummy_kmer && !include_dummy_kmer {
+        k_range_count -= 1;
+    }
+    while k_range_count > 0 {
+        push_set(&mut rows, current_set);
+        current_set = 0;
+        k_range_count -= 1;
+    }
+
+    log::info!("[_build_without_redundant_dummies] begin");
+    (rows, lcs)
 }
 
+pub(crate) fn collect_output<SS: SubsetSeq + Send>(
+    k: usize,
+    rows: Vec<BitVec<u64>>,
+    lcs: Option<IntVector>,
+    counts: Option<Counts>,
+    kmer_count: usize
+) -> Output<SS> {
+    log::info!("[collect_output] constructing sbwt");
+    let C: Vec<usize> = crate::util::get_C_array(&rows);
+    let mut subset_rank = SS::new_from_bit_vectors(rows);
+    subset_rank.build_rank();
+    let n_sets  = subset_rank.len();
+    let n_kmers = kmer_count;
+    let mut index = SbwtIndex::<SS>::from_components(
+        subset_rank,
+        n_kmers,
+        k,
+        C,
+        crate::PrefixLookupTable::new_empty(n_sets)
+    );
+    // TODO: add a parameter for prefix_length?
+    let prefix_lookup_table = crate::PrefixLookupTable::new(&index, 8);
+    index.set_lookup_table(prefix_lookup_table);
+    let lcs = lcs.map(LcsArray::new);
+
+    log::info!("[collect_output] constructing done");
+    Output {
+        sbwt: index,
+        lcs,
+        counts,
+    }
+}
 
 const CHARACTER_COUNT: usize = 5;
 const MAX_PREFIX_LENGTH_FOR_BUCKET_SORT: usize = 8;
@@ -204,7 +364,7 @@ pub fn par_bounded_context_suffix_array_bucket_sort(input: &mut Vec<u8>, k: usiz
     }
 
     rayon::scope(|s| {
-        use super::alternative_construction::input_structures::INDEX_TO_CHAR;
+        use input_structures::INDEX_TO_CHAR;
         s.spawn(|_| {
             input.par_iter_mut().for_each(|character| *character = INDEX_TO_CHAR[*character as usize]);
         });
@@ -278,116 +438,25 @@ pub(crate) struct FullAuxiliaryData {
     pub(crate) k_ranges: RawVector,
 }
 
-#[deprecated]
-pub(crate) fn build_full_auxiliary_data(
-    mut input: Vec<u8>,
-    bounded_context_suffix_array: Vec<usize>,
-    k: usize
-) -> FullAuxiliaryData {
-    log::info!("[build_full_auxiliary_data] begin");
-    // The input should still be padded.
-    let length = bounded_context_suffix_array.len();
-    pad_input(&mut input, k, length);
-    let word_count = k.div_ceil(LANES);
-
-    let mut bwt_raw_vectors = [
-        RawVector::with_len(length, false), // $
-        RawVector::with_len(length, false), // A
-        RawVector::with_len(length, false), // C
-        RawVector::with_len(length, false), // G
-        RawVector::with_len(length, false), // T
-    ];
-    // The suffix which is equivalent to the entire string is always at the beginning since the
-    // input string should begin with '#' which is lexicographically the smallest. The input
-    // sequence must also end with '$' so the preceding character of '#' is always '$'
-    bwt_raw_vectors[0].set_bit(0, true);
-
-    let mut lcp = {
-        let k_bit_width = usize::BITS - k.leading_zeros();
-        let width = (k_bit_width.div_ceil(u8::BITS) as usize).next_power_of_two();
-        let data = Vec::<u8>::with_capacity(length * width);
-        Lcp::new_with_width(data, width)
-    };
-    lcp.push(0);
-
-    let mut kmer_count: usize = 0;
-    let mut shorter_than_k     = RawVector::with_len(length, false);
-    let mut equal_to_k         = RawVector::with_len(length, false);
-    let mut k_minus_one_ranges = RawVector::with_len(length, false);
-    let mut k_ranges           = RawVector::with_len(length, false);
-
-    for rank in 1..length {
-        let current_suffix_index = bounded_context_suffix_array[rank];
-
-        {
-            // Set the bit in the bitvector corresponding to the previous character in the input
-            // for the (bounded) BWT.
-            let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
-            let previous_character = input[previous_character_index_in_input];
-            let previous_character_index = CHAR_TO_INDEX[previous_character as usize];
-            if previous_character_index < bwt_raw_vectors.len() {
-                bwt_raw_vectors[previous_character_index].set_bit(rank, true);
-            }
-        }
-
-        let previous_suffix_index = bounded_context_suffix_array[rank - 1];
-        let (length, lcp_value) = find_length_and_lcp_value(
-            k,
-            &input,
-            word_count,
-            current_suffix_index,
-            previous_suffix_index
-        );
-        lcp.push(lcp_value);
-
-        if length < k {
-            shorter_than_k.set_bit(rank, true);
-        } else if length == k {
-            equal_to_k.set_bit(rank, true);
-        }
-
-        if lcp_value < length {
-            k_ranges.set_bit(rank, true);
-            if length >= k {
-                kmer_count += 1;
-            }
-            if length < k || lcp_value < k - 1 {
-                k_minus_one_ranges.set_bit(rank, true);
-            }
-        }
-    }
-
-    log::info!("[build_full_auxiliary_data] shorter_than_k");
-    let mut shorter_than_k = BitVector::from(shorter_than_k);
-    shorter_than_k.enable_rank();
-
-    log::info!("[build_full_auxiliary_data] k_minus_one_ranges");
-    let mut k_minus_one_ranges = BitVector::from(k_minus_one_ranges);
-    k_minus_one_ranges.enable_rank();
-    k_minus_one_ranges.enable_select();
-
-    log::info!("[build_full_auxiliary_data] bwt");
-    let bwt_bit_vectors = bwt_raw_vectors.into_iter().map(BitVector::from).collect::<Vec<_>>();
-    let bwtk = Bwt::new(bwt_bit_vectors);
-
-    log::info!("[build_full_auxiliary_data] done");
-    FullAuxiliaryData {
-        kmer_count,
-        bwtk,
-        lcp,
-        shorter_than_k,
-        equal_to_k,
-        k_minus_one_ranges,
-        k_ranges
-    }
-}
-
 pub(crate) fn par_build_full_auxiliary_data(
     threads: usize,
     mut input: Vec<u8>,
     bounded_context_suffix_array: Vec<usize>,
     k: usize
 ) -> FullAuxiliaryData {
+    // The prefix of a suffix up to the first '$' will be referred to as the true prefix and
+    // its length as the true length.
+    //
+    // An N-range is a contiguous range of suffixes which have the same true prefix after being
+    // truncated from the right to a length of N (or if the true length of the suffix is less than
+    // N, they are padded with imaginary '$').
+    //
+    // A (k-1)-range which contains suffixes with true lengths less than k-1 will be referred
+    // to as a small range. A (k-1)-range which contains suffixes with true length equal to k
+    // will be referred to as a big range.
+    //
+    // A big range can be further divided into k-ranges.
+
     use crate::atomic_bitmap::AtomicBitmap;
     use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
@@ -604,93 +673,33 @@ fn find_length_and_lcp_value(
     (length as usize, lcp_value as usize)
 }
 
-const OUTEDGE_WIDTH: usize = 3;
 struct DummyMarks {
+    /// We keep a dummy (k-1)-mer and all of its predecessors if a k-mer at the beginning of an
+    /// input sequence would not have a non-dummy k-mer as a predecessor in the SBWT graph.
     keep_dummy: RawVector,
-    outedges: RawVector,
+    /// Marks (k-1)-mers in order to keep their outedge as it is not guaranteed that the non-dummy
+    /// k-mer that exists as a predecessor to a non-dummy k-mer at the beginning of a sequence has
+    /// the needed label. This is needed as we don't want to include all letters of dummy k-mers
+    /// whose "true" lenght is less than k-1 and there is no way to figure out which ones are
+    /// those from the [FullAuxiliaryBitVectors::shorter_than_k] bitvector alone.
+    keep_outedge: RawVector,
 }
 
-#[inline]
-fn get_outedge(bitvector: &RawVector, index: usize) -> usize {
-    let mut char_index = 0;
-    for i in 0..OUTEDGE_WIDTH {
-        char_index += (bitvector.bit(index * OUTEDGE_WIDTH + i) as usize) << i;
-    }
-    char_index
-}
-
-#[inline]
-#[deprecated]
-fn set_outedge(outedge: &mut RawVector, index: usize, char_index: usize) {
-    for i in 0..OUTEDGE_WIDTH {
-        outedge.set_bit(index * OUTEDGE_WIDTH + i, (char_index & (1 << i)) != 0);
-    }
-}
-
-#[inline]
-fn set_outedge_atomic(outedge: &AtomicBitmap, index: usize, char_index: usize) {
-    for i in 0..OUTEDGE_WIDTH {
-        outedge.set(index * OUTEDGE_WIDTH + i, (char_index & (1 << i)) != 0);
-    }
-}
-
-#[deprecated]
-fn build_dummy_marks(aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
-    log::info!("[build_dummy_marks] begin");
-    use super::alternative_construction::has_full_kmer_predecessor;
-
-    let len = aux.bwtk.len();
-    let mut keep_dummy  = RawVector::with_len(len, false);
-    let mut outedges    = RawVector::with_len(len * OUTEDGE_WIDTH, false);
-
-    let start = aux.bwtk.counts[1];
-    let mut predecessor_confirmed = false;
-    for index in start..len {
-        if aux.k_ranges.bit(index) {
-            predecessor_confirmed = false;
-        }
-
-        if aux.equal_to_k.bit(index) {
-            let (predecessor, char_index) = aux.bwtk.inverse_lf_step(index);
-            if !predecessor_confirmed {
-                predecessor_confirmed |= has_full_kmer_predecessor(
-                    predecessor, &aux.bwtk, &aux.k_minus_one_ranges, &aux.shorter_than_k
-                );
-            }
-
-            if predecessor_confirmed {
-                set_outedge(&mut outedges, predecessor, char_index);
-            } else {
-                keep_predecessors(predecessor, char_index, &aux.bwtk, k, &mut keep_dummy, &mut outedges);
-            }
-        } else if !aux.shorter_than_k.get(index) {
-            predecessor_confirmed = true;
-        }
-    }
-
-    log::info!("[build_dummy_marks] done");
-    DummyMarks {
-        keep_dummy,
-        outedges,
-    }
-}
-
-fn par_build_dummy_marks(threads: usize, aux: &FullAuxiliaryData, k: usize) -> DummyMarks {
+fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> DummyMarks {
     log::info!("[par_build_dummy_marks] begin");
-    use super::alternative_construction::has_full_kmer_predecessor;
 
-    let scan_start = aux.bwtk.counts[1];
-    let length = aux.bwtk.len();
+    let bwt = &aux.bwtk;
+    let scan_start = bwt.counts[1];
+    let length = bwt.len();
     let keep_dummy  = AtomicBitmap::new(length);
-    let outedges    = AtomicBitmap::new(length * OUTEDGE_WIDTH);
+    let keep_outedge = AtomicBitmap::new(length);
 
     let scan_length = length - scan_start;
     let thread_region_length = scan_length.div_ceil(threads);
 
     rayon::scope(|s| {
-        let keep_dummy = &keep_dummy;
-        let outedges   = &outedges;
-        let bwtk       = &aux.bwtk;
+        let keep_dummy  = &keep_dummy;
+        let keep_letter = &keep_outedge;
         for thread_index in 0..threads {
             s.spawn(move |_| {
                 let start = scan_start + thread_index * thread_region_length;
@@ -711,23 +720,24 @@ fn par_build_dummy_marks(threads: usize, aux: &FullAuxiliaryData, k: usize) -> D
                     }
 
                     if aux.equal_to_k.bit(index) {
-                        let (predecessor, char_index) = aux.bwtk.inverse_lf_step(index);
+                        let (predecessor, _) = bwt.inverse_lf_step(index);
                         if !predecessor_confirmed {
                             predecessor_confirmed |= has_full_kmer_predecessor(
-                                predecessor, &aux.bwtk, &aux.k_minus_one_ranges, &aux.shorter_than_k
+                                predecessor, bwt, &aux.k_minus_one_ranges, &aux.shorter_than_k
                             );
                         }
 
                         if predecessor_confirmed {
-                            set_outedge_atomic(outedges, predecessor, char_index);
+                            keep_letter.set(predecessor, true);
                         } else {
-                            keep_predecessors_atomic(predecessor, char_index, bwtk, k, keep_dummy, outedges);
+                            keep_predecessors_atomic(predecessor, bwt, k, keep_dummy);
                         }
                     } else if !aux.shorter_than_k.get(index) {
                         predecessor_confirmed = true;
                     }
                     index += 1;
                 }
+
             });
         }
     });
@@ -735,52 +745,45 @@ fn par_build_dummy_marks(threads: usize, aux: &FullAuxiliaryData, k: usize) -> D
     let keep_dummy = crate::util::bitvec_to_simple_sds_raw_bitvec(
         keep_dummy.into_bitvec_u64()
     );
-    let outedges = crate::util::bitvec_to_simple_sds_raw_bitvec(
-        outedges.into_bitvec_u64()
+    let keep_outedge = crate::util::bitvec_to_simple_sds_raw_bitvec(
+        keep_outedge.into_bitvec_u64()
     );
 
     log::info!("[par_build_dummy_marks] done");
     DummyMarks {
         keep_dummy,
-        outedges,
+        keep_outedge,
     }
 }
 
-#[inline]
-#[deprecated]
-fn keep_predecessors(
-    mut predecessor: usize,
-    mut char_index: usize,
-    bwtk: &Bwt,
-    mut k: usize,
-    keep_dummy: &mut RawVector,
-    outedges: &mut RawVector,
-) {
-    while k > 0 {
-        keep_dummy.set_bit(predecessor, true);
-        set_outedge(outedges, predecessor, char_index);
-        let (next_predecessor, next_outedge) = bwtk.inverse_lf_step(predecessor);
-        predecessor = next_predecessor;
-        char_index = next_outedge;
-        k -= 1;
-    }
+/// Finds the end of the (k-1)-range and performs two rank queries on the shorter_than_k bitvector
+/// in order to figure out if there is a non-dummy k-mer in this (k-1) range. If there is then the
+/// dummy k-mer is not needed.
+pub(crate) fn has_full_kmer_predecessor(
+    predecessor: usize,
+    bwt: &Bwt,
+    k_minus_one_ranges: &BitVector, 
+    shorter_than_k: &BitVector
+) -> bool {
+    let range_start = predecessor;
+    let one_index = k_minus_one_ranges.rank(range_start + 1);
+    let range_end = if one_index == k_minus_one_ranges.count_ones() {
+        bwt.len()
+    } else {
+        // There is at least one 1 after the current position.
+        k_minus_one_ranges.select(one_index).unwrap()
+    };
+    let range_length = range_end - range_start;
+    let number_of_prefixes_with_true_length_smaller_than_k =
+        shorter_than_k.rank(range_end) - shorter_than_k.rank(range_start);
+    number_of_prefixes_with_true_length_smaller_than_k < range_length
 }
 
-#[inline]
-fn keep_predecessors_atomic(
-    mut predecessor: usize,
-    mut char_index: usize,
-    bwtk: &Bwt,
-    mut k: usize,
-    keep_dummy: &AtomicBitmap,
-    outedges: &AtomicBitmap,
-) {
+fn keep_predecessors_atomic(mut predecessor: usize, bwt: &Bwt, mut k: usize, keep_dummy: &AtomicBitmap) {
     while k > 0 {
         keep_dummy.set(predecessor, true);
-        set_outedge_atomic(outedges, predecessor, char_index);
-        let (next_predecessor, next_outedge) = bwtk.inverse_lf_step(predecessor);
-        predecessor = next_predecessor;
-        char_index = next_outedge;
+        let (next, _) = bwt.inverse_lf_step(predecessor);
+        predecessor = next;
         k -= 1;
     }
 }
@@ -932,16 +935,85 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
         }
     }
 
-    let result = super::alternative_construction::collect_output(k, rows, lcs, counts, kmer_count);
+    let result = collect_output(k, rows, lcs, counts, kmer_count);
     log::info!("[build_with_all_dummies] done");
     result
+}
+
+#[inline]
+fn push_set(rows: &mut [BitVec<u64>], set: u8) {
+    for i in 1..=4 {
+        rows[i - 1].push(set & (1 << i) != 0);
+    }
+}
+
+#[inline]
+fn include_letter(bwt: &Bwt, index: usize, current_set: u8) -> u8 {
+    (1 << bwt.get_char_index(index)) as u8 | current_set
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alternative_construction::make_concatenation;
     use crate::{BitPackedKmerSortingMem, SubsetMatrix, VecSeqStream};
+
+    struct RevVecSeqStream<'a> {
+        seqs: &'a [Vec<u8>],
+        copy: Vec<u8>,
+        index: usize,
+    }
+
+    impl<'a> RevVecSeqStream<'a> {
+        fn new(seqs: &'a [Vec<u8>]) -> Self {
+            Self {
+                seqs,
+                copy: vec![],
+                index: 0
+            }
+        }
+    }
+
+    impl<'a> crate::SeqStream for RevVecSeqStream<'a> {
+        fn stream_next(&mut self) -> Option<&[u8]> {
+            if self.index >= self.seqs.len() {
+                return None;
+            }
+            self.copy.clear();
+            self.copy.extend(&self.seqs[self.index]);
+            preprocessing::sanitise(&mut self.copy);
+            self.copy.reverse();
+            let result = &self.copy;
+            self.index += 1;
+            Some(result)
+        }
+    }
+
+    pub fn make_concatenation(seqs: &[Vec<u8>]) -> Vec<u8> {
+        let mut stream = RevVecSeqStream::new(seqs);
+        let capacity: usize = seqs.iter().map(|seq| seq.len() + 1).sum::<usize>() + 2;
+        let mut concatenation = Vec::<u8>::with_capacity(capacity);
+        preprocessing::concatenate_sequences(&mut stream, &mut concatenation).unwrap();
+        concatenation
+    }
+
+    macro_rules! seqs {
+        ($($seq:expr),* $(,)?) => {
+            vec![$($seq.to_vec(),)*]
+        };
+    }
+
+    #[test]
+    fn concatenate_sequences() {
+        let seqs = seqs![b"ACGT", b"ANOPT", b"TGCA"];
+        let concatenation = make_concatenation(&seqs);
+        assert_eq!(b"#$TGCA$T$$$A$ACGT$".as_slice(), &concatenation);
+    }
+
+    fn make_suffix_array(concatenation: &[u8]) -> Vec<usize> {
+        let mut suffix_array = (0..concatenation.len()).collect::<Vec<_>>();
+        suffix_array.sort_by_key(|index| &concatenation[*index..]);
+        suffix_array
+    }
 
     #[test]
     fn randomised_kmers() {
@@ -972,6 +1044,7 @@ mod tests {
         seqs.dedup();
 
         let concatenation = make_concatenation(&seqs);
+        let suffix_array = make_suffix_array(&concatenation);
 
         {
             // Without redundant dummies.
@@ -979,30 +1052,31 @@ mod tests {
                 .build_lcs(true)
                 .run();
 
+            // With bounded context suffix array.
             let Output {
                 sbwt: constructed_sbwt,
                 lcs: constructed_lcs,
                 counts
-            } = build::<SubsetMatrix>(2, concatenation.clone(), k, 4, true, false, false);
-
-            assert!(counts.is_none());
-
-            let mut correct_buf = Vec::<u8>::new();
-            let mut constructed_buf = Vec::<u8>::new();
-
-            correct_sbwt.serialize(&mut correct_buf).unwrap();
-            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
-
-            correct_buf.clear();
-            constructed_buf.clear();
+            } = build_with_bounded_suffix_array::<SubsetMatrix>(4, concatenation.clone(), k, 4, true, false, false);
 
             let correct_lcs = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
 
-            correct_lcs    .serialize(&mut correct_buf).unwrap();
-            constructed_lcs.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
+            assert!(counts.is_none());
+            assert_eq!(correct_sbwt, constructed_sbwt);
+            assert_eq!(correct_lcs, constructed_lcs);
+
+            // With full context suffix array.
+            let Output {
+                sbwt: constructed_sbwt,
+                lcs: constructed_lcs,
+                counts
+            } = build::<SubsetMatrix>(4, concatenation.clone(), suffix_array.clone(), k, true, false, false);
+
+            let constructed_lcs = constructed_lcs.unwrap();
+            assert!(counts.is_none());
+            assert_eq!(correct_sbwt, constructed_sbwt);
+            assert_eq!(correct_lcs, constructed_lcs);
         }
 
         {
@@ -1012,29 +1086,19 @@ mod tests {
                 .add_all_dummy_paths(true)
                 .run();
 
+            // With bounded context suffix array.
             let Output {
                 sbwt: constructed_sbwt,
                 lcs: constructed_lcs,
                 counts
-            } = build::<SubsetMatrix>(2, concatenation, k, 4, true, true, true);
-
-            let mut correct_buf = Vec::<u8>::new();
-            let mut constructed_buf = Vec::<u8>::new();
-
-            correct_sbwt.serialize(&mut correct_buf).unwrap();
-            constructed_sbwt.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
-
-            correct_buf.clear();
-            constructed_buf.clear();
+            } = build_with_bounded_suffix_array::<SubsetMatrix>(4, concatenation.clone(), k, 4, true, true, true);
 
             let correct_lcs = correct_lcs.unwrap();
             let constructed_lcs = constructed_lcs.unwrap();
-            assert_eq!(correct_lcs.len(), constructed_lcs.len());
 
-            correct_lcs    .serialize(&mut correct_buf).unwrap();
-            constructed_lcs.serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
+            assert_eq!(correct_sbwt, constructed_sbwt);
+            assert_eq!(correct_lcs.len(), constructed_lcs.len());
+            assert_eq!(correct_lcs, constructed_lcs);
 
             correct_sbwt.build_select();
             let pnsv = crate::vodbg::pnsv::PnsvTuned::new_default(&correct_sbwt, &correct_lcs, k);
@@ -1044,13 +1108,21 @@ mod tests {
                 true,
                 Counts::DEFAULT_SAMPLE_DISTANCE,
                 1, 4, Counts::DEFAULT_BATCH_SIZE_IN_BYTES).unwrap();
+            assert_eq!(vodbg.counts().unwrap(), &counts.unwrap());
 
-            correct_buf.clear();
-            constructed_buf.clear();
+            // With full context suffix array.
+            let Output {
+                sbwt: mut constructed_sbwt,
+                lcs: constructed_lcs,
+                counts
+            } = build::<SubsetMatrix>(4, concatenation, suffix_array, k, true, true, true);
 
-            vodbg.counts().unwrap().serialize(&mut correct_buf).unwrap();
-            counts.unwrap().serialize(&mut constructed_buf).unwrap();
-            assert_eq!(correct_buf, constructed_buf);
+            constructed_sbwt.build_select();
+            let constructed_lcs = constructed_lcs.unwrap();
+
+            assert_eq!(correct_sbwt, constructed_sbwt);
+            assert_eq!(constructed_lcs, constructed_lcs);
+            assert_eq!(vodbg.counts().unwrap(), &counts.unwrap());
         }
     }
 }
