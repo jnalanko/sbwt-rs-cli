@@ -26,8 +26,7 @@ pub trait SubsetSeq{
     fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self;
 
     /// Create a new subset sequence from indicator [bit vectors](bitvec::vec::BitVec), where the i-th bit of the j-th bit vector
-    /// is 1 if and only if the i-th subset contains the j-th character. The resulting subset sequence has
-    /// rank and select support if the provided bit vectors have rank and select support enabled. Otherwise, those
+    /// is 1 if and only if the i-th subset contains the j-th character. Rank and select
     /// supports need to be initialized by calling [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
     fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec::<u64, Lsb0>>) -> Self;
 
