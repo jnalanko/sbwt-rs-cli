@@ -1,12 +1,13 @@
 use bitvec::vec::BitVec;
 
+// Ensure that usize is an u64 in LSB byte order (assumed in into_bitvec)
+const _: () = assert!(1_usize == 1_usize.to_le());
+const _: () = assert!(usize::BITS == u64::BITS);
+
 pub struct AtomicBitmap {
     pub data: Vec<std::sync::atomic::AtomicU64>,
     pub len: usize, // Number of bits stored. The last word may be only partially used.
 } 
-
-const _: () = assert!(1_usize == 1_usize.to_le());
-const _: () = assert!(usize::BITS == u64::BITS);
 
 impl AtomicBitmap {
     pub fn new(len: usize) -> Self {
@@ -41,9 +42,8 @@ impl AtomicBitmap {
     }
 
     pub fn into_bitvec(self) -> BitVec<usize, bitvec::order::Lsb0> {
-        // This assumes that usize is an u64 in Lsb0 byte order. Let's hope for the best.
-        // At least the answer will be really wrong if that is not the case, so it
-        // should be easy to notice. TODO: check for this somehow?
+        // This assumes that usize is an u64 in Lsb0 byte order. There are
+        // asserts at the top of the file that attempt to ensure this.
 
         // Make sizes not atomic
         let non_atomic: Vec<usize> = self.data.into_iter().map(
@@ -55,6 +55,9 @@ impl AtomicBitmap {
     }
 
     pub fn into_bitvec_u64(self) -> BitVec<u64, bitvec::order::Lsb0> {
+        // This assumes that usize is an u64 in Lsb0 byte order. There are
+        // asserts at the top of the file that attempt to ensure this.
+
         let non_atomic: Vec<u64> = self.data.into_iter().map(
             |x| x.load(std::sync::atomic::Ordering::Acquire)
         ).collect();
