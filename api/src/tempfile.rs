@@ -10,17 +10,30 @@ pub struct TempFileManager {
 }
 
 /// A struct encapsulating a std::fs::File and its path.
-/// When the TempFile is dropped, the file is deleted.
+/// When the TempFile is dropped, the file is deleted, unless
+/// [set_delete_on_drop](TempFile::set_delete_on_drop) has been called with `false`.
 #[derive(Debug)]
 pub struct TempFile {
     pub path: PathBuf,
     pub file: std::fs::File,
+    delete_on_drop: bool,
+}
+
+impl TempFile {
+    /// Controls whether the file is deleted when this TempFile is dropped. Defaults to true.
+    pub fn set_delete_on_drop(&mut self, delete_on_drop: bool) {
+        self.delete_on_drop = delete_on_drop;
+    }
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        log::trace!("Dropping temp file {}", self.path.display());
-        std::fs::remove_file(&self.path).unwrap();
+        if self.delete_on_drop {
+            log::trace!("Dropping temp file {}", self.path.display());
+            std::fs::remove_file(&self.path).unwrap();
+        } else {
+            log::trace!("Keeping temp file {} on drop", self.path.display());
+        }
     }
 }
 
@@ -91,7 +104,7 @@ impl TempFileManager {
         }
 
         log::trace!("Creating temp file {}", path.display());
-        TempFile {path, file: file.unwrap()}
+        TempFile {path, file: file.unwrap(), delete_on_drop: true}
     }
 }
 

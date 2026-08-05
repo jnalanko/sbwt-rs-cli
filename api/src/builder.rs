@@ -1,8 +1,10 @@
 //! A builder pattern interface for building an [SbwtIndex].
 
+use std::path::Path;
 use std::str::FromStr;
 
 use crate::JSeqIOSeqStreamWrapper;
+use crate::tempfile::TempFileManager;
 use crate::{subsetseq::SubsetMatrix, SeqStream};
 use crate::sbwt::{PrefixLookupTable, SbwtIndex};
 use crate::streaming_index::LcsArray;
@@ -770,6 +772,67 @@ mod tests {
                 assert_eq!(mem_sbwt, libsais_sbwt);
                 assert_eq!(mem_lcs, libsais_lcs);
             }
+        }
+    }
+}
+
+/// Sort and deduplicate the reverse k-mers of the input sequences into a file on disk, to be later
+/// consumed by [build_from_kmers_on_disk]. Returns the path to the k-mers file, and if
+/// `add_all_dummy_paths` is set, also the path to the file of first k-mers of each input sequence.
+/// The returned files are NOT deleted: it is the caller's responsibility to delete them once they
+/// are no longer needed.
+pub fn sort_and_dedup_kmers_into_file<SS: crate::SubsetSeq + Send, IN: SeqStream + Send>(input: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, add_all_dummy_paths: bool, temp_dir: &Path) -> (std::path::PathBuf, Option<std::path::PathBuf>) {
+    let mut tfm = TempFileManager::new(temp_dir);
+    let (mut kmers_file, mut first_mers_file) = match k {
+        0..=32 => {
+            crate::bitpacked_kmer_sorting::sort_and_dedup_kmers_into_file::<1, IN, SS>(input, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, &mut tfm)
+        }
+        33..=64 => {
+            crate::bitpacked_kmer_sorting::sort_and_dedup_kmers_into_file::<2, IN, SS>(input, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, &mut tfm)
+        }
+        65..=96 => {
+            crate::bitpacked_kmer_sorting::sort_and_dedup_kmers_into_file::<3, IN, SS>(input, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, &mut tfm)
+        }
+        97..=128 => {
+            crate::bitpacked_kmer_sorting::sort_and_dedup_kmers_into_file::<4, IN, SS>(input, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, &mut tfm)
+        }
+        129..=256 => {
+            crate::bitpacked_kmer_sorting::sort_and_dedup_kmers_into_file::<8, IN, SS>(input, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, &mut tfm)
+        }
+        _ => {
+            panic!("k > 256 not supported with bitpacked sorting algorithm.");
+        }
+    };
+
+    // These files must survive past the end of this function, so tell them not to delete themselves on drop.
+    kmers_file.set_delete_on_drop(false);
+    if let Some(first_mers_file) = first_mers_file.as_mut() {
+        first_mers_file.set_delete_on_drop(false);
+    }
+
+    (kmers_file.path.clone(), first_mers_file.map(|f| f.path.clone()))
+}
+
+pub fn build_from_kmers_on_disk<SS: crate::SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_dir: &Path, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+    let mut tfm = TempFileManager::new(temp_dir);
+    match k {
+        0..=32 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<1, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        33..=64 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<2, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        65..=96 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<3, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        97..=128 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<4, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        129..=256 => {
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<8, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+        }
+        _ => {
+            panic!("k > 256 not supported with bitpacked sorting algorithm.");
         }
     }
 }

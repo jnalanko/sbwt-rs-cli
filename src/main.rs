@@ -237,12 +237,12 @@ fn build_command(matches: &clap::ArgMatches){
     };
 
     // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
-    let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); 
+    let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap();
 
     sbwt_outfile.push_str(".sbwt");
     log::info!("Sbwt output file: {}", sbwt_outfile);
     let mut sbwt_out = std::io::BufWriter::new(std::fs::File::create(sbwt_outfile).unwrap()); // Open already here to fail early if problems
- 
+
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
     let (sbwt, lcs) = if via_libsais {
@@ -269,7 +269,95 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
 
     log::info!("Serializing");
-    
+
+    let sbwt_kmers = sbwt.n_kmers();
+    let sbwt_bytes = SbwtIndexVariant::SubsetMatrix(sbwt).serialize(&mut sbwt_out).unwrap();
+    log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
+
+    if let Some(lcs) = lcs{
+        let mut lcs_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); // See comment on sbwt_outfile above
+        lcs_outfile.push_str(".lcs");
+        let mut lcs_out = std::io::BufWriter::new(std::fs::File::create(&lcs_outfile).unwrap());
+        log::info!("Lcs output file: {}", lcs_outfile);
+
+        let lcs_bytes = lcs.serialize(&mut lcs_out).unwrap();
+        log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt_kmers as f64);
+    }
+}
+
+fn build_list_kmers_on_disk_command(matches: &clap::ArgMatches){
+
+    let infile = matches.get_one::<std::path::PathBuf>("input");
+    let in_listfile = matches.get_one::<std::path::PathBuf>("input-list");
+
+    let k = *matches.get_one::<usize>("k").unwrap();
+    let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let dedup_batches = matches.get_flag("dedup-batches");
+    let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
+    let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
+
+    let input_mode = if let Some(input) = infile {
+        InputMode::SingleFile(input.clone())
+    } else if let Some(input_list) = in_listfile {
+        InputMode::FileList(input_list.clone())
+    } else {
+        panic!("Either --input or --input-list must be given");
+    };
+
+    log::info!("Sorting and deduplicating k-mers to disk");
+    let start_time = std::time::Instant::now();
+
+    let (kmers_file, first_mers_file) = match input_mode {
+        InputMode::SingleFile(path_buf) => {
+            let reader = MySeqReader{inner: jseqio::reader::DynamicFastXReader::from_file(&path_buf).unwrap()};
+            sort_and_dedup_kmers_into_file::<SubsetMatrix, _>(reader, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_dir)
+        }
+        InputMode::FileList(path_buf) => {
+            let paths = read_lines(&path_buf);
+            let multi_reader = MyMultiFileSeqReader::new(paths);
+            sort_and_dedup_kmers_into_file::<SubsetMatrix, _>(multi_reader, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_dir)
+        }
+    };
+
+    let end_time = std::time::Instant::now();
+    log::info!("Finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
+
+    log::info!("Wrote k-mers file: {}", kmers_file.display());
+    println!("{}", kmers_file.display());
+    if let Some(first_mers_file) = &first_mers_file {
+        log::info!("Wrote first-mers file: {}", first_mers_file.display());
+        println!("{}", first_mers_file.display());
+    }
+}
+
+fn build_from_kmers_on_disk_command(matches: &clap::ArgMatches){
+
+    let kmers_file = matches.get_one::<std::path::PathBuf>("kmers-file").unwrap();
+    let first_mers_file = matches.get_one::<std::path::PathBuf>("first-mers-file");
+    let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
+    let build_lcs = matches.get_flag("build-lcs");
+    let k = *matches.get_one::<usize>("k").unwrap();
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
+
+    // Need to do this to be able to append .sbwt to the filename (PathBuf can only set extension, which replaces the existing one, meaning we can't stack extensions).
+    let mut sbwt_outfile = out_prefix.clone().into_os_string().into_string().unwrap();
+
+    sbwt_outfile.push_str(".sbwt");
+    log::info!("Sbwt output file: {}", sbwt_outfile);
+    let mut sbwt_out = std::io::BufWriter::new(std::fs::File::create(sbwt_outfile).unwrap()); // Open already here to fail early if problems
+
+    log::info!("Building SBWT from k-mers on disk");
+    let start_time = std::time::Instant::now();
+
+    let (sbwt, lcs) = build_from_kmers_on_disk::<SubsetMatrix>(k, n_threads, build_lcs, temp_dir, kmers_file, first_mers_file.map(|p| p.as_path()));
+
+    let end_time = std::time::Instant::now();
+    log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
+
+    log::info!("Serializing");
+
     let sbwt_kmers = sbwt.n_kmers();
     let sbwt_bytes = SbwtIndexVariant::SubsetMatrix(sbwt).serialize(&mut sbwt_out).unwrap();
     log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
@@ -1097,6 +1185,93 @@ fn main() {
             .action(clap::ArgAction::SetTrue)
         )
         .subcommand(build_subcommand())
+        .subcommand(clap::Command::new("build-list-kmers-on-disk")
+            .about("Sort and deduplicate the reverse k-mers of the input sequences into a file on disk. Prints the path to the resulting k-mers file (and, if --add-all-dummy-paths is given, the first-mers file) to stdout. The files are not deleted, and can be later given to build-from-kmers-on-disk.")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("input")
+                .help("Input fasta or fastq sequence file")
+                .short('i')
+                .long("input")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("input-list")
+                .help("A file containing a list of filenames of sequence lines, one per line")
+                .long("input-list")
+                .conflicts_with("input")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("temp-dir")
+                .help("Directory for the resulting k-mers files, and other temporary files created during construction.")
+                .long("temp-dir")
+                .default_value(".")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("k")
+                .help("k-mer length")
+                .short('k')
+                .required(true)
+                .value_parser(clap::value_parser!(usize))
+            )
+            .arg(clap::Arg::new("mem-gb")
+                .help("An approximate memory budget for various buffers, in gigabytes. The total memory usage may be higher. The larger the budget, the more effective the deduplication is with --dedup-batches.")
+                .short('m')
+                .long("mem-gb")
+                .required(false)
+                .value_parser(clap::value_parser!(usize))
+                .default_value("8")
+            )
+            .arg(clap::Arg::new("dedup-batches")
+                .help("Slows down the construction, but reduces temporary disk space usage and memory if the data has many duplicate k-mers.")
+                .long("dedup-batches")
+                .short('d')
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("add-all-dummy-paths")
+                .help("Include all dummy paths for every DNA run in the input, not only those strictly required by the SBWT structure.")
+                .long("add-all-dummy-paths")
+                .action(clap::ArgAction::SetTrue))
+        )
+        .subcommand(clap::Command::new("build-from-kmers-on-disk")
+            .about("Build the SBWT and possibly the LCS array from a file of sorted, deduplicated reverse k-mers on disk, as produced by the on-disk construction algorithm.")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("kmers-file")
+                .help("A file containing the sorted, deduplicated, bit-packed reverse k-mers.")
+                .long("kmers-file")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("first-mers-file")
+                .help("An optional file containing the bit-packed reversed first k-mers of each input sequence, used to determine which additional dummy paths are required.")
+                .long("first-mers-file")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("output-prefix")
+                .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
+                .short('o')
+                .long("output-prefix")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("temp-dir")
+                .help("Directory for temporary files created during construction.")
+                .long("temp-dir")
+                .default_value(".")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("build-lcs")
+                .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
+                .short('l')
+                .long("build-lcs")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("k")
+                .help("k-mer length")
+                .short('k')
+                .required(true)
+                .value_parser(clap::value_parser!(usize))
+            )
+        )
         .subcommand(clap::Command::new("build-lcs")
             .arg_required_else_help(true)
             .about("Build the LCS array given an existing SBWT. Note that it's also possible build the SBWT and the LCS at the same time with the build-command.")
@@ -1523,6 +1698,8 @@ fn main() {
 
     match matches.subcommand(){
         Some(("build", sub_matches)) => build_command(sub_matches),
+        Some(("build-list-kmers-on-disk", sub_matches)) => build_list_kmers_on_disk_command(sub_matches),
+        Some(("build-from-kmers-on-disk", sub_matches)) => build_from_kmers_on_disk_command(sub_matches),
         Some(("build-lcs", sub_matches)) => build_lcs_command(sub_matches),
         Some(("lookup", sub_matches)) => lookup_query_command(sub_matches),
         Some(("matching-statistics", sub_matches)) => matching_statistics_command(sub_matches),
