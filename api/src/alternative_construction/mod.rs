@@ -113,7 +113,6 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     } = aux;
     drop(equal_to_k);
 
-    // let (rows, lcs) = _build_without_redundant_dummies(
     let (rows, lcs) = _par_build_without_redundant_dummies(
         threads,
         k,
@@ -841,6 +840,9 @@ pub(crate) fn par_build_full_auxiliary_data(
         }
     });
 
+    // note(mk): Perhaps a bit more time can be reduced here if the conversion of the different
+    // structures is done on separate threads.
+
     log::info!("[par_build_full_auxiliary_data] bwt");
     let bwt_bit_vectors = bwt_vectors.into_iter()
         .map(|value| {
@@ -850,7 +852,7 @@ pub(crate) fn par_build_full_auxiliary_data(
         .collect::<Vec<_>>();
     let bwtk = Bwt::new(bwt_bit_vectors);
 
-    log::info!("[par_build_full_auxiliary_data] bwt");
+    log::info!("[par_build_full_auxiliary_data] lcp");
     let mut collected_lcp_data = Vec::<u8>::with_capacity(length * lcp_width);
     for lcp in lcp_result.lock().unwrap().iter_mut() {
         let bytes: Vec<u8> = lcp.take().unwrap().into();
