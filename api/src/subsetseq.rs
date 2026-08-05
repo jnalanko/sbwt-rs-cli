@@ -5,8 +5,8 @@ use std::ops::Range;
 
 use bitvec::order::Lsb0;
 use simple_sds_sbwt::bit_vector::*;
-use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::ops::*;
+use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::serialize::*;
 
 use crate::util::bitvec_to_simple_sds_raw_bitvec;
@@ -14,8 +14,7 @@ use crate::util::bitvec_to_simple_sds_raw_bitvec;
 /// This trait represents a sequence of subsets from alphabet {0, 1, ..., sigma-1}, where sigma is the alphabet size.
 /// The trait provides access to the subsets and rank and select queries for the elements inside the subsets.
 #[allow(clippy::len_without_is_empty)]
-pub trait SubsetSeq{
-
+pub trait SubsetSeq {
     // Todo: make char type into a generic unsigned integer.
     // Issues with that: it can't seem to figure out how to use such
     // generic integers as array indexes. Lol.
@@ -29,7 +28,7 @@ pub trait SubsetSeq{
     /// is 1 if and only if the i-th subset contains the j-th character. The resulting subset sequence has
     /// rank and select support if the provided bit vectors have rank and select support enabled. Otherwise, those
     /// supports need to be initialized by calling [`SubsetSeq::build_rank`] and [`SubsetSeq::build_select`], respectively.
-    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec::<u64, Lsb0>>) -> Self;
+    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec<u64, Lsb0>>) -> Self;
 
     /// Number of sets in the sequence (**not** the total length of the sets).
     fn len(&self) -> usize;
@@ -56,7 +55,7 @@ pub trait SubsetSeq{
     fn append_set_to_buf(&self, i: usize, buf: &mut Vec<u8>);
 
     /// Returns the elements in the i-th set.
-    fn access(&self, i: usize) -> Vec<u8>{
+    fn access(&self, i: usize) -> Vec<u8> {
         let mut v = Vec::new();
         self.append_set_to_buf(i, &mut v);
         v
@@ -68,7 +67,7 @@ pub trait SubsetSeq{
     /// Returns true if the set at index `set_idx` contains the character.
     fn set_contains(&self, set_idx: usize, character: u8) -> bool;
 
-    /// Returns the index of the next set from set_idx (possibly set_idx itself) 
+    /// Returns the index of the next set from set_idx (possibly set_idx itself)
     /// that contains character c, or None if does not exist.
     /// The index set_idx can be from 0 to self.len().
     fn next_set_with_char(&self, set_idx: usize, c: u8) -> Option<usize>;
@@ -79,7 +78,9 @@ pub trait SubsetSeq{
     fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize>;
 
     /// Loads a subset sequence that was previously written with [`SubsetSeq::serialize`].
-    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized;
+    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self>
+    where
+        Self: Sized;
 
     // Calls the callback on the index of every set that contains character c in the range.
     // The callback is called in increasing order of set index.
@@ -113,74 +114,82 @@ pub trait SubsetSeq{
     // This a key subroutine for SbwtIndex::push_labels_forward. We want to put it here in the SubsetSeq
     // trait because then we have have a really optimized version for particular implementations
     // like SubsetMatrix. See the code for what it does.
-    fn push_labels_forward(&self, labels: &[u8], sbwt_input_range: std::ops::Range<usize>, output_ranges: Vec<&mut[u8]>);
+    fn push_labels_forward(
+        &self,
+        labels: &[u8],
+        sbwt_input_range: std::ops::Range<usize>,
+        output_ranges: Vec<&mut [u8]>,
+    );
 }
 
 /// An implementation of [SubsetSeq] with a matrix of sigma indicator bit vectors: the i-th bit of the j-th bit vector
 /// is 1 if and only if the i-th subset contains the j-th character. Rank and select queries are reduced to
 /// bit vector rank and select queries on the indicator bit vectors.
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct SubsetMatrix{
-    rows: Vec<BitVector>
+pub struct SubsetMatrix {
+    rows: Vec<BitVector>,
 }
 
-impl SubsetSeq for SubsetMatrix{
-    
-    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize>{
+impl SubsetSeq for SubsetMatrix {
+    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
         let mut n_written = 0_usize;
 
         let n_rows = self.rows.len() as u64;
         out.write_all(&n_rows.to_le_bytes())?;
-        for row in self.rows.iter(){
+        for row in self.rows.iter() {
             row.serialize(out)?;
             n_written += row.size_in_bytes();
         }
         Ok(n_written)
     }
 
-    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self>{
-
+    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
         let n_rows = u64::load(input)? as usize;
 
         let mut rows = Vec::<BitVector>::new();
-        for _ in 0..n_rows{
+        for _ in 0..n_rows {
             rows.push(BitVector::load(input)?);
         }
-        Ok(Self{rows})
+        Ok(Self { rows })
     }
 
-    fn new_from_bit_vectors(rows: Vec<bitvec::vec::BitVec<u64, Lsb0>>) -> Self{
-        Self{rows: rows.into_iter().map(|row| 
-            simple_sds_sbwt::bit_vector::BitVector::from(
-                bitvec_to_simple_sds_raw_bitvec(row))
-            ).collect()
+    fn new_from_bit_vectors(rows: Vec<bitvec::vec::BitVec<u64, Lsb0>>) -> Self {
+        Self {
+            rows: rows
+                .into_iter()
+                .map(|row| {
+                    simple_sds_sbwt::bit_vector::BitVector::from(bitvec_to_simple_sds_raw_bitvec(
+                        row,
+                    ))
+                })
+                .collect(),
         }
     }
 
-    fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self{
+    fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self {
         let n = subset_seq.len();
         let mut rawrows = Vec::<RawVector>::new();
-        for _ in 0..sigma{
+        for _ in 0..sigma {
             rawrows.push(RawVector::with_len(n, false));
         }
-        for (i, set) in subset_seq.iter().enumerate(){
-            for c in set.iter(){
+        for (i, set) in subset_seq.iter().enumerate() {
+            for c in set.iter() {
                 rawrows[*c as usize].set_bit(i, true)
             }
         }
 
         let rows: Vec<BitVector> = rawrows.into_iter().map(BitVector::from).collect();
-        Self{rows}
+        Self { rows }
     }
 
     fn build_rank(&mut self) {
-        for row in self.rows.iter_mut(){
+        for row in self.rows.iter_mut() {
             row.enable_rank();
         }
     }
 
     fn build_select(&mut self) {
-        for row in self.rows.iter_mut(){
+        for row in self.rows.iter_mut() {
             row.enable_select();
         }
     }
@@ -193,18 +202,21 @@ impl SubsetSeq for SubsetMatrix{
         self.rows[0].supports_rank()
     }
 
-    fn rank(&self, c: u8, i: usize) -> usize{
+    fn rank(&self, c: u8, i: usize) -> usize {
         self.rows[c as usize].rank(i)
     }
 
-    fn select(&self, c: u8, i: usize) -> Option<usize>{
+    fn select(&self, c: u8, i: usize) -> Option<usize> {
         assert!(self.rows[c as usize].supports_select());
         self.rows[c as usize].select(i)
     }
 
-    fn len(&self) -> usize{
-        if self.rows.is_empty() { 0 }
-        else { self.rows[0].len() }
+    fn len(&self) -> usize {
+        if self.rows.is_empty() {
+            0
+        } else {
+            self.rows[0].len()
+        }
     }
 
     fn subset_size(&self, i: usize) -> usize {
@@ -215,9 +227,9 @@ impl SubsetSeq for SubsetMatrix{
         self.rows[character as usize].get(set_idx)
     }
 
-    fn append_set_to_buf(&self, i: usize, buf: &mut Vec<u8>){
-        for c in 0..self.rows.len(){
-            if self.rows[c].get(i){
+    fn append_set_to_buf(&self, i: usize, buf: &mut Vec<u8>) {
+        for c in 0..self.rows.len() {
+            if self.rows[c].get(i) {
                 buf.push(c as u8);
             }
         }
@@ -225,23 +237,39 @@ impl SubsetSeq for SubsetMatrix{
 
     fn next_set_with_char(&self, set_idx: usize, c: u8) -> Option<usize> {
         // Use the bitvec crate on the raw data of the row
-        let bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(self.rows[c as usize].as_ref().as_ref());
+        let bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(
+            self.rows[c as usize].as_ref().as_ref(),
+        );
         let off = bv[set_idx..].first_one()?;
         Some(set_idx + off)
     }
 
-    fn call_on_char_occurrences<F: FnMut(usize)>(&self, range: Range<usize>, c: u8, mut callback: F) {
-        let bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(self.rows[c as usize].as_ref().as_ref());
+    fn call_on_char_occurrences<F: FnMut(usize)>(
+        &self,
+        range: Range<usize>,
+        c: u8,
+        mut callback: F,
+    ) {
+        let bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(
+            self.rows[c as usize].as_ref().as_ref(),
+        );
         let slice = &bv[range.clone()];
         for i in slice.iter_ones() {
             callback(range.start + i);
         }
     }
 
-    fn push_labels_forward(&self, labels: &[u8], sbwt_input_range: std::ops::Range<usize>, output_ranges: Vec<&mut[u8]>) {
+    fn push_labels_forward(
+        &self,
+        labels: &[u8],
+        sbwt_input_range: std::ops::Range<usize>,
+        output_ranges: Vec<&mut [u8]>,
+    ) {
         assert_eq!(labels.len(), sbwt_input_range.len());
         assert_eq!(output_ranges.len(), self.rows.len());
-        if sbwt_input_range.is_empty() { return }
+        if sbwt_input_range.is_empty() {
+            return;
+        }
 
         #[allow(clippy::needless_range_loop)]
         for (char_idx, output_slice) in output_ranges.into_iter().enumerate() {
@@ -257,18 +285,17 @@ impl SubsetSeq for SubsetMatrix{
             });
         }
     }
-
 }
 
 /// Formats the subset matrix as an ASCII bit matrix of 0s and 1s, where row i
 /// is the indicator bit vector for the i-th character.
-impl std::fmt::Display for SubsetMatrix{
+impl std::fmt::Display for SubsetMatrix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for row in self.rows.iter(){
-            for i in 0..row.len(){
-                if row.get(i){
+        for row in self.rows.iter() {
+            for i in 0..row.len() {
+                if row.get(i) {
                     write!(f, "1")?;
-                } else{
+                } else {
                     write!(f, "0")?;
                 }
             }
@@ -289,7 +316,7 @@ impl SubsetSeq for SubsetCorrectionSets {
         todo!()
     }
 
-    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec::<u64, Lsb0>>) -> Self {
+    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec<u64, Lsb0>>) -> Self {
         todo!()
     }
 
@@ -341,7 +368,10 @@ impl SubsetSeq for SubsetCorrectionSets {
         todo!()
     }
 
-    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> where Self: Sized {
+    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self>
+    where
+        Self: Sized,
+    {
         todo!()
     }
 
@@ -349,7 +379,12 @@ impl SubsetSeq for SubsetCorrectionSets {
         todo!()
     }
 
-    fn push_labels_forward(&self, labels: &[u8], sbwt_input_range: std::ops::Range<usize>, output_ranges: Vec<&mut[u8]>) {
+    fn push_labels_forward(
+        &self,
+        labels: &[u8],
+        sbwt_input_range: std::ops::Range<usize>,
+        output_ranges: Vec<&mut [u8]>,
+    ) {
         todo!()
     }
 }
@@ -359,8 +394,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serialize_and_load(){
-        let sets: Vec<Vec<u8>> = vec![vec![1,2,3], vec![0,2], vec![0,1,3,4], vec![], vec![0,1,2]];
+    fn serialize_and_load() {
+        let sets: Vec<Vec<u8>> = vec![
+            vec![1, 2, 3],
+            vec![0, 2],
+            vec![0, 1, 3, 4],
+            vec![],
+            vec![0, 1, 2],
+        ];
         let mut sm = SubsetMatrix::new(sets, 5);
         sm.build_rank();
         let mut buf = Vec::<u8>::new();
@@ -370,21 +411,27 @@ mod tests {
     }
 
     #[test]
-    fn next_set_with_char(){
-        let sets: Vec<Vec<u8>> = vec![vec![1,2,3], vec![0,2], vec![0,1,3,4], vec![], vec![0,1,2]];
+    fn next_set_with_char() {
+        let sets: Vec<Vec<u8>> = vec![
+            vec![1, 2, 3],
+            vec![0, 2],
+            vec![0, 1, 3, 4],
+            vec![],
+            vec![0, 1, 2],
+        ];
         let sm = SubsetMatrix::new(sets, 5);
-        assert_eq!(sm.next_set_with_char(0,0), Some(1));
-        assert_eq!(sm.next_set_with_char(0,1), Some(0));
-        assert_eq!(sm.next_set_with_char(0,2), Some(0));
-        assert_eq!(sm.next_set_with_char(0,3), Some(0));
-        assert_eq!(sm.next_set_with_char(0,4), Some(2));
+        assert_eq!(sm.next_set_with_char(0, 0), Some(1));
+        assert_eq!(sm.next_set_with_char(0, 1), Some(0));
+        assert_eq!(sm.next_set_with_char(0, 2), Some(0));
+        assert_eq!(sm.next_set_with_char(0, 3), Some(0));
+        assert_eq!(sm.next_set_with_char(0, 4), Some(2));
 
-        assert_eq!(sm.next_set_with_char(3,0), Some(4));
-        assert_eq!(sm.next_set_with_char(3,1), Some(4));
-        assert_eq!(sm.next_set_with_char(3,2), Some(4));
-        assert_eq!(sm.next_set_with_char(3,3), None);
-        assert_eq!(sm.next_set_with_char(3,4), None);
+        assert_eq!(sm.next_set_with_char(3, 0), Some(4));
+        assert_eq!(sm.next_set_with_char(3, 1), Some(4));
+        assert_eq!(sm.next_set_with_char(3, 2), Some(4));
+        assert_eq!(sm.next_set_with_char(3, 3), None);
+        assert_eq!(sm.next_set_with_char(3, 4), None);
 
-        assert_eq!(sm.next_set_with_char(5,0), None); // One past the end
+        assert_eq!(sm.next_set_with_char(5, 0), None); // One past the end
     }
 }
