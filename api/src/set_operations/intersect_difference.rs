@@ -58,25 +58,35 @@ fn compute_result_counts(interleaving: &MergeInterleaving, difference: bool) -> 
         .reduce(|| (0, 0), |(i0, d0), (i1, d1)| (i0 + i1, d0 + d1))
 }
 
-/// Pass 1: for each (k-1)-suffix group that contributes a node to the intersection,
-/// marks every LF-step target in `index1` colex space as having an incoming edge.
-/// Each thread processes its own piece; the AtomicBitmap is shared for lock-free writes.
-fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
+/// Shared implementation for pass 1 of both intersection and set-difference.
+///
+/// For each (k-1)-suffix group that contributes a result node, marks every LF-step
+/// target in `index1` colex space as having an incoming edge via a lock-free
+/// [AtomicBitmap].  Each Rayon thread processes its own `piece_ranges` slice independently.
+///
+/// When `difference` is `false` (intersection), a group contributes iff it contains a
+/// position where both `s1` and `s2` are set, and edge-bit `c` is kept when
+/// `s1_or[c] && s2_or[c]`.  When `difference` is `true` (set difference), the predicate
+/// becomes `s1 && !s2` and the edge condition becomes `s1_or[c] && !s2_or[c]`.
+///
+/// The intersection variant additionally pre-sets bit 0 (the shared root) so that the
+/// root is always counted as covered, matching how `isec_length` is computed.
+fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
     interleaving: &MergeInterleaving,
-    isec_length: usize,
+    result_length: usize,
     sigma: usize,
     piece_ranges: &[Range<usize>],
     s1_pops: &[usize],
     s2_pops: &[usize],
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
+    difference: bool,
 ) -> AtomicBitmap {
-    // Bit p = 1 iff s1 colex p receives at least one incoming edge in the intersection.
-    // Bit 0 (root/dollar) is pre-set: it is structural and never needs an incoming edge.
     let has_incoming = AtomicBitmap::new(index1.n_sets());
-    if isec_length > 0 { has_incoming.set(0, true); }
+    // Intersection: pre-set bit 0 (shared root); difference: omit to avoid inflating n_incoming.
+    if !difference && result_length > 0 { has_incoming.set(0, true); }
 
     thread_pool.install(|| {
         (0..n_threads).into_par_iter().for_each(|thread_idx| {
@@ -92,24 +102,32 @@ fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
             let mut s2_group_read = false;
             // s1_colex of the first s1 element in the current group (used for lf_step).
             let mut s1_first_in_group = 0usize;
-            // True iff the current group contains at least one shared (s1 && s2) position.
-            let mut group_has_shared = false;
+            // True iff the current group contains at least one result position.
+            let mut group_has_result = false;
+
+            // Marks LF-step targets for each surviving edge in the current group.
+            let flush_group = |s1_or: &[bool], s2_or: &[bool], s1_first: usize| {
+                for c in 0..sigma {
+                    let edge = if difference {
+                        s1_or[c] && !s2_or[c]
+                    } else {
+                        s1_or[c] && s2_or[c]
+                    };
+                    if edge { has_incoming.set(index1.lf_step(s1_first, c), true); }
+                }
+            };
 
             for merged_colex in colex_range.clone() {
                 if interleaving.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    // Flush: if any shared position exists, mark LF-step targets.
-                    if group_has_shared {
-                        for c in 0..sigma {
-                            if s1_group_or[c] && s2_group_or[c] {
-                                has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                            }
-                        }
+                    // Flush: if any result position exists, mark LF-step targets.
+                    if group_has_result {
+                        flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
                     }
                     s1_group_read = false;
                     s2_group_read = false;
                     s1_group_or.fill(false);
                     s2_group_or.fill(false);
-                    group_has_shared = false;
+                    group_has_result = false;
                 }
 
                 if !s1_group_read && interleaving.s1[merged_colex] {
@@ -121,26 +139,42 @@ fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
                     for c in 0..sigma { s2_group_or[c] = index2.sbwt.set_contains(s2_colex, c as u8); }
                     s2_group_read = true;
                 }
-                if interleaving.s1[merged_colex] && interleaving.s2[merged_colex] {
-                    group_has_shared = true;
-                }
+                let in_result = if difference {
+                    interleaving.s1[merged_colex] && !interleaving.s2[merged_colex]
+                } else {
+                    interleaving.s1[merged_colex] && interleaving.s2[merged_colex]
+                };
+                if in_result { group_has_result = true; }
 
                 s1_colex += interleaving.s1[merged_colex] as usize;
                 s2_colex += interleaving.s2[merged_colex] as usize;
             }
 
             // Flush the last group in this piece.
-            if group_has_shared {
-                for c in 0..sigma {
-                    if s1_group_or[c] && s2_group_or[c] {
-                        has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                    }
-                }
+            if group_has_result {
+                flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
             }
         });
     });
 
     has_incoming
+}
+
+/// Pass 1 for intersection: delegates to [`pass1_has_incoming_impl`] with `difference = false`.
+fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
+    index1: &SbwtIndex<SS>,
+    index2: &SbwtIndex<SS>,
+    interleaving: &MergeInterleaving,
+    isec_length: usize,
+    sigma: usize,
+    piece_ranges: &[Range<usize>],
+    s1_pops: &[usize],
+    s2_pops: &[usize],
+    n_threads: usize,
+    thread_pool: &rayon::ThreadPool,
+) -> AtomicBitmap {
+    pass1_has_incoming_impl(index1, index2, interleaving, isec_length, sigma,
+        piece_ranges, s1_pops, s2_pops, n_threads, thread_pool, false)
 }
 
 /// Collects s1-colex positions of real result k-mers that have no incoming edge and therefore
@@ -542,6 +576,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
 
 // ── difference helpers ──────────────────────────────────────────────────────
 
+/// Pass 1 for set difference: delegates to [`pass1_has_incoming_impl`] with `difference = true`.
 fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
@@ -554,76 +589,8 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
 ) -> AtomicBitmap {
-    let has_incoming = AtomicBitmap::new(index1.n_sets());
-    // Do NOT pre-set position 0: the shared root ($$...$) is never a difference node
-    // and pre-setting it would inflate n_incoming, corrupting the dummy-repair check.
-    // (Contrast with pass1_has_incoming for intersection, where the root IS always an
-    // intersection node and IS counted in isec_length.)
-    let _ = diff_length; // parameter kept for a symmetric API; used by caller only
-
-    thread_pool.install(|| {
-        (0..n_threads).into_par_iter().for_each(|thread_idx| {
-            let colex_range = &piece_ranges[thread_idx];
-            let mut s1_colex: usize = s1_pops[..thread_idx].iter().sum();
-            let mut s2_colex: usize = s2_pops[..thread_idx].iter().sum();
-
-            assert!(interleaving.is_leader[colex_range.start]);
-
-            let mut s1_group_or = vec![false; sigma];
-            let mut s2_group_or = vec![false; sigma];
-            let mut s1_group_read = false;
-            let mut s2_group_read = false;
-            let mut s1_first_in_group = 0usize;
-            // True iff the current group contains at least one difference (s1 && !s2) position.
-            let mut group_has_diff = false;
-
-            for merged_colex in colex_range.clone() {
-                if interleaving.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    if group_has_diff {
-                        for c in 0..sigma {
-                            // Edge exists iff successor is in s1 but not s2
-                            if s1_group_or[c] && !s2_group_or[c] {
-                                has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                            }
-                        }
-                    }
-                    s1_group_read = false;
-                    s2_group_read = false;
-                    s1_group_or.fill(false);
-                    s2_group_or.fill(false);
-                    group_has_diff = false;
-                }
-
-                if !s1_group_read && interleaving.s1[merged_colex] {
-                    for c in 0..sigma { s1_group_or[c] = index1.sbwt.set_contains(s1_colex, c as u8); }
-                    s1_first_in_group = s1_colex;
-                    s1_group_read = true;
-                }
-                if !s2_group_read && interleaving.s2[merged_colex] {
-                    for c in 0..sigma { s2_group_or[c] = index2.sbwt.set_contains(s2_colex, c as u8); }
-                    s2_group_read = true;
-                }
-                // A position contributes to difference iff s1 && !s2
-                if interleaving.s1[merged_colex] && !interleaving.s2[merged_colex] {
-                    group_has_diff = true;
-                }
-
-                s1_colex += interleaving.s1[merged_colex] as usize;
-                s2_colex += interleaving.s2[merged_colex] as usize;
-            }
-
-            // Flush the last group in this piece.
-            if group_has_diff {
-                for c in 0..sigma {
-                    if s1_group_or[c] && !s2_group_or[c] {
-                        has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                    }
-                }
-            }
-        });
-    });
-
-    has_incoming
+    pass1_has_incoming_impl(index1, index2, interleaving, diff_length, sigma,
+        piece_ranges, s1_pops, s2_pops, n_threads, thread_pool, true)
 }
 
 fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
