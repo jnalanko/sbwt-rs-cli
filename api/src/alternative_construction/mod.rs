@@ -344,7 +344,7 @@ fn _par_build_without_redundant_dummies(
                 let mut last_lcs_value: usize = 0;
                 for result in results {
                     if result.rows[0].is_empty() {
-                        last_lcs_value = result.last_lcs_value;
+                        last_lcs_value = last_lcs_value.min(result.last_lcs_value);
                         continue;
                     }
                     let result_lcs = result.lcs.as_ref().unwrap();
