@@ -8,9 +8,11 @@ use crate::atomic_bitmap::AtomicBitmap;
 use crate::vodbg::count::{Counts, Sample};
 use crate::{LcsArray, SbwtIndex, SubsetSeq};
 
+use std::sync::{Arc, Mutex, atomic::AtomicUsize};
+
 use bitvec::vec::BitVec;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
-use simple_sds_sbwt::ops::{BitVec as BitVecTrait, Push, Rank, Select};
+use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
 
 type Word = wide::u8x16;
@@ -111,25 +113,17 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     } = aux;
     drop(equal_to_k);
 
-    let separator_count = bwtk.counts[1];
-    let (rows, lcs) = _build_without_redundant_dummies(
+    // let (rows, lcs) = _build_without_redundant_dummies(
+    let (rows, lcs) = _par_build_without_redundant_dummies(
+        threads,
         k,
-        separator_count,
-        bwtk.len(),
-        &lcp,
-        &k_minus_one_ranges,
-        &k_ranges,
-        &shorter_than_k,
-        &dummy_marks.keep_dummy,
+        bwtk,
+        lcp,
+        k_minus_one_ranges,
+        k_ranges,
+        shorter_than_k,
+        dummy_marks,
         build_lcs,
-        |current_set: &mut u8, index| {
-            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
-                *current_set = include_letter(&bwtk, index, *current_set);
-            }
-        },
-        |current_set: &mut u8, index| {
-            *current_set = include_letter(&bwtk, index, *current_set);
-        },
     );
     let result = collect_output(k, rows, lcs, None, kmer_count);
     log::info!("[par_build_without_redundant_dummies] done");
@@ -138,24 +132,21 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn _build_without_redundant_dummies<FDummy, FNonDummy>(
+#[deprecated]
+fn _build_without_redundant_dummies(
     k: usize,
-    separator_count: usize,
-    length: usize,
-    lcp: &Lcp,
-    k_minus_one_ranges: &BitVector,
-    k_ranges: &RawVector,
-    shorter_than_k: &BitVector,
-    keep_dummy: &RawVector,
+    bwt: Bwt,
+    lcp: Lcp,
+    k_minus_one_ranges: BitVector,
+    k_ranges: RawVector,
+    shorter_than_k: BitVector,
+    dummy_marks: DummyMarks,
     build_lcs: bool,
-    mut add_dummy_outedge: FDummy,
-    mut add_non_dummy_outedge: FNonDummy,
-) -> (Vec<BitVec<u64>>, Option<IntVector>)
-where
-    FDummy: FnMut(&mut u8, usize),
-    FNonDummy: FnMut(&mut u8, usize)
-{
+) -> (Vec<BitVec<u64>>, Option<IntVector>) {
     log::info!("[_build_without_redundant_dummies] begin");
+    let length = bwt.len();
+    let separator_count = bwt.counts[1];
+
     let mut rows = Vec::<BitVec<u64>>::new();
     for _ in 0..4 {
         // note(mk): These overestimating allocations should reserve the pages in the virtual
@@ -177,7 +168,9 @@ where
     let mut current_set: u8 = 0;
 
     for index in 1..separator_count {
-        add_dummy_outedge(&mut current_set, index);
+        if dummy_marks.keep_dummy.bit(index) {
+            current_set = include_letter(&bwt, index, current_set);
+        }
         if current_set & FULL_SET == FULL_SET {
             break;
         }
@@ -218,20 +211,22 @@ where
 
         if shorter_than_k.get(index) {
             has_dummy_kmer = true;
-            if keep_dummy.bit(index) {
+            if dummy_marks.keep_dummy.bit(index) {
                 if build_lcs && !include_dummy_kmer {
                     lcs.as_mut().unwrap().push(current_lcs_value as u64);
                     current_lcs_value = k - 1;
                 }
                 include_dummy_kmer = true;
             }
-            add_dummy_outedge(&mut current_set, index);
+            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
+                current_set = include_letter(&bwt, index, current_set);
+            }
         } else {
             if build_lcs && is_start_of_k_range {
                 lcs.as_mut().unwrap().push(current_lcs_value as u64);
                 current_lcs_value = k - 1;
             }
-            add_non_dummy_outedge(&mut current_set, index);
+            current_set = include_letter(&bwt, index, current_set);
         }
     }
 
@@ -246,6 +241,270 @@ where
 
     log::info!("[_build_without_redundant_dummies] begin");
     (rows, lcs)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn _par_build_without_redundant_dummies(
+    threads: usize,
+    k: usize,
+    bwt: Bwt,
+    lcp: Lcp,
+    k_minus_one_ranges: BitVector,
+    k_ranges: RawVector,
+    shorter_than_k: BitVector,
+    dummy_marks: DummyMarks,
+    build_lcs: bool,
+) -> (Vec<BitVec<u64>>, Option<IntVector>)
+{
+    log::info!("[_par_build_without_redundant_dummies] begin");
+
+    let length = bwt.len();
+    let separator_count = bwt.counts[1];
+
+    let mut rows = Vec::<BitVec<u64>>::new();
+    for _ in 0..4 {
+        rows.push(BitVec::with_capacity(length));
+    }
+
+    let mut current_set: u8 = 0;
+
+    for index in 1..separator_count {
+        if dummy_marks.keep_dummy.bit(index) {
+            current_set = include_letter(&bwt, index, current_set);
+        }
+        if current_set & FULL_SET == FULL_SET {
+            break;
+        }
+    }
+    push_set(&mut rows, current_set);
+
+    let results = Arc::new(Mutex::new(Vec::<SbwtRegionResult>::with_capacity(threads)));
+    let threads_total_length = length - separator_count;
+    let thread_region_length = threads_total_length.div_ceil(threads);
+
+    log::info!("[_par_build_without_redundant_dummies] regions begin");
+    rayon::scope(|s| {
+
+        let bwt                = &bwt;
+        let lcp                = &lcp;
+        let k_minus_one_ranges = &k_minus_one_ranges;
+        let k_ranges           = &k_ranges;
+        let shorter_than_k     = &shorter_than_k;
+        let dummy_marks        = &dummy_marks;
+        let results = &results;
+
+        for thread_index in 0..threads {
+            s.spawn(move |_| {
+                let start = separator_count + thread_index * thread_region_length;
+                let end = (start + thread_region_length).min(length);
+                let is_last_thread = thread_index == threads - 1;
+                let result = _build_sbwt_region(
+                    k,
+                    start,
+                    end,
+                    is_last_thread,
+                    bwt,
+                    lcp,
+                    k_minus_one_ranges,
+                    k_ranges,
+                    shorter_than_k,
+                    dummy_marks,
+                    build_lcs
+                );
+                results.lock().unwrap().push(result);
+            });
+        }
+    });
+    log::info!("[_par_build_without_redundant_dummies] regions done");
+
+    drop((
+        bwt,
+        lcp,
+        k_minus_one_ranges,
+        k_ranges,
+        shorter_than_k,
+        dummy_marks,
+    ));
+
+    let mut results = {
+        // No other thread should be holding the mutex now.
+        let mutex = Arc::try_unwrap(results).unwrap();
+        mutex.into_inner().unwrap()
+    };
+    results.sort_by_key(|result| result.start);
+    for result in &results {
+        for i in 0..rows.len() {
+            rows[i].extend_from_bitslice(result.rows[i].as_bitslice());
+        }
+    }
+
+    let lcs = if build_lcs {
+        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+        let bit_width = bit_width as usize;
+        let mut lcs = IntVector::with_capacity(length, bit_width).unwrap();
+        lcs.push(0);
+
+        let mut last_lcs_value: usize = 0;
+        for result in &mut results {
+            if result.rows[0].is_empty() {
+                last_lcs_value = result.last_lcs_value;
+                continue;
+            }
+            let result_lcs = result.lcs.as_mut().unwrap();
+            let first_value = result_lcs.get(0) as usize;
+            let new_first_value =  first_value.min(last_lcs_value);
+            result_lcs.set(0, new_first_value as u64);
+            lcs.extend(result_lcs.iter());
+            last_lcs_value = result.last_lcs_value;
+        }
+
+        Some(lcs)
+    } else {
+        None
+    };
+
+    (rows, lcs)
+}
+
+#[derive(Debug)]
+struct SbwtRegionResult {
+    start: usize,
+    rows: Vec<BitVec<u64>>,
+    lcs: Option<IntVector>,
+    last_lcs_value: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn _build_sbwt_region(
+    k: usize,
+    start: usize,
+    end: usize,
+    is_last_thread: bool,
+    bwt: &Bwt,
+    lcp: &Lcp,
+    k_minus_one_ranges: &BitVector,
+    k_ranges: &RawVector,
+    shorter_than_k: &BitVector,
+    dummy_marks: &DummyMarks,
+    build_lcs: bool,
+) -> SbwtRegionResult {
+    log::info!("[_build_sbwt_region] begin [{}, {})", start, end);
+    let length = bwt.len();
+    let capacity = end - start;
+
+    let mut rows = Vec::<BitVec<u64>>::new();
+    for _ in 0..4 {
+        rows.push(BitVec::with_capacity(capacity));
+    }
+
+    let mut lcs: Option<IntVector> = if build_lcs {
+        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+        let bit_width = bit_width as usize;
+        let value = IntVector::with_capacity(capacity, bit_width).unwrap();
+        Some(value)
+    } else {
+        None
+    };
+
+    let mut index = start;
+    let mut current_set = 0;
+    let mut current_lcs_value  = k - 1;
+    let mut include_dummy_kmer = false;
+    let mut has_dummy_kmer     = false;
+    let mut k_range_count = 0;
+
+    while index < end {
+        if build_lcs {
+            current_lcs_value = current_lcs_value.min(lcp.get(index));
+        }
+        if k_minus_one_ranges.get(index) {
+            break;
+        }
+        index += 1;
+    }
+
+    if index == end {
+        return SbwtRegionResult {
+            start,
+            rows,
+            lcs,
+            last_lcs_value: current_lcs_value
+        };
+    }
+
+    while index < length {
+        if k_minus_one_ranges.get(index) {
+            if has_dummy_kmer && !include_dummy_kmer {
+                k_range_count -= 1;
+            }
+            while k_range_count > 0 {
+                push_set(&mut rows, current_set);
+                current_set = 0;
+                k_range_count -= 1;
+            }
+
+            current_set = 0;
+            has_dummy_kmer = false;
+            include_dummy_kmer = false;
+            k_range_count = 0;
+
+            if index >= end {
+                break;
+            }
+        }
+
+        if build_lcs {
+            current_lcs_value = current_lcs_value.min(lcp.get(index));
+        }
+
+        let is_start_of_k_range = k_ranges.bit(index);
+        if is_start_of_k_range {
+            k_range_count += 1;
+        }
+
+        if shorter_than_k.get(index) {
+            has_dummy_kmer = true;
+            if dummy_marks.keep_dummy.bit(index) {
+                if build_lcs && !include_dummy_kmer {
+                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
+                    current_lcs_value = k - 1;
+                }
+                include_dummy_kmer = true;
+            }
+            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
+                current_set = include_letter(bwt, index, current_set);
+            }
+        } else {
+            if build_lcs && is_start_of_k_range {
+                lcs.as_mut().unwrap().push(current_lcs_value as u64);
+                current_lcs_value = k - 1;
+            }
+            current_set = include_letter(bwt, index, current_set);
+        }
+
+        index += 1;
+    }
+
+    if is_last_thread {
+        if has_dummy_kmer && !include_dummy_kmer {
+            k_range_count -= 1;
+        }
+        while k_range_count > 0 {
+            push_set(&mut rows, current_set);
+            current_set = 0;
+            k_range_count -= 1;
+        }
+    }
+
+    log::info!("[_build_sbwt_region] done [{}, {})", start, end);
+    
+    SbwtRegionResult {
+        start,
+        rows,
+        lcs,
+        last_lcs_value: current_lcs_value
+    }
 }
 
 pub(crate) fn collect_output<SS: SubsetSeq + Send>(
@@ -456,9 +715,6 @@ pub(crate) fn par_build_full_auxiliary_data(
     // will be referred to as a big range.
     //
     // A big range can be further divided into k-ranges.
-
-    use crate::atomic_bitmap::AtomicBitmap;
-    use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
     log::info!("[par_build_full_auxiliary_data] begin");
 
@@ -680,7 +936,7 @@ struct DummyMarks {
     /// Marks (k-1)-mers in order to keep their outedge as it is not guaranteed that the non-dummy
     /// k-mer that exists as a predecessor to a non-dummy k-mer at the beginning of a sequence has
     /// the needed label. This is needed as we don't want to include all letters of dummy k-mers
-    /// whose "true" lenght is less than k-1 and there is no way to figure out which ones are
+    /// whose "true" length is less than k-1 and there is no way to figure out which ones are
     /// those from the [FullAuxiliaryBitVectors::shorter_than_k] bitvector alone.
     keep_outedge: RawVector,
 }
