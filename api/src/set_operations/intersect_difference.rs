@@ -182,7 +182,6 @@ fn collect_result_source_nodes(
                         let in_result = if difference { !interleaving.s2[merged_colex] }
                                         else          {  interleaving.s2[merged_colex] };
                         if in_result
-                            && !interleaving.is_dummy[merged_colex]
                             && !has_incoming.get(s1_colex)
                         {
                             local.push(s1_colex);
@@ -351,6 +350,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     let (aux_submatrix, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
         .k(k)
         .n_threads(n_threads)
+        .add_all_dummy_paths(true)
         .run_from_vecs(&source_kmers);
     drop(source_kmers);
 
@@ -755,6 +755,7 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     let (aux_submatrix, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
         .k(k)
         .n_threads(n_threads)
+        .add_all_dummy_paths(true)
         .run_from_vecs(&source_kmers);
     drop(source_kmers);
 
