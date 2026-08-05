@@ -262,22 +262,15 @@ fn _par_build_without_redundant_dummies(
     let length = bwt.len();
     let separator_count = bwt.counts[1];
 
-    let mut rows = Vec::<BitVec<u64>>::new();
-    for _ in 0..4 {
-        rows.push(BitVec::with_capacity(length));
-    }
-
-    let mut current_set: u8 = 0;
-
+    let mut dummy_set: u8 = 0;
     for index in 1..separator_count {
         if dummy_marks.keep_dummy.bit(index) {
-            current_set = include_letter(&bwt, index, current_set);
+            dummy_set = include_letter(&bwt, index, dummy_set);
         }
-        if current_set & FULL_SET == FULL_SET {
+        if dummy_set & FULL_SET == FULL_SET {
             break;
         }
     }
-    push_set(&mut rows, current_set);
 
     let results = Arc::new(Mutex::new(Vec::<SbwtRegionResult>::with_capacity(threads)));
     let threads_total_length = length - separator_count;
@@ -333,37 +326,63 @@ fn _par_build_without_redundant_dummies(
         mutex.into_inner().unwrap()
     };
     results.sort_by_key(|result| result.start);
-    for result in &results {
-        for i in 0..rows.len() {
-            rows[i].extend_from_bitslice(result.rows[i].as_bitslice());
+
+    log::info!("[_par_build_without_redundant_dummies] agglomerating result");
+    let rows = Arc::new(Mutex::new(Vec::<(usize, BitVec<u64>)>::new()));
+    let mut lcs = None;
+    rayon::scope(|s| {
+        let results = &results;
+        let rows = &rows;
+        let lcs = &mut lcs;
+
+        if build_lcs {
+            s.spawn(move |_| {
+                let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+                let bit_width = bit_width as usize;
+                let mut value = IntVector::with_capacity(length, bit_width).unwrap();
+                value.push(0);
+
+                let mut last_lcs_value: usize = 0;
+                for result in results {
+                    if result.rows[0].is_empty() {
+                        last_lcs_value = result.last_lcs_value;
+                        continue;
+                    }
+                    let result_lcs = result.lcs.as_ref().unwrap();
+                    let first_value = result_lcs.get(0) as usize;
+                    let new_first_value =  first_value.min(last_lcs_value);
+                    value.push(new_first_value as u64);
+                    value.extend(result_lcs.iter().skip(1));
+                    last_lcs_value = result.last_lcs_value;
+                }
+
+                *lcs = Some(value);
+            });
         }
+
+        for row_index in 0..4 {
+            s.spawn(move |_| {
+                let mut local_row = BitVec::with_capacity(length);
+                local_row.push(false);
+                for result in results {
+                    local_row.extend_from_bitslice(result.rows[row_index].as_bitslice());
+                }
+                rows.lock().unwrap().push((row_index, local_row));
+            });
+        }
+    });
+
+    let mut rows_with_index = {
+        let mutex = Arc::try_unwrap(rows).unwrap();
+        mutex.into_inner().unwrap()
+    };
+    rows_with_index.sort_by_key(|(index, _)| *index);
+    let mut rows = rows_with_index.into_iter().map(|(_, row)| row).collect::<Vec<_>>();
+    for i in 1..=4 {
+        rows[i - 1].set(0, dummy_set & (1 << i) != 0);
     }
 
-    let lcs = if build_lcs {
-        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
-        let bit_width = bit_width as usize;
-        let mut lcs = IntVector::with_capacity(length, bit_width).unwrap();
-        lcs.push(0);
-
-        let mut last_lcs_value: usize = 0;
-        for result in &mut results {
-            if result.rows[0].is_empty() {
-                last_lcs_value = result.last_lcs_value;
-                continue;
-            }
-            let result_lcs = result.lcs.as_mut().unwrap();
-            let first_value = result_lcs.get(0) as usize;
-            let new_first_value =  first_value.min(last_lcs_value);
-            result_lcs.set(0, new_first_value as u64);
-            lcs.extend(result_lcs.iter());
-            last_lcs_value = result.last_lcs_value;
-        }
-
-        Some(lcs)
-    } else {
-        None
-    };
-
+    log::info!("[_par_build_without_redundant_dummies] done");
     (rows, lcs)
 }
 
@@ -389,7 +408,6 @@ fn _build_sbwt_region(
     dummy_marks: &DummyMarks,
     build_lcs: bool,
 ) -> SbwtRegionResult {
-    log::info!("[_build_sbwt_region] begin [{}, {})", start, end);
     let length = bwt.len();
     let capacity = end - start;
 
@@ -497,8 +515,6 @@ fn _build_sbwt_region(
         }
     }
 
-    log::info!("[_build_sbwt_region] done [{}, {})", start, end);
-    
     SbwtRegionResult {
         start,
         rows,
