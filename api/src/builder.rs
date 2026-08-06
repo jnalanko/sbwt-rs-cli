@@ -3,7 +3,6 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use crate::JSeqIOSeqStreamWrapper;
 use crate::tempfile::TempFileManager;
 use crate::{subsetseq::SubsetMatrix, SeqStream};
 use crate::sbwt::{PrefixLookupTable, SbwtIndex};
@@ -195,18 +194,18 @@ impl<'a> BitPackedKmerSortingDisk<crate::VecSeqStream<'a>> {
     }
 }
 
-impl BitPackedKmerSortingDisk<JSeqIOSeqStreamWrapper> {
+impl BitPackedKmerSortingDisk<crate::util::FastXReader> {
     /// Initialize the algorithm for a fasta file, with the same defaults as [BitPackedKmerSortingDisk::new].
     pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BitPackedKmerSortingDisk::new(input, k)
     }
 
     /// Initialize the algorithm for a fastq file, with the same defaults as [BitPackedKmerSortingDisk::new].
     pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BitPackedKmerSortingDisk::new(input, k)
     }
 }
@@ -355,18 +354,18 @@ impl<'a> BitPackedKmerSortingMem<crate::VecSeqStream<'a>> {
     }
 }
 
-impl BitPackedKmerSortingMem<JSeqIOSeqStreamWrapper> {
+impl BitPackedKmerSortingMem<crate::util::FastXReader> {
     /// Initialize the algorithm for a fasta file, with the same defaults as [BitPackedKmerSortingMem::new].
     pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BitPackedKmerSortingMem::new(input, k)
     }
 
     /// Initialize the algorithm for a fastq file, with the same defaults as [BitPackedKmerSortingMem::new].
     pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BitPackedKmerSortingMem::new(input, k)
     }
 }
@@ -523,18 +522,18 @@ impl<'a> BuildByBoundedSuffixSort<crate::VecSeqStream<'a>> {
     }
 }
 
-impl BuildByBoundedSuffixSort<JSeqIOSeqStreamWrapper> {
+impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
     /// Initialize the algorithm for a fasta file, with the same defaults as [BuildByBoundedSuffixSort::new].
     pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BuildByBoundedSuffixSort::new(input, k)
     }
 
     /// Initialize the algorithm for a fastq file, with the same defaults as [BuildByBoundedSuffixSort::new].
     pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BuildByBoundedSuffixSort::new(input, k)
     }
 }
@@ -677,18 +676,18 @@ impl<'a> BuildByLibsais<crate::VecSeqStream<'a>> {
 }
 
 #[cfg(feature = "libsais")]
-impl BuildByLibsais<JSeqIOSeqStreamWrapper> {
+impl BuildByLibsais<crate::util::FastXReader> {
     /// Initialize the algorithm for a fasta file, with the same defaults as [BuildByLibsais::new].
     pub fn new_from_fasta<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BuildByLibsais::new(input, k)
     }
 
     /// Initialize the algorithm for a fastq file, with the same defaults as [BuildByLibsais::new].
     pub fn new_from_fastq<R: std::io::Read + Send + Sync + 'static>(input: R, k: usize) -> Self {
         let input = std::io::BufReader::new(input);
-        let input = crate::JSeqIOSeqStreamWrapper{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
+        let input = crate::util::FastXReader{inner: jseqio::reader::DynamicFastXReader::new(input).unwrap()};
         BuildByLibsais::new(input, k)
     }
 }

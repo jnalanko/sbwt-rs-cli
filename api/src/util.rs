@@ -100,8 +100,8 @@ pub fn reverse_complement_in_place(seq: &mut [u8]){
 }
 
 #[allow(dead_code)]
-pub(crate) struct FastXReader{
-    inner: jseqio::reader::DynamicFastXReader
+pub struct FastXReader{
+    pub(crate) inner: jseqio::reader::DynamicFastXReader
 }
 
 impl crate::SeqStream for FastXReader{
