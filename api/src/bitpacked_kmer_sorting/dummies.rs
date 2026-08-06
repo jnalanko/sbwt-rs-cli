@@ -3,7 +3,6 @@ use std::io::{BufReader, BufWriter, Write};
 use std::ops::Range;
 use std::path::Path;
 
-use crate::bitpacked_kmer_sorting::disk_access::dummy_record_len;
 use crate::kmer::LongKmer;
 use crate::util::binary_search_leftmost_that_fulfills_pred;
 
@@ -144,7 +143,7 @@ fn get_disk_has_predecessor_bits<const B: usize>(
                 }
             }).collect();
 
-            pieces.extend(char_pieces.into_iter());
+            pieces.extend(char_pieces);
         }
 
         crate::util::parallel_bitvec_concat(pieces)
@@ -222,7 +221,7 @@ pub fn get_sorted_dummies<const B: usize>(
             let mut prefix = LongKmer::<B>::load(&mut first_mers_reader).unwrap().unwrap();
             let mut prefix_full_len = first_mers_reader.read_u8().unwrap() as usize;
 
-            if prefix_full_len as usize == k {
+            if prefix_full_len == k {
                 prefix = prefix.left_shifted(1);
                 prefix_full_len -= 1;
             }

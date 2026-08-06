@@ -116,7 +116,7 @@ pub fn get_sorted_dummies<const B: usize>(
                 }
             }).collect();
 
-            pieces.extend(char_pieces.into_iter());
+            pieces.extend(char_pieces);
         }
 
         let has_prececessor = crate::util::parallel_bitvec_concat(pieces);
@@ -149,7 +149,7 @@ pub fn get_sorted_dummies<const B: usize>(
                 }
                 for i in 0..prefix_full_len {
                     let len = prefix_full_len - i;
-                    required_dummies.push((prefix, len as u8));
+                    required_dummies.push((prefix, len));
                     prefix = prefix.left_shifted(1);
                 }
             }

@@ -8,7 +8,7 @@ mod disk_access;
 
 use human_bytes::human_bytes;
 
-use std::{cmp::max, io::{BufWriter, Seek}, path::Path};
+use std::{io::Seek, path::Path};
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, tempfile::TempFileManager, util::DNA_ALPHABET};
 
@@ -57,7 +57,7 @@ pub fn sort_and_dedup_kmers_into_file<const B: usize, IN: crate::SeqStream + Sen
 pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
 
     let sigma = DNA_ALPHABET.len(); 
-    let n_kmers = disk_access::n_kmer_records::<B>(&kmers_file);
+    let n_kmers = disk_access::n_kmer_records::<B>(kmers_file);
     let required_dummies = dummies::get_sorted_dummies::<B>(kmers_file, n_kmers, sigma, k, n_threads, first_mers_file);
 
     log::info!("{} dummy nodes needed", required_dummies.len());
@@ -69,12 +69,12 @@ pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, 
     let mut dummy_file = temp_file_manager.create_new_file("dummies-", 10, ".bin");
     dummies::write_to_disk(required_dummies, &mut dummy_file.file);
 
-    let mut dummy_merge_peak = file_size(&kmers_file) + file_size(&dummy_file.path);
+    let mut dummy_merge_peak = file_size(kmers_file) + file_size(&dummy_file.path);
     if let Some(first_mer_file) = first_mers_file { dummy_merge_peak += file_size(first_mer_file) }
     log::info!("Temporary disk space peak during dummy construction: {} bytes ({})", dummy_merge_peak, human_bytes(dummy_merge_peak as f64));
 
     log::info!("Constructing the sbwt subset sequence");
-    let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, &kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
+    let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
 
     // Create the C array
     #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
