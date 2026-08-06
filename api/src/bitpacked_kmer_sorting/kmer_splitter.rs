@@ -138,7 +138,7 @@ pub fn split_to_bins<const B: usize, IN: crate::SeqStream + Send>(mut seqs: IN, 
                     let mut batch_iter = batch.into_iter();
                     while let Some(seq) = batch_iter.next() {
                         if add_all_dummy_paths {
-                            crate::util::for_each_run_with_key(&seq, |c| crate::util::is_dna(*c), |run_range| {
+                            crate::util::for_each_run_with_key(seq, |c| crate::util::is_dna(*c), |run_range| {
                                 if !run_range.is_empty() && crate::util::is_dna(seq[run_range.start]) {
                                     let run_range = if run_range.len() > k { run_range.end - k..run_range.end } else { run_range };
                                     let mer = LongKmer::<B>::from_ascii(&seq[run_range.clone()]).unwrap();
@@ -330,7 +330,7 @@ pub fn par_sort_and_dedup_bin_files<const B: usize>(bin_files: Vec<TempFile>, me
     for h in consumer_handles{
         processed_files.extend(h.join().unwrap());
     }
-    processed_files.sort_by(|(_, i1, _), (_, i2, _)| i1.cmp(i2));
+    processed_files.sort_by_key(|(_, i1, _)| *i1);
 
     let total_file_size = processed_files.iter().fold(0_usize, |acc, (_,_,size)| acc + size);
 

@@ -797,7 +797,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     let low_ram = matches.get_flag("low-ram");
 
     // Open output file (open early to fail early if there is a problem)
-    let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
+    let mut out = BufWriter::new(File::create(sbwt_outfile).unwrap());
 
     // Read sbwts
     let index1 = load_index(sbwt1_path, cpp_format);
@@ -842,7 +842,7 @@ fn intersect_command(matches: &clap::ArgMatches) {
     let low_ram = matches.get_flag("low-ram");
 
     // Open output file early to fail fast if path is invalid
-    let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
+    let mut out = BufWriter::new(File::create(sbwt_outfile).unwrap());
 
     // Read both indexes
     let index1 = load_index(sbwt1_path, cpp_format);
@@ -886,7 +886,7 @@ fn difference_command(matches: &clap::ArgMatches) {
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
 
-    let mut out = BufWriter::new(File::create(&sbwt_outfile).unwrap());
+    let mut out = BufWriter::new(File::create(sbwt_outfile).unwrap());
 
     let index1 = load_index(sbwt1_path, cpp_format);
     let index2 = load_index(sbwt2_path, cpp_format);
