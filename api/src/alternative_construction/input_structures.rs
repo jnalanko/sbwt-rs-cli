@@ -70,17 +70,17 @@ impl Bwt {
     }
 
     #[inline]
-    pub fn inverse_lf_step(&self, index: usize) -> (usize, usize) {
+    pub fn inverse_lf_step(&self, index: usize) -> usize {
         assert!(index < self.data[0].len());
         for char_index in (0..self.counts.len()).rev() {
             if index >= self.counts[char_index] {
                 let rank_within_count = index - self.counts[char_index];
                 let order = self.data[char_index].select(rank_within_count)
                     .expect("The given bit should exist.");
-                return (order, char_index);
+                return order;
             }
         }
-        (0, 0)
+        0
     }
 
     pub fn serialize<W: std::io::Write>(&self, output: &mut W) -> std::io::Result<usize> {

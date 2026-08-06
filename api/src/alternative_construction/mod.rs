@@ -101,26 +101,12 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     let _ = threads;
     let aux = par_build_full_auxiliary_data(threads, input, bounded_context_suffix_array, k);
     let dummy_marks = par_build_dummy_marks(threads, k, &aux);
-
-    let FullAuxiliaryData {
-        kmer_count,
-        bwtk,
-        lcp,
-        shorter_than_k,
-        equal_to_k,
-        k_minus_one_ranges,
-        k_ranges
-    } = aux;
-    drop(equal_to_k);
+    let kmer_count = aux.kmer_count;
 
     let (rows, lcs) = _par_build_without_redundant_dummies(
         threads,
         k,
-        bwtk,
-        lcp,
-        k_minus_one_ranges,
-        k_ranges,
-        shorter_than_k,
+        aux,
         dummy_marks,
         build_lcs,
     );
@@ -131,140 +117,23 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[deprecated]
-fn _build_without_redundant_dummies(
-    k: usize,
-    bwt: Bwt,
-    lcp: Lcp,
-    k_minus_one_ranges: BitVector,
-    k_ranges: RawVector,
-    shorter_than_k: BitVector,
-    dummy_marks: DummyMarks,
-    build_lcs: bool,
-) -> (Vec<BitVec<u64>>, Option<IntVector>) {
-    log::info!("[_build_without_redundant_dummies] begin");
-    let length = bwt.len();
-    let separator_count = bwt.counts[1];
-
-    let mut rows = Vec::<BitVec<u64>>::new();
-    for _ in 0..4 {
-        // note(mk): These overestimating allocations should reserve the pages in the virtual
-        // memory space of the process, but it shouldn't actually use all of them. Potential
-        // breaking point!
-        rows.push(BitVec::with_capacity(length));
-    }
-
-    let mut lcs: Option<IntVector> = if build_lcs {
-        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
-        let bit_width = bit_width as usize;
-        let mut value = IntVector::with_capacity(length, bit_width).unwrap();
-        value.push(0); // '$...$' dummy k-mer
-        Some(value)
-    } else {
-        None
-    };
-
-    let mut current_set: u8 = 0;
-
-    for index in 1..separator_count {
-        if dummy_marks.keep_dummy.bit(index) {
-            current_set = include_letter(&bwt, index, current_set);
-        }
-        if current_set & FULL_SET == FULL_SET {
-            break;
-        }
-    }
-    push_set(&mut rows, current_set);
-
-    let mut current_set = 0;
-    let mut current_lcs_value  = k - 1;
-    let mut include_dummy_kmer = false;
-    let mut has_dummy_kmer     = false;
-    let mut k_range_count = 0;
-
-    for index in separator_count..length {
-        if k_minus_one_ranges.get(index) {
-            if has_dummy_kmer && !include_dummy_kmer {
-                k_range_count -= 1;
-            }
-            while k_range_count > 0 {
-                push_set(&mut rows, current_set);
-                current_set = 0;
-                k_range_count -= 1;
-            }
-
-            current_set = 0;
-            has_dummy_kmer = false;
-            include_dummy_kmer = false;
-            k_range_count = 0;
-        }
-
-        if build_lcs {
-            current_lcs_value = current_lcs_value.min(lcp.get(index));
-        }
-
-        let is_start_of_k_range = k_ranges.bit(index);
-        if is_start_of_k_range {
-            k_range_count += 1;
-        }
-
-        if shorter_than_k.get(index) {
-            has_dummy_kmer = true;
-            if dummy_marks.keep_dummy.bit(index) {
-                if build_lcs && !include_dummy_kmer {
-                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
-                    current_lcs_value = k - 1;
-                }
-                include_dummy_kmer = true;
-            }
-            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
-                current_set = include_letter(&bwt, index, current_set);
-            }
-        } else {
-            if build_lcs && is_start_of_k_range {
-                lcs.as_mut().unwrap().push(current_lcs_value as u64);
-                current_lcs_value = k - 1;
-            }
-            current_set = include_letter(&bwt, index, current_set);
-        }
-    }
-
-    if has_dummy_kmer && !include_dummy_kmer {
-        k_range_count -= 1;
-    }
-    while k_range_count > 0 {
-        push_set(&mut rows, current_set);
-        current_set = 0;
-        k_range_count -= 1;
-    }
-
-    log::info!("[_build_without_redundant_dummies] begin");
-    (rows, lcs)
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
 fn _par_build_without_redundant_dummies(
     threads: usize,
     k: usize,
-    bwt: Bwt,
-    lcp: Lcp,
-    k_minus_one_ranges: BitVector,
-    k_ranges: RawVector,
-    shorter_than_k: BitVector,
+    aux: FullAuxiliaryData,
     dummy_marks: DummyMarks,
     build_lcs: bool,
 ) -> (Vec<BitVec<u64>>, Option<IntVector>)
 {
     log::info!("[_par_build_without_redundant_dummies] begin");
 
-    let length = bwt.len();
-    let separator_count = bwt.counts[1];
+    let length = aux.bwt.len();
+    let separator_count = aux.bwt.counts[1];
 
     let mut dummy_set: u8 = 0;
     for index in 1..separator_count {
         if dummy_marks.keep_dummy.bit(index) {
-            dummy_set = include_letter(&bwt, index, dummy_set);
+            dummy_set = include_letter(&aux.bwt, index, dummy_set);
         }
         if dummy_set & FULL_SET == FULL_SET {
             break;
@@ -278,13 +147,9 @@ fn _par_build_without_redundant_dummies(
     log::info!("[_par_build_without_redundant_dummies] regions begin");
     rayon::scope(|s| {
 
-        let bwt                = &bwt;
-        let lcp                = &lcp;
-        let k_minus_one_ranges = &k_minus_one_ranges;
-        let k_ranges           = &k_ranges;
-        let shorter_than_k     = &shorter_than_k;
-        let dummy_marks        = &dummy_marks;
-        let results = &results;
+        let aux         = &aux;
+        let dummy_marks = &dummy_marks;
+        let results     = &results;
 
         for thread_index in 0..threads {
             s.spawn(move |_| {
@@ -296,11 +161,7 @@ fn _par_build_without_redundant_dummies(
                     start,
                     end,
                     is_last_thread,
-                    bwt,
-                    lcp,
-                    k_minus_one_ranges,
-                    k_ranges,
-                    shorter_than_k,
+                    aux,
                     dummy_marks,
                     build_lcs
                 );
@@ -310,14 +171,7 @@ fn _par_build_without_redundant_dummies(
     });
     log::info!("[_par_build_without_redundant_dummies] regions done");
 
-    drop((
-        bwt,
-        lcp,
-        k_minus_one_ranges,
-        k_ranges,
-        shorter_than_k,
-        dummy_marks,
-    ));
+    drop(aux);
 
     let mut results = {
         // No other thread should be holding the mutex now.
@@ -399,15 +253,11 @@ fn _build_sbwt_region(
     start: usize,
     end: usize,
     is_last_thread: bool,
-    bwt: &Bwt,
-    lcp: &Lcp,
-    k_minus_one_ranges: &BitVector,
-    k_ranges: &RawVector,
-    shorter_than_k: &BitVector,
+    aux: &FullAuxiliaryData,
     dummy_marks: &DummyMarks,
     build_lcs: bool,
 ) -> SbwtRegionResult {
-    let length = bwt.len();
+    let length = aux.bwt.len();
     let capacity = end - start;
 
     let mut rows = Vec::<BitVec<u64>>::new();
@@ -433,9 +283,9 @@ fn _build_sbwt_region(
 
     while index < end {
         if build_lcs {
-            current_lcs_value = current_lcs_value.min(lcp.get(index));
+            current_lcs_value = current_lcs_value.min(aux.lcp.get(index));
         }
-        if k_minus_one_ranges.get(index) {
+        if aux.k_minus_one_ranges.get(index) {
             break;
         }
         index += 1;
@@ -451,7 +301,7 @@ fn _build_sbwt_region(
     }
 
     while index < length {
-        if k_minus_one_ranges.get(index) {
+        if aux.k_minus_one_ranges.get(index) {
             if has_dummy_kmer && !include_dummy_kmer {
                 k_range_count -= 1;
             }
@@ -472,15 +322,15 @@ fn _build_sbwt_region(
         }
 
         if build_lcs {
-            current_lcs_value = current_lcs_value.min(lcp.get(index));
+            current_lcs_value = current_lcs_value.min(aux.lcp.get(index));
         }
 
-        let is_start_of_k_range = k_ranges.bit(index);
+        let is_start_of_k_range = aux.k_ranges.bit(index);
         if is_start_of_k_range {
             k_range_count += 1;
         }
 
-        if shorter_than_k.get(index) {
+        if aux.shorter_than_k.get(index) {
             has_dummy_kmer = true;
             if dummy_marks.keep_dummy.bit(index) {
                 if build_lcs && !include_dummy_kmer {
@@ -489,15 +339,15 @@ fn _build_sbwt_region(
                 }
                 include_dummy_kmer = true;
             }
-            if dummy_marks.keep_dummy.bit(index) || dummy_marks.keep_outedge.bit(index) {
-                current_set = include_letter(bwt, index, current_set);
+            if dummy_marks.keep_dummy.bit(index) || aux.equal_to_k_minus_one_or_k.bit(index) {
+                current_set = include_letter(&aux.bwt, index, current_set);
             }
         } else {
             if build_lcs && is_start_of_k_range {
                 lcs.as_mut().unwrap().push(current_lcs_value as u64);
                 current_lcs_value = k - 1;
             }
-            current_set = include_letter(bwt, index, current_set);
+            current_set = include_letter(&aux.bwt, index, current_set);
         }
 
         index += 1;
@@ -694,7 +544,7 @@ pub(crate) struct FullAuxiliaryData {
     /// It is easier to calculate the true k-mers while creating the auxiliary bitvectors rather
     /// than trying to figure out their count later.
     pub(crate) kmer_count: usize,
-    pub(crate) bwtk: Bwt,
+    pub(crate) bwt: Bwt,
     pub(crate) lcp: Lcp,
     /// Used to figure out whether a k-mer at the beginning of a sequence has a true k-mer as a
     /// predecessor in order to figure out whether the dummy k-mer is necessary. In the final pass
@@ -702,7 +552,13 @@ pub(crate) struct FullAuxiliaryData {
     pub(crate) shorter_than_k: BitVector,
     /// Used in the pass which marks the dummy k-mers that need to be kept in order to identify the
     /// k-mers which are at the beginning of an input sequence.
-    pub(crate) equal_to_k: RawVector,
+    ///
+    /// Also marks (k-1)-mers in order to keep their outedge as it is not guaranteed that the
+    /// non-dummy k-mer that exists as a predecessor to a non-dummy k-mer at the beginning of a
+    /// sequence has the needed label. This is needed as we don't want to include all letters of
+    /// dummy k-mers whose "true" length is less than k-1 and there is no way to figure out which
+    /// ones are those from the [FullAuxiliaryBitVectors::shorter_than_k] bitvector alone.
+    pub(crate) equal_to_k_minus_one_or_k: RawVector,
     /// Used in order to figure out the bounds at which to check the [Self::shorter_than_k]
     /// bitvector whether a non-dummy k-mer at the beginning of an input sequence has a non-dummy
     /// k-mer as a predecessor. In addition, it is used to figure out the bounds at which to
@@ -819,6 +675,9 @@ pub(crate) fn par_build_full_auxiliary_data(
 
                     if length < k {
                         shorter_than_k.set(rank, true);
+                        if length == k - 1 {
+                            equal_to_k.set(rank, true);
+                        }
                     } else if length == k {
                         equal_to_k.set(rank, true);
                     }
@@ -882,10 +741,10 @@ pub(crate) fn par_build_full_auxiliary_data(
 
     FullAuxiliaryData {
         kmer_count: kmer_count.load(std::sync::atomic::Ordering::Relaxed),
-        bwtk,
+        bwt: bwtk,
         lcp,
         shorter_than_k,
-        equal_to_k,
+        equal_to_k_minus_one_or_k: equal_to_k,
         k_minus_one_ranges,
         k_ranges
     }
@@ -951,29 +810,21 @@ struct DummyMarks {
     /// We keep a dummy (k-1)-mer and all of its predecessors if a k-mer at the beginning of an
     /// input sequence would not have a non-dummy k-mer as a predecessor in the SBWT graph.
     keep_dummy: RawVector,
-    /// Marks (k-1)-mers in order to keep their outedge as it is not guaranteed that the non-dummy
-    /// k-mer that exists as a predecessor to a non-dummy k-mer at the beginning of a sequence has
-    /// the needed label. This is needed as we don't want to include all letters of dummy k-mers
-    /// whose "true" length is less than k-1 and there is no way to figure out which ones are
-    /// those from the [FullAuxiliaryBitVectors::shorter_than_k] bitvector alone.
-    keep_outedge: RawVector,
 }
 
 fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> DummyMarks {
     log::info!("[par_build_dummy_marks] begin");
 
-    let bwt = &aux.bwtk;
+    let bwt = &aux.bwt;
     let scan_start = bwt.counts[1];
     let length = bwt.len();
     let keep_dummy  = AtomicBitmap::new(length);
-    let keep_outedge = AtomicBitmap::new(length);
 
     let scan_length = length - scan_start;
     let thread_region_length = scan_length.div_ceil(threads);
 
     rayon::scope(|s| {
         let keep_dummy  = &keep_dummy;
-        let keep_letter = &keep_outedge;
         for thread_index in 0..threads {
             s.spawn(move |_| {
                 let start = scan_start + thread_index * thread_region_length;
@@ -993,25 +844,26 @@ fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> D
                         predecessor_confirmed = false;
                     }
 
-                    if aux.equal_to_k.bit(index) {
-                        let (predecessor, _) = bwt.inverse_lf_step(index);
-                        if !predecessor_confirmed {
-                            predecessor_confirmed |= has_full_kmer_predecessor(
-                                predecessor, bwt, &aux.k_minus_one_ranges, &aux.shorter_than_k
-                            );
-                        }
+                    if !aux.shorter_than_k.get(index) {
+                        if aux.equal_to_k_minus_one_or_k.bit(index) {
+                            // Equal to k.
+                            let predecessor = bwt.inverse_lf_step(index);
+                            if !predecessor_confirmed {
+                                predecessor_confirmed |= has_full_kmer_predecessor(
+                                    predecessor, bwt, &aux.k_minus_one_ranges, &aux.shorter_than_k
+                                );
+                            }
 
-                        if predecessor_confirmed {
-                            keep_letter.set(predecessor, true);
+                            if !predecessor_confirmed {
+                                keep_predecessors_atomic(predecessor, bwt, k, keep_dummy);
+                            }
                         } else {
-                            keep_predecessors_atomic(predecessor, bwt, k, keep_dummy);
+                            // Longer than k.
+                            predecessor_confirmed = true;
                         }
-                    } else if !aux.shorter_than_k.get(index) {
-                        predecessor_confirmed = true;
                     }
                     index += 1;
                 }
-
             });
         }
     });
@@ -1019,14 +871,10 @@ fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> D
     let keep_dummy = crate::util::bitvec_to_simple_sds_raw_bitvec(
         keep_dummy.into_bitvec_u64()
     );
-    let keep_outedge = crate::util::bitvec_to_simple_sds_raw_bitvec(
-        keep_outedge.into_bitvec_u64()
-    );
 
     log::info!("[par_build_dummy_marks] done");
     DummyMarks {
         keep_dummy,
-        keep_outedge,
     }
 }
 
@@ -1056,7 +904,7 @@ pub(crate) fn has_full_kmer_predecessor(
 fn keep_predecessors_atomic(mut predecessor: usize, bwt: &Bwt, mut k: usize, keep_dummy: &AtomicBitmap) {
     while k > 0 {
         keep_dummy.set(predecessor, true);
-        let (next, _) = bwt.inverse_lf_step(predecessor);
+        let next = bwt.inverse_lf_step(predecessor);
         predecessor = next;
         k -= 1;
     }
