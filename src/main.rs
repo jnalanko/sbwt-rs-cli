@@ -999,7 +999,7 @@ fn check_command(matches: &clap::ArgMatches) {
         }
     }
 
-    let streaming_index = lcs.map(|lcs| {
+    let streaming_index = lcs.as_ref().map(|lcs| {
         index.get_streaming_index(&lcs)
     });
 
@@ -1022,22 +1022,33 @@ fn check_command(matches: &clap::ArgMatches) {
                     let dna_run_len = (pos as isize - prev_non_ACGT_char) as usize;
                     if dna_run_len >= k {
                         // Found in input data -> must be found in the SBWT
-                        assert!(len == k);
-                    }
-                    if len == index.k() {
-                        // Found in the input AND found in the index -> mark as founod
-
+                        assert!(len == k); // is found in the SBWT
                         assert!(colex.len() == 1); // k-mer should have colex range of length 1
 
-                        // Found in input data -> must be 
+                        // Mark as found
                         visited_marks.set(colex.start, true);
                     }
                 }
             } else {
-                todo!();
+                for kmer in seq.windows(k) {
+                    if kmer.iter().all(|&c| is_dna(c)) {
+                        // Found in input data -> must be found in the SBWT
+                        let colex = index.search(kmer).expect(&format!("k-mer {} not found in the SBWT", String::from_utf8_lossy(kmer)));
+                        assert!(colex.len() == 1); // k-mer should have colex range of length 1
+
+                        // Mark as found
+                        visited_marks.set(colex.start, true);
+
+                    }
+                }
             }
         }
+
+        // Check that all the k-mers in the SBWT were in the input sequences
+        assert_eq!(visited_marks.count_ones(), visited_marks.len());
+        log::info!("OK. The SBWT has exactly the same k-mers as the input sequences.");
     }
+
 }
 
 fn into_bit_vectors<SS: SubsetSeq + Send>(sbwt: SbwtIndex<SS>) -> [bitvec::vec::BitVec::<u64, Lsb0>; 4] {
