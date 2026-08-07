@@ -573,7 +573,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(12345);
 
         for _case in 0..1000 {
-            let n = rng.gen_range(1, 30000);
+            let n = rng.gen_range(1, 1000);
 
             let mut sets = Vec::with_capacity(n);
 

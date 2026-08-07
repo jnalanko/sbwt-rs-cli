@@ -291,18 +291,18 @@ impl Pred8vPino {
         if key >= self.u {
             return words;
         }
-
         let range_window_start = key as u64 & !63u64;
         let range_window_end = range_window_start + num_words as u64 * 64;
-
+        
         // Completely outside the represented universe.
         if range_window_end < self.min as u64 || range_window_start > (self.min + self.u) as u64 {
             return words;
         }
-
+        
         // Convert to Pino's local coordinates.
         let local_begin = range_window_start.saturating_sub(self.min as u64);
         let local_end = range_window_end.min((self.u) as u64);
+        dbg!(len, num_words, range_window_start, range_window_end, local_begin, local_end);
 
         let first_bucket = (local_begin >> 8) as usize;
         let last_bucket = (local_end >> 8) as usize;
@@ -662,6 +662,129 @@ mod tests {
             let actual = (words[bit / 64] & (1u64 << (bit % 64))) != 0;
 
             assert_eq!(actual, expected, "value {}", value);
+        }
+    }
+
+    #[test]
+    fn test_window256_random_against_reference() {
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+
+        for _case in 0..200 {
+            let mut values: Vec<u64> = (0..300).map(|_| rng.gen_range(0, 5000)).collect();
+            values.sort();
+            values.dedup();
+
+            if values.is_empty() {
+                continue;
+            }
+
+            let pino = Pred8vPino::from_sorted(&values);
+
+            for _ in 0..100 {
+                let key = rng.gen_range(0, 5200);
+
+                let words = pino.window256_starting_from_key_word_aligned(key);
+
+                let window_start = key & !63;
+
+                for bit in 0..256 {
+                    let value = window_start + bit;
+
+                    let expected = values.contains(&(value as u64));
+
+                    let actual = (words[bit / 64] & (1u64 << (bit % 64))) != 0;
+
+                    assert_eq!(actual, expected, "key={}, value={}", key, value);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_words_in_range_random_against_reference() {
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(2);
+
+        for _case in 0..200 {
+            let mut values: Vec<u64> = (0..300).map(|_| rng.gen_range(0,5000)).collect();
+            values.sort();
+            values.dedup();
+
+            if values.is_empty() {
+                continue;
+            }
+
+            let pino = Pred8vPino::from_sorted(&values);
+
+            for _ in 0..100 {
+                let start = rng.gen_range(0, 5000);
+                let len = rng.gen_range(1, 300);
+
+                let range = start..start + len;
+
+                let words = pino.get_words_in_range(range.clone());
+
+                let window_start = start & !63;
+
+                for value in window_start..window_start + words.len() * 64 {
+                    let expected = value >= range.start
+                        && value < range.end
+                        && values.contains(&(value as u64));
+
+                    let bit = value - window_start;
+
+                    let actual = (words[bit / 64] & (1u64 << (bit % 64))) != 0;
+
+                    assert_eq!(actual, expected, "range={:?}, value={}", range, value);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_fill_bucket_window_all_buckets() {
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+
+        for _case in 0..100 {
+            let mut values: Vec<u64> = (0..500).map(|_| rng.gen_range(0,20000)).collect();
+            values.sort();
+            values.dedup();
+
+            if values.is_empty() {
+                continue;
+            }
+
+            let pino = Pred8vPino::from_sorted(&values);
+
+            for bucket in 0..pino.nblocks {
+                let mut words = [0u64; 4];
+
+                let local_begin = bucket * 256;
+                let local_end = ((bucket + 1) * 256).min(pino.u + 1);
+
+                pino.fill_bucket_window(
+                    bucket,
+                    local_begin,
+                    local_end,
+                    pino.min + local_begin,
+                    &mut words,
+                );
+
+                for bit in 0..256 {
+                    let global = pino.min + local_begin + bit;
+
+                    let expected = values.binary_search(&(global as u64)).is_ok();
+
+                    let actual = (words[bit / 64] & (1u64 << (bit % 64))) != 0;
+
+                    assert_eq!(actual, expected, "bucket={}, value={}", bucket, global);
+                }
+            }
         }
     }
 }
