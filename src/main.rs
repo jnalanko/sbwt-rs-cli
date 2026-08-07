@@ -1649,6 +1649,9 @@ fn main() {
                 .requires("original-sequences")
                 .action(clap::ArgAction::SetTrue)
             )
+            .group(clap::ArgGroup::new("at-least-one-of-these").required(true).multiple(true)
+                .args(["invariant", "original-sequences"]))
+
         )
         .subcommand(clap::Command::new("sort-kmers-to-disk")
             .about("Sort and deduplicate the reverse k-mers of the input sequences into a file on disk. Prints the path to the resulting k-mers file (and, if --add-all-dummy-paths is given, the first-mers file) to stdout. The files are not deleted, and can be later given to build-from-kmers-on-disk.")
