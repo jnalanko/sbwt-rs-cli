@@ -1,4 +1,4 @@
-use crate::{LcsArray, PrefixLookupTable, SbwtIndex, SubsetCorrectionSets, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector};
+use crate::{LcsArray, PrefixLookupTable, SbwtIndex, StreamingIndex, SubsetCorrectionSets, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector};
 
 
 /// An enum listing SbwtIndex types built on different subset rank implementations provided in this crate. 
@@ -145,4 +145,20 @@ impl SbwtIndexVariant {
             Err("Unknown SBWT index type".into())
         }
     }
+
+    pub fn get_streaming_index<'a>(&'a self, lcs: &'a LcsArray) -> StreamingIndex<'a, Self, LcsArray> {
+        StreamingIndex{contract_left: lcs, extend_right: self, n: self.n_sets(), k: self.k()}
+    }
 }
+
+/// This implementation makes it possible to build a streaming index over the SbwtIndexVariant
+/// without having to know the type of the underlying index. The downside is that there will be a
+/// branch in every right extension call to resolve the type every time. It is a predictable branch,
+/// but for best performance, use the inner index type directly as the right extension implementation.
+impl crate::streaming_index::ExtendRight for SbwtIndexVariant {
+    fn extend_right(&self, I: std::ops::Range<usize>, c: u8) -> std::ops::Range<usize> {
+        forward!(&self, extend_right(I, c)) // The match statement happens here
+    }
+}
+
+//pub fn set_lookup_table(&mut self, prefix_lookup_table: PrefixLookupTable) { forward!(self, set_lookup_table(prefix_lookup_table)) }

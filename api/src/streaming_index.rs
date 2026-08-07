@@ -38,6 +38,7 @@ pub struct StreamingIndex<'a, E: ExtendRight, C: ContractLeft> {
     pub k: usize, // Maximum length of a match
 }
 
+
 impl<'a, SS: SubsetSeq> StreamingIndex<'a, SbwtIndex<SS>, LcsArray> {
 
     /// Create a new streaming index using an SBWT index for right extensions
@@ -54,7 +55,6 @@ impl<'a, SS: SubsetSeq> StreamingIndex<'a, SbwtIndex<SS>, LcsArray> {
         self.n
     }
 }
-
 /// An array that stores the lengths of the longest common suffixes of consecutive k-mers in 
 /// colexicographic order. 
 #[derive(Clone, Eq, PartialEq, Debug)]

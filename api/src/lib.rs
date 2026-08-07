@@ -161,8 +161,11 @@ mod atomic_bitmap;
 
 pub use unitig_flipper::Orientation;
 pub use util::reverse_complement_in_place;
+pub use util::is_dna;
 pub use util::VecSeqStream;
 pub use util::SliceSeqStream;
+pub use util::FastXReader;
+pub use util::SeqStreamWithPossiblyRevComp;
 
 /// A stream of ASCII-encoded DNA-sequences. This is not necessarily a standard Rust iterator
 /// because we want to support streaming sequences from disk, which is not possible

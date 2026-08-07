@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use bitvec::prelude::*;
 use jseqio::reader::DynamicFastXReader;
+use jseqio::reader::SeqStreamWithRevComp;
 use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
 use sbwt::*;
@@ -970,26 +971,72 @@ fn kmer_at_rank_command(matches: &clap::ArgMatches) {
 fn check_command(matches: &clap::ArgMatches) {
     let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let invariant_check = matches.get_flag("invariant");
+    let original_sequences = matches.get_one::<std::path::PathBuf>("original_sequences");
+    let add_revcomp = matches.get_flag("add-revcomp");
 
     log::info!("Loading index from {:?}", index_path);
     let index = load_index(index_path, cpp_format);
+    let lcs = load_lcs_if_exists(&default_lcs_path(index_path), &format!("LCS file not found at {} -> running without it", default_lcs_path(index_path).display()));
 
     let n = index.n_sets();
     let sigma = index.alphabet().len();
     log::info!("Index loaded: {} sets, {} k-mers, k={}, sigma={}", n, index.n_kmers(), index.k(), sigma);
 
-    log::info!("Checking SBWT structural invariant: sum_c rank(c, n_sets) + 1 == n_sets");
-    let in_edges: usize = (0..sigma).map(|c| index.rank(c as u8, n)).sum();
-    if in_edges + 1 == n {
-        log::info!("OK: {} in-edge(s) + root == {} sets", in_edges, n);
-        println!("PASS");
-    } else {
-        log::error!(
-            "FAIL: invariant violated: {} in-edge(s) + root != {} sets; {} node(s) have no in-coming edge",
-            in_edges, n, n - 1 - in_edges
-        );
-        println!("FAIL");
-        std::process::exit(1);
+    if invariant_check {
+        log::info!("Checking SBWT structural invariant: sum_c rank(c, n_sets) + 1 == n_sets");
+        let in_edges: usize = (0..sigma).map(|c| index.rank(c as u8, n)).sum();
+        if in_edges + 1 == n {
+            log::info!("OK: {} in-edge(s) + root == {} sets", in_edges, n);
+            println!("PASS");
+        } else {
+            log::error!(
+                "FAIL: invariant violated: {} in-edge(s) + root != {} sets; {} node(s) have no in-coming edge",
+                in_edges, n, n - 1 - in_edges
+            );
+            println!("FAIL");
+            std::process::exit(1);
+        }
+    }
+
+    let streaming_index = lcs.map(|lcs| {
+        index.get_streaming_index(&lcs)
+    });
+
+    if let Some(original_sequences) = original_sequences {
+        // Open reader early to fail early if there is a problem
+        let reader = sbwt::FastXReader::new(original_sequences).unwrap();
+        let mut reader = sbwt::SeqStreamWithPossiblyRevComp::new(reader, add_revcomp);
+
+        log::info!("Marking dummy nodes");
+        let mut visited_marks = index.compute_dummy_node_marks();
+        log::info!("Searching all sequences in {}", original_sequences.display());
+        let k = index.k();
+        while let Some(seq) = reader.stream_next() {
+            if let Some(streaming_index) = &streaming_index {
+                let mut prev_non_ACGT_char = -1_isize;
+                for (pos, (len, colex)) in streaming_index.matching_statistics_iter(seq).enumerate() {
+                    if !sbwt::is_dna(seq[pos]) {
+                        prev_non_ACGT_char = pos as isize;
+                    }
+                    let dna_run_len = (pos as isize - prev_non_ACGT_char) as usize;
+                    if dna_run_len >= k {
+                        // Found in input data -> must be found in the SBWT
+                        assert!(len == k);
+                    }
+                    if len == index.k() {
+                        // Found in the input AND found in the index -> mark as founod
+
+                        assert!(colex.len() == 1); // k-mer should have colex range of length 1
+
+                        // Found in input data -> must be 
+                        visited_marks.set(colex.start, true);
+                    }
+                }
+            } else {
+                todo!();
+            }
+        }
     }
 }
 
@@ -1555,7 +1602,7 @@ fn main() {
             )
         )
         .subcommand(clap::Command::new("check")
-            .about("Verify the SBWT structural invariant (sum_c rank(c, n_sets) + 1 == n_sets). Exits with code 1 if the index is corrupt.")
+            .about("Verify index correctness")
             .arg_required_else_help(true)
             .arg(clap::Arg::new("index")
                 .short('i')
@@ -1566,6 +1613,19 @@ fn main() {
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
                 .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("invariant")
+                .help("Verify the SBWT structural invariant (sum_c rank(c, n_sets) + 1 == n_sets). Exits with code 1 if the index is corrupt.")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("original-sequences")
+                .help("Searches all sequences in the given fasta/fastq file and check that the index contains exactly those k-mers. Remember to pass --add-revcomp if the index was built with that option.")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("add-revcomp")
+                .help("Add reverse complements of the input sequences to the check.")
+                .requires("original-sequences")
                 .action(clap::ArgAction::SetTrue)
             )
         )
