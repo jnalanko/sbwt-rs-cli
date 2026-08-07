@@ -7,42 +7,7 @@ use crate::tempfile::TempFileManager;
 use crate::{subsetseq::SubsetMatrix, SeqStream};
 use crate::sbwt::{PrefixLookupTable, SbwtIndex};
 use crate::streaming_index::LcsArray;
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-struct SeqStreamWithPossiblyRevComp<SS: SeqStream + Send>{
-    inner: SS, 
-    rc_buf: Vec<u8>,
-    parity: bool, // Every other sequence we return is a reverse complement of the previous. Initialize to false.
-    enable_rev_comp: bool,
-}
-
-impl<SS: SeqStream + Send> crate::SeqStream for SeqStreamWithPossiblyRevComp<SS>{
-    fn stream_next(&mut self) -> Option<&[u8]> {
-        if !self.enable_rev_comp {
-            return self.inner.stream_next();
-        }
-
-        self.parity = !self.parity;
-        if self.parity {
-            #[allow(clippy::question_mark)] // More space to write comments on the cases
-            let new = match self.inner.stream_next() {
-                None => return None, // End of stream
-                Some(r) => r // Will return this at the end of the function
-            };
-
-            // Store the sequence to rc_buf for the next call
-            self.rc_buf.clear();
-            self.rc_buf.extend(new);
-
-            Some(new)
-
-        } else {
-            jseqio::reverse_complement_in_place(&mut self.rc_buf);
-            Some(&self.rc_buf)
-        }
-    }
-}
-
+use crate::util::SeqStreamWithPossiblyRevComp;
 /// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BitPackedKmerSortingDisk<SS: SeqStream + Send> {
@@ -143,7 +108,7 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
     /// Panics if k > 256.
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
-        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
+        let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let (mut sbwt, lcs) = match self.k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
@@ -303,7 +268,7 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
     ///
     /// Panics if k > 256.
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
+        let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let (mut sbwt, lcs) = match self.k {
             0..=32 => {
                 crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
@@ -476,7 +441,7 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
     /// The input sequences are first read into a single concatenation in memory, separated by
     /// the `$` character and preceded by the sentinel `#`.
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
+        let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
         let mut concatenation = Vec::<u8>::new();
@@ -621,7 +586,7 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
     /// concatenation are then built with `libsais`, from which the BWT and LCP that
     /// [crate::alternative_construction::build_from_input] expects are derived.
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
-        let input = SeqStreamWithPossiblyRevComp{ inner: self.input, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp: self.add_rev_comp };
+        let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
         let mut concatenation = Vec::<u8>::new();

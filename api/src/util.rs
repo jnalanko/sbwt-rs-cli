@@ -48,7 +48,7 @@ const IS_DNA: [bool; 256] = {
     table
 };
 
-pub(crate) fn is_dna(c: u8) -> bool {
+pub fn is_dna(c: u8) -> bool {
     IS_DNA[c as usize]
 }
 
@@ -102,6 +102,13 @@ pub fn reverse_complement_in_place(seq: &mut [u8]){
 #[allow(dead_code)]
 pub struct FastXReader{
     pub(crate) inner: jseqio::reader::DynamicFastXReader
+}
+
+impl FastXReader{
+    #[allow(dead_code)] // Is used from outside the crate
+    pub fn new(filepath: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self{inner: jseqio::reader::DynamicFastXReader::from_file(&filepath)?})
+    } 
 }
 
 impl crate::SeqStream for FastXReader{
@@ -620,4 +627,46 @@ pub fn for_each_run_with_key<T: Eq, KeyType: Eq, F1: Fn(&T) -> KeyType, F2: FnMu
     }
     // Final run
     callback(run_start..n);
+}
+
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct SeqStreamWithPossiblyRevComp<SS: crate::SeqStream + Send>{
+    inner: SS, 
+    rc_buf: Vec<u8>,
+    parity: bool, // Every other sequence we return is a reverse complement of the previous. Initialize to false.
+    enable_rev_comp: bool,
+}
+
+impl<SS: crate::SeqStream + Send> SeqStreamWithPossiblyRevComp<SS> {
+    pub fn new(inner: SS, enable_rev_comp: bool) -> Self {
+        Self { inner, rc_buf: Vec::<u8>::new(), parity: false, enable_rev_comp }
+    }
+}
+
+impl<SS: crate::SeqStream + Send> crate::SeqStream for SeqStreamWithPossiblyRevComp<SS>{
+    fn stream_next(&mut self) -> Option<&[u8]> {
+        if !self.enable_rev_comp {
+            return self.inner.stream_next();
+        }
+
+        self.parity = !self.parity;
+        if self.parity {
+            #[allow(clippy::question_mark)] // More space to write comments on the cases
+            let new = match self.inner.stream_next() {
+                None => return None, // End of stream
+                Some(r) => r // Will return this at the end of the function
+            };
+
+            // Store the sequence to rc_buf for the next call
+            self.rc_buf.clear();
+            self.rc_buf.extend(new);
+
+            Some(new)
+
+        } else {
+            jseqio::reverse_complement_in_place(&mut self.rc_buf);
+            Some(&self.rc_buf)
+        }
+    }
 }
