@@ -1050,7 +1050,7 @@ fn check_command(matches: &clap::ArgMatches) {
             log::info!("SBWT has a k-mer that was not in the input sequences. Fetching the k-mer...");
             index.build_select();
             let kmer = index.access_kmer(visited_marks.first_zero().unwrap());
-            panic!("SBWT has k-mer {}, which is not in the input sequences", String::from_utf8_lossy(&kmer));
+            panic!("SBWT has k-mer {}, which is not in the input sequences.", String::from_utf8_lossy(&kmer));
         }
         log::info!("OK. The SBWT has exactly the same k-mers as the input sequences.");
     }
