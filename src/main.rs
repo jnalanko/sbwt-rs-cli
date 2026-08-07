@@ -972,11 +972,11 @@ fn check_command(matches: &clap::ArgMatches) {
     let index_path = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
     let invariant_check = matches.get_flag("invariant");
-    let original_sequences = matches.get_one::<std::path::PathBuf>("original_sequences");
+    let original_sequences = matches.get_one::<std::path::PathBuf>("original-sequences");
     let add_revcomp = matches.get_flag("add-revcomp");
 
     log::info!("Loading index from {:?}", index_path);
-    let index = load_index(index_path, cpp_format);
+    let mut index = load_index(index_path, cpp_format);
     let lcs = load_lcs_if_exists(&default_lcs_path(index_path), &format!("LCS file not found at {} -> running without it", default_lcs_path(index_path).display()));
 
     let n = index.n_sets();
@@ -1045,7 +1045,13 @@ fn check_command(matches: &clap::ArgMatches) {
         }
 
         // Check that all the k-mers in the SBWT were in the input sequences
-        assert_eq!(visited_marks.count_ones(), visited_marks.len());
+
+        if visited_marks.count_ones() != visited_marks.len() {
+            log::info!("SBWT has a k-mer that was not in the input sequences. Fetching the k-mer...");
+            index.build_select();
+            let kmer = index.access_kmer(visited_marks.first_zero().unwrap());
+            panic!("SBWT has k-mer {}, which is not in the input sequences", String::from_utf8_lossy(&kmer));
+        }
         log::info!("OK. The SBWT has exactly the same k-mers as the input sequences.");
     }
 
