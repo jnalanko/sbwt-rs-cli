@@ -304,93 +304,10 @@ impl std::fmt::Display for SubsetMatrix {
         Ok(())
     }
 }
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub struct SubsetCorrectionSets {
-    // TODO
-}
-
-// TODO
-impl SubsetSeq for SubsetCorrectionSets {
-    fn new(subset_seq: Vec<Vec<u8>>, sigma: usize) -> Self {
-        todo!()
-    }
-
-    fn new_from_bit_vectors(vecs: Vec<bitvec::vec::BitVec<u64, Lsb0>>) -> Self {
-        todo!()
-    }
-
-    fn len(&self) -> usize {
-        todo!()
-    }
-
-    fn build_rank(&mut self) {
-        todo!()
-    }
-
-    fn build_select(&mut self) {
-        todo!()
-    }
-
-    fn has_select_support(&self) -> bool {
-        todo!()
-    }
-
-    fn has_rank_support(&self) -> bool {
-        todo!()
-    }
-
-    fn rank(&self, c: u8, i: usize) -> usize {
-        todo!()
-    }
-
-    fn select(&self, c: u8, i: usize) -> Option<usize> {
-        todo!()
-    }
-
-    fn append_set_to_buf(&self, i: usize, buf: &mut Vec<u8>) {
-        todo!()
-    }
-
-    fn subset_size(&self, i: usize) -> usize {
-        todo!()
-    }
-
-    fn set_contains(&self, set_idx: usize, character: u8) -> bool {
-        todo!()
-    }
-
-    fn next_set_with_char(&self, set_idx: usize, c: u8) -> Option<usize> {
-        todo!()
-    }
-
-    fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
-        todo!()
-    }
-
-    fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self>
-    where
-        Self: Sized,
-    {
-        todo!()
-    }
-
-    fn call_on_char_occurrences<F: FnMut(usize)>(&self, range: Range<usize>, c: u8, callback: F) {
-        todo!()
-    }
-
-    fn push_labels_forward(
-        &self,
-        labels: &[u8],
-        sbwt_input_range: std::ops::Range<usize>,
-        output_ranges: Vec<&mut [u8]>,
-    ) {
-        todo!()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::SubsetCorrectionSets;
+
     use super::*;
 
     #[test]
@@ -433,5 +350,397 @@ mod tests {
         assert_eq!(sm.next_set_with_char(3, 4), None);
 
         assert_eq!(sm.next_set_with_char(5, 0), None); // One past the end
+    }
+
+    /* fn test_access_generic<SS: SubsetSeq>(ss: SS) {
+        assert_eq!(ss.access(0), vec![1, 2, 3]);
+    }
+
+    fn get_example<SS: SubsetSeq>() -> SS {
+        let sets: Vec<Vec<u8>> = vec![
+            vec![1, 2, 3],
+            vec![0, 2],
+            vec![0, 1, 2, 3],
+            vec![],
+            vec![0, 1, 2],
+        ];
+        let ss = SS::new(sets, 4);
+        ss
+    } */
+
+    // unit tests for each function
+    /* #[test]
+       fn test_access() {
+           test_access_generic(get_example::<SubsetMatrix>());
+           test_access_generic(get_example::<SubsetCorrectionSets>());
+       }
+    */
+    fn get_example<SS: SubsetSeq>() -> SS {
+        let sets = vec![
+            vec![1, 2, 3],
+            vec![0, 2],
+            vec![0, 1, 2, 3],
+            vec![],
+            vec![0, 1, 2],
+        ];
+
+        SS::new(sets, 4)
+    }
+
+    fn test_access_generic<SS: SubsetSeq>() {
+        let expected = vec![
+            vec![1, 2, 3],
+            vec![0, 2],
+            vec![0, 1, 2, 3],
+            vec![],
+            vec![0, 1, 2],
+        ];
+
+        let ss = get_example::<SS>();
+
+        for (i, set) in expected.iter().enumerate() {
+            assert_eq!(ss.access(i), *set);
+        }
+    }
+
+    fn test_subset_size_generic<SS: SubsetSeq>() {
+        let ss = get_example::<SS>();
+
+        let expected = [3, 2, 4, 0, 3];
+
+        for (i, &sz) in expected.iter().enumerate() {
+            assert_eq!(ss.subset_size(i), sz);
+        }
+    }
+
+    fn test_set_contains_generic<SS: SubsetSeq>() {
+        let ss = get_example::<SS>();
+
+        for i in 0..ss.len() {
+            let set = ss.access(i);
+
+            for c in 0..4 {
+                assert_eq!(ss.set_contains(i, c), set.contains(&(c as u8)));
+            }
+        }
+    }
+
+    fn test_rank_generic<SS: SubsetSeq>() {
+        let mut ss = get_example::<SS>();
+        ss.build_rank();
+
+        for c in 0..4 {
+            for i in 0..=ss.len() {
+                let expected = (0..i)
+                    .filter(|&j| ss.access(j).contains(&(c as u8)))
+                    .count();
+
+                assert_eq!(ss.rank(c as u8, i), expected, "char={}, i={}", c, i);
+            }
+        }
+    }
+
+    fn test_select_generic<SS: SubsetSeq>() {
+        let mut ss = get_example::<SS>();
+        ss.build_select();
+
+        for c in 0..4 {
+            let occs: Vec<_> = (0..ss.len()).filter(|&i| ss.set_contains(i, c)).collect();
+
+            for (k, &expected) in occs.iter().enumerate() {
+                assert_eq!(ss.select(c, k), Some(expected));
+            }
+
+            assert_eq!(ss.select(c, occs.len()), None);
+        }
+    }
+
+    fn test_next_set_with_char_generic<SS: SubsetSeq>() {
+        let ss = get_example::<SS>();
+
+        for c in 0..4 {
+            for start in 0..=ss.len() {
+                let expected = (start..ss.len()).find(|&i| ss.set_contains(i, c));
+
+                assert_eq!(ss.next_set_with_char(start, c), expected);
+            }
+        }
+    }
+
+    fn test_call_on_occurrences_generic<SS: SubsetSeq>() {
+        let ss = get_example::<SS>();
+
+        for c in 0..4 {
+            let mut got = Vec::new();
+
+            ss.call_on_char_occurrences(1..4, c, |i| got.push(i));
+
+            let expected: Vec<_> = (1..4).filter(|&i| ss.set_contains(i, c)).collect();
+
+            assert_eq!(got, expected);
+        }
+    }
+
+    fn test_serialize_generic<SS>()
+    where
+        SS: SubsetSeq + Eq + std::fmt::Debug,
+    {
+        let mut ss = get_example::<SS>();
+        ss.build_rank();
+        ss.build_select();
+
+        let mut bytes = Vec::new();
+
+        ss.serialize(&mut bytes).unwrap();
+
+        let loaded = SS::load(&mut bytes.as_slice()).unwrap();
+
+        assert_eq!(ss, loaded);
+    }
+
+    fn test_rank_select_consistency<SS: SubsetSeq>() {
+        let mut ss = get_example::<SS>();
+        ss.build_rank();
+        ss.build_select();
+
+        for c in 0..4 {
+            let occs: Vec<_> = (0..ss.len()).filter(|&i| ss.set_contains(i, c)).collect();
+
+            for (k, &pos) in occs.iter().enumerate() {
+                assert_eq!(ss.select(c, k), Some(pos));
+                assert_eq!(ss.rank(c, pos), k);
+                assert_eq!(ss.rank(c, pos + 1), k + 1);
+                assert!(ss.set_contains(pos, c));
+            }
+        }
+    }
+
+    fn test_access_consistency<SS: SubsetSeq>() {
+        let ss = get_example::<SS>();
+
+        for i in 0..ss.len() {
+            let access = ss.access(i);
+
+            assert_eq!(access.len(), ss.subset_size(i));
+
+            for c in 0..4 {
+                assert_eq!(access.contains(&(c as u8)), ss.set_contains(i, c));
+            }
+        }
+    }
+
+    fn run_subset_seq_tests<SS>()
+    where
+        SS: SubsetSeq + Eq + std::fmt::Debug,
+    {
+        test_access_generic::<SS>();
+        test_subset_size_generic::<SS>();
+        test_set_contains_generic::<SS>();
+        test_rank_generic::<SS>();
+        test_select_generic::<SS>();
+        test_next_set_with_char_generic::<SS>();
+        test_call_on_occurrences_generic::<SS>();
+        test_serialize_generic::<SS>();
+        test_rank_select_consistency::<SS>();
+        test_access_consistency::<SS>();
+    }
+
+    #[test]
+    fn subset_matrix_generic_tests() {
+        run_subset_seq_tests::<SubsetMatrix>();
+    }
+
+    #[test]
+    fn subset_correction_sets_generic_tests() {
+        run_subset_seq_tests::<SubsetCorrectionSets>();
+    }
+
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    fn build_or_dump(sets: Vec<Vec<u8>>) -> SubsetCorrectionSets {
+        match std::panic::catch_unwind(|| SubsetCorrectionSets::new(sets.clone(), 4)) {
+            Ok(ss) => ss,
+            Err(e) => {
+                eprintln!("Failing input:");
+                eprintln!("{:#?}", sets.len());
+                std::panic::resume_unwind(e);
+            }
+        }
+    }
+
+    #[test]
+    fn differential_random() {
+        let mut rng = StdRng::seed_from_u64(12345);
+
+        for _case in 0..1000 {
+            let n = rng.gen_range(1, 30000);
+
+            let mut sets = Vec::with_capacity(n);
+
+            for _ in 0..n {
+                let mut set = Vec::new();
+                for c in 0..4 {
+                    if rng.gen_bool(0.5) {
+                        set.push(c);
+                    }
+                }
+                sets.push(set);
+            }
+
+            let mut matrix = SubsetMatrix::new(sets.clone(), 4);
+            matrix.build_rank();
+            matrix.build_select();
+
+            let corr = build_or_dump(sets.clone());
+
+            assert_eq!(matrix.len(), corr.len());
+            // access / subset_size
+            // dbg!("Access/subset size");
+            for i in 0..matrix.len() {
+                assert_eq!(matrix.access(i), corr.access(i));
+                assert_eq!(matrix.subset_size(i), corr.subset_size(i));
+
+                for c in 0..4 {
+                    assert_eq!(
+                        matrix.set_contains(i, c),
+                        corr.set_contains(i, c),
+                        "set_contains({}, {})",
+                        i,
+                        c
+                    );
+                }
+            }
+            // rank
+            //dbg!("Rank");
+            for c in 0..4 {
+                for i in 0..=matrix.len() {
+                    assert_eq!(matrix.rank(c, i), corr.rank(c, i), "rank({}, {})", c, i);
+                }
+            }
+            // select
+            //dbg!("Select");
+            for c in 0..4 {
+                let occs = matrix.rank(c, matrix.len());
+                for k in 0..=occs {
+                    assert_eq!(
+                        matrix.select(c, k),
+                        corr.select(c, k),
+                        "select({}, {})",
+                        c,
+                        k
+                    );
+                }
+            }
+
+            // next_set_with_char
+            //dbg!("next_set_with_char");
+            for c in 0..4 {
+                for start in 0..=matrix.len() {
+                    assert_eq!(
+                        matrix.next_set_with_char(start, c),
+                        corr.next_set_with_char(start, c),
+                        "next({}, {})",
+                        start,
+                        c
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn differential_call_on_occurrences() {
+        let mut rng = StdRng::seed_from_u64(999);
+
+        for _ in 0..500 {
+            let n = rng.gen_range(1, 300);
+
+            let mut sets = Vec::new();
+
+            for _ in 0..n {
+                let mut set = Vec::new();
+                for c in 0..4 {
+                    if rng.gen_bool(0.5) {
+                        set.push(c);
+                    }
+                }
+                sets.push(set);
+            }
+
+            let matrix = SubsetMatrix::new(sets.clone(), 4);
+            let corr = build_or_dump(sets);
+
+            for _ in 0..50 {
+                let a = rng.gen_range(0, n);
+                let b = rng.gen_range(a, n);
+
+                for c in 0..4 {
+                    let mut v1 = Vec::new();
+                    matrix.call_on_char_occurrences(a..b, c, |i| v1.push(i));
+
+                    let mut v2 = Vec::new();
+                    corr.call_on_char_occurrences(a..b, c, |i| v2.push(i));
+
+                    assert_eq!(v1, v2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn differential_push_labels_forward() {
+        let mut rng = StdRng::seed_from_u64(7);
+
+        for _ in 0..500 {
+            let n = rng.gen_range(1, 300);
+
+            let mut sets = Vec::new();
+
+            for _ in 0..n {
+                let mut set = Vec::new();
+                for c in 0..4 {
+                    if rng.gen_bool(0.5) {
+                        set.push(c);
+                    }
+                }
+                sets.push(set);
+            }
+
+            let matrix = SubsetMatrix::new(sets.clone(), 4);
+            let corr = build_or_dump(sets.clone());
+            let labels: Vec<u8> = (0..n).map(|_| rng.gen()).collect();
+
+            let a = rng.gen_range(0, n);
+            let b = rng.gen_range(a, n);
+
+            let range = a..b;
+
+            let mut out1 = vec![Vec::<u8>::new(); 4];
+            let mut out2 = vec![Vec::<u8>::new(); 4];
+
+            for c in 0..4 {
+                let count = (range.clone())
+                    .filter(|&i| matrix.set_contains(i, c as u8))
+                    .count();
+
+                out1[c].resize(count, 0);
+                out2[c].resize(count, 0);
+            }
+
+            matrix.push_labels_forward(
+                &labels[range.clone()],
+                range.clone(),
+                out1.iter_mut().map(Vec::as_mut_slice).collect(),
+            );
+
+            corr.push_labels_forward(
+                &labels[range.clone()],
+                range.clone(),
+                out2.iter_mut().map(Vec::as_mut_slice).collect(),
+            );
+
+            assert_eq!(out1, out2);
+        }
     }
 }
