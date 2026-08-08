@@ -37,7 +37,7 @@ pub(super) fn build_index<SS: SubsetSeq>(new_rows: Vec<bitvec::vec::BitVec<u64, 
     let mut subsetseq = SS::new_from_bit_vectors(new_rows);
     subsetseq.build_rank();
     let n_sets = subsetseq.len();
-    let mut index = SbwtIndex::<SS>::from_components(
+    let mut index = SbwtIndex::<SS>::from_parts(
         subsetseq, n_kmers, k, C,
         PrefixLookupTable::new_empty(n_sets));
 

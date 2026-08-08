@@ -1057,20 +1057,6 @@ fn check_command(matches: &clap::ArgMatches) {
 
 }
 
-fn into_bit_vectors<SS: SubsetSeq + Send>(sbwt: SbwtIndex<SS>) -> [bitvec::vec::BitVec::<u64, Lsb0>; 4] {
-    log::info!("Extracting row bit vectors");
-    const ALPHABET_SIZE: usize = 4;
-    let rows = (0..ALPHABET_SIZE).map(|c| {
-        let mut row = bitvec![u64, Lsb0; 0; sbwt.n_sets()];
-        sbwt.sbwt().call_on_char_occurrences(0..sbwt.n_sets(), c as u8, |i| {
-            row.set(i, true);
-        });
-        row
-    }).collect::<Vec::<bitvec::vec::BitVec::<u64, Lsb0>>>();
-
-    rows.try_into().unwrap() // Should have exactly four rows 
-}
-
 fn transform_index_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
@@ -1094,16 +1080,18 @@ fn transform_index_command(matches: &clap::ArgMatches) {
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "bit_matrix") => {
             log::info!("Transform bit matrix -> correction sets");
-            let (n_kmers, k, p) = (sbwt.n_kmers(), sbwt.k(), sbwt.get_lookup_table().prefix_length);
-            let rows: Vec<BitVec<u64, Lsb0>> = into_bit_vectors(sbwt).into();
+            let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
+            let p = prefix_lookup_table.prefix_length;
+            let rows: Vec<BitVec<u64, Lsb0>> = sbwt_subsetseq.into_bitvectors();
             let ss_new = SubsetMatrix::new_from_bit_vectors(rows);
             let index_new = SbwtIndex::<SubsetMatrix>::from_subset_seq(ss_new, n_kmers, k, p);
             SbwtIndexVariant::SubsetMatrix(index_new)
         },
         (SbwtIndexVariant::SubsetMatrix(sbwt), "correction_sets") => {
             log::info!("Transform bit matrix -> correction sets");
-            let (n_kmers, k, p) = (sbwt.n_kmers(), sbwt.k(), sbwt.get_lookup_table().prefix_length);
-            let rows: Vec<BitVec<u64, Lsb0>> = into_bit_vectors(sbwt).into();
+            let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
+            let p = prefix_lookup_table.prefix_length;
+            let rows: Vec<BitVec<u64, Lsb0>> = sbwt_subsetseq.into_bitvectors();
             let ss_new = SubsetCorrectionSets::new_from_bit_vectors(rows);
             let index_new = SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p);
             SbwtIndexVariant::SubsetCorrectionSets(index_new)
