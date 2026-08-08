@@ -215,7 +215,7 @@ pub fn load_from_cpp_plain_matrix_format<R: std::io::Read>(input: &mut R) -> std
 
         let prefix_lut = PrefixLookupTable{ranges, prefix_length: precalc_k};
 
-        Ok(SbwtIndex::from_components(subset_rank, n_kmers, k, C_array, prefix_lut))
+        Ok(SbwtIndex::from_parts(subset_rank, n_kmers, k, C_array, prefix_lut))
 
     } else {
         Err(std::io::ErrorKind::InvalidData.into())
@@ -520,8 +520,13 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
     /// Internal function: construct from parts.
     #[allow(non_snake_case)]
-    pub(crate) fn from_components(subset_rank: SS, n_kmers: usize, k: usize, C: Vec<usize>, prefix_lookup_table: PrefixLookupTable) -> Self {
+    pub fn from_parts(subset_rank: SS, n_kmers: usize, k: usize, C: Vec<usize>, prefix_lookup_table: PrefixLookupTable) -> Self {
         Self {sbwt: subset_rank, n_kmers, k, C, prefix_lookup_table}
+    }
+
+    // Returns the subset rank structure, the number of k-mers, k, the C-array and the prefix lookup table
+    pub fn into_parts(self) -> (SS, usize, usize, Vec<usize>, PrefixLookupTable) {
+        (self.sbwt, self.n_kmers, self.k, self.C, self.prefix_lookup_table)
     }
 
     /// Construct from existing [`crate::subsetseq::SubsetSeq`].

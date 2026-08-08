@@ -385,7 +385,7 @@ pub(crate) fn collect_output<SS: SubsetSeq + Send>(
     subset_rank.build_rank();
     let n_sets  = subset_rank.len();
     let n_kmers = kmer_count;
-    let mut index = SbwtIndex::<SS>::from_components(
+    let mut index = SbwtIndex::<SS>::from_parts(
         subset_rank,
         n_kmers,
         k,

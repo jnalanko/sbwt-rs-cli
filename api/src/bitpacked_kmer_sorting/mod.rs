@@ -84,7 +84,7 @@ pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, 
     let mut subsetseq = SS::new_from_bit_vectors(rawrows);
     subsetseq.build_rank();
     let n_sets = subsetseq.len();
-    let (mut index, lcs) = (SbwtIndex::<SS>::from_components(
+    let (mut index, lcs) = (SbwtIndex::<SS>::from_parts(
         subsetseq,
         n_kmers,
         k,
