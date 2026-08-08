@@ -1197,9 +1197,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "simple-sds-sbwt"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96130dd24b2dcbbb34bf77927c920b7e6e51df0bb03b592ab19b753fa7c4930b"
+checksum = "2e425e8db69ebd48cc773db971e483699d04dcaf2a5faab3427ef4acc064888d"
 dependencies = [
  "libc",
 ]

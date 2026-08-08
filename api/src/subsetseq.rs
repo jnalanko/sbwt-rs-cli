@@ -8,6 +8,7 @@ use simple_sds_sbwt::bit_vector::*;
 use simple_sds_sbwt::ops::*;
 use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::serialize::*;
+use bitvec::prelude::*;
 
 use crate::util::bitvec_to_simple_sds_raw_bitvec;
 
@@ -119,6 +120,19 @@ pub trait SubsetSeq {
         sbwt_input_range: std::ops::Range<usize>,
         output_ranges: Vec<&mut [u8]>,
     );
+
+    /// Creates an indicator [bit vectors](bitvec::vec::BitVec) for each symbol of the alphabet, where the i-th bit of the j-th bit vector
+    /// is 1 if and only if the i-th subset contains the j-th character.
+    fn into_bitvectors(self) -> Vec<bitvec::vec::BitVec<u64, Lsb0>> where Self: Sized {
+        let sigma = 4; // TODO
+        (0..sigma).map(|c| {
+            let mut row = bitvec![u64, Lsb0; 0; self.len()];
+            self.call_on_char_occurrences(0..self.len(), c as u8, |i| {
+                row.set(i, true);
+            });
+            row
+        }).collect()
+    }
 }
 
 /// An implementation of [SubsetSeq] with a matrix of sigma indicator bit vectors: the i-th bit of the j-th bit vector
@@ -283,6 +297,14 @@ impl SubsetSeq for SubsetMatrix {
                 output_offset += 1;
             });
         }
+    }
+
+    fn into_bitvectors(self) -> Vec<bitvec::vec::BitVec<u64, Lsb0>> where Self: Sized {
+        // This is zero-copy throughout
+        self.rows.into_iter()
+          .map(simple_sds_sbwt::raw_vector::RawVector::from)
+          .map(crate::util::simple_sds_raw_bitvec_to_bitvec)
+          .collect()
     }
 }
 
