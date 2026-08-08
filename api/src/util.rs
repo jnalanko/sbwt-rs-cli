@@ -294,6 +294,25 @@ pub(crate) fn bitvec_to_simple_sds_raw_bitvec(mut bv: bitvec::vec::BitVec::<u64,
     simple_sds_sbwt::raw_vector::RawVector::load(&mut data_with_header).unwrap()
 }
 
+pub(crate) fn simple_sds_raw_bitvec_to_bitvec(bv: simple_sds_sbwt::raw_vector::RawVector) -> bitvec::vec::BitVec<u64, Lsb0> {
+    // Ensure that usize is an u64 in LSB byte order (assumed in into_bitvec)
+    assert!(1_usize == 1_usize.to_le());
+    assert!(usize::BITS == u64::BITS);
+
+    let (words, len) = bv.into_parts();
+
+    // Check that the padding bits in the last words are zero
+    let valid_bits_in_last_word = len % 64;
+    if let (Some(&last_word), true) = (words.last(), valid_bits_in_last_word != 0) {
+        let padding_mask = !0u64 << valid_bits_in_last_word;
+        assert_eq!(last_word & padding_mask, 0, "simple-sds RawVector padding bits are not zero");
+    }
+
+    let mut bits = BitVec::from_vec(words.to_vec());
+    bits.truncate(len);
+    bits
+}
+
 /// Assumes both input lists have no duplicates, and any element exists in only one of the lists.
 /// Given `target_pos` in the conceptual sorted merge of the two lists (0..=len_a+len_b, one past
 /// the end allowed), returns `(pos_a, pos_b, take_from_a)`: the split point into the two lists such
