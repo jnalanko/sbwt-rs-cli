@@ -1,16 +1,17 @@
-//! `set-operations` subcommand: builds one SBWT per `--input` (or reuses one given directly
-//! via `--sbwt-input`), then runs merge (union), intersect and difference between every pair.
+//! `set-operations` subcommand: builds one SBWT per `--input`, then runs merge (union),
+//! intersect and difference between every pair of them. `--sbwt-input` is an alternative to
+//! `--input` that skips the build step, using prebuilt SBWTs directly; the two are mutually
+//! exclusive (one run either builds all its SBWTs or reuses all prebuilt ones, not both).
 //!
 //! Usage:
 //!   sbwt-cli-test-harness set-operations --input <FILE> --input <FILE> [--input <FILE> ...] \
 //!       --out-dir <DIR> --build-args "-k 31 --add-revcomp"
-//!   sbwt-cli-test-harness set-operations --input <FILE> --sbwt-input <FILE.sbwt> \
-//!       --out-dir <DIR> --build-args "-k 31"
+//!   sbwt-cli-test-harness set-operations --sbwt-input <FILE.sbwt> --sbwt-input <FILE.sbwt> \
+//!       --out-dir <DIR>
 //!
 //! Unlike `build`'s `--input-list` (many sequence files merged into one SBWT), each `--input`
 //! occurrence here is built into its own separate SBWT, and the set operations run between
-//! those SBWTs. `--sbwt-input` occurrences skip the build step and are used as-is; --input and
-//! --sbwt-input may be combined, and together must total at least two sources.
+//! those SBWTs.
 //!
 //! `sbwt build` has no default `-k`, so a k-mer length (and any other build flags) must be
 //! passed via `--build-args`, a single string split on whitespace and appended as-is to every
@@ -73,22 +74,23 @@ pub fn subcommand() -> clap::Command {
         .about("Builds one SBWT per --input, then runs merge/intersect/difference between \
                 every pair of them, verifying each result with `sbwt check-set-operation`.")
         .arg(clap::Arg::new("input")
-            .help("Input fasta/fastq sequence file to build into an SBWT, or a prebuilt \
-                   .sbwt file to use as-is. Give at least twice, once per SBWT; unlike \
-                   `build`'s --input-list, each occurrence here produces its own separate \
-                   SBWT rather than being merged into one.")
+            .help("Input fasta/fastq sequence file to build into an SBWT. Give at least \
+                   twice, once per SBWT; unlike `build`'s --input-list, each occurrence here \
+                   produces its own separate SBWT rather than being merged into one. \
+                   Mutually exclusive with --sbwt-input.")
             .short('i')
             .long("input")
             .required(false)
             .action(clap::ArgAction::Append)
+            .conflicts_with("sbwt-input")
             .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("sbwt-input")
-            .help("A prebuilt SBWT file to use as-is, skipping the build step. May be given \
-                   alongside or instead of --input; combined, --input and --sbwt-input must \
-                   total at least two sources.")
+            .help("A prebuilt SBWT file to use as-is, skipping the build step. Give at least \
+                   twice. Mutually exclusive with --input.")
             .long("sbwt-input")
             .required(false)
             .action(clap::ArgAction::Append)
+            .conflicts_with("input")
             .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("build-args")
             .help("Extra arguments passed to every `sbwt build` invocation, split on \
@@ -134,8 +136,9 @@ pub fn subcommand() -> clap::Command {
             .action(clap::ArgAction::SetTrue))
 }
 
-/// Validates parsed argv: at least two `--input`/`--sbwt-input` sources, all of which must
-/// exist, plus a resolvable `sbwt` binary and a creatable `--out-dir`.
+/// Validates parsed argv: at least two `--input` XOR `--sbwt-input` sources (enforced mutually
+/// exclusive by clap), all of which must exist, plus a resolvable `sbwt` binary and a
+/// creatable `--out-dir`.
 fn parse_args(matches: &clap::ArgMatches) -> Cli {
     let seq_inputs = matches.get_many::<PathBuf>("input").unwrap_or_default().cloned();
     let sbwt_inputs = matches.get_many::<PathBuf>("sbwt-input").unwrap_or_default().cloned();
@@ -144,7 +147,7 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
         .collect();
     if inputs.len() < 2 {
         eprintln!(
-            "error: --input/--sbwt-input must be given at least twice combined \
+            "error: --input or --sbwt-input must be given at least twice \
              (need at least 2 SBWTs to run set operations between)"
         );
         std::process::exit(2);
