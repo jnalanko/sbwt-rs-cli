@@ -101,15 +101,15 @@ fn parse_args(args: Args) -> Cli {
         .chain(args.sbwt_input.into_iter().map(Source::Sbwt))
         .collect();
     if inputs.len() < 2 {
-        eprintln!(
-            "error: --input or --sbwt-input must be given at least twice \
+        log::error!(
+            "--input or --sbwt-input must be given at least twice \
              (need at least 2 SBWTs to run set operations between)"
         );
         std::process::exit(2);
     }
     for source in &inputs {
         if !source.path().is_file() {
-            eprintln!("error: input file {} does not exist", source.path().display());
+            log::error!("input file {} does not exist", source.path().display());
             std::process::exit(2);
         }
     }
@@ -121,8 +121,8 @@ fn parse_args(args: Args) -> Cli {
 
     let sbwt_bin = args.sbwt_bin.unwrap_or_else(common::default_sbwt_bin_path);
     if !sbwt_bin.is_file() {
-        eprintln!(
-            "error: sbwt executable not found at {}\n\
+        log::error!(
+            "sbwt executable not found at {}\n\
              Build it first (e.g. `cargo build --release --features libsais`) or pass --sbwt-bin.",
             sbwt_bin.display()
         );
@@ -168,30 +168,29 @@ pub fn run(args: Args) {
     common::require_time_binary();
     let cli = parse_args(args);
 
-    println!("sbwt executable: {}", cli.sbwt_bin.display());
-    println!("inputs:          {}", cli.inputs.len());
+    log::info!("sbwt executable: {}", cli.sbwt_bin.display());
+    log::info!("inputs:          {}", cli.inputs.len());
     for source in &cli.inputs {
         let tag = match source {
             Source::Seq(_) => "seq",
             Source::Sbwt(_) => "sbwt",
         };
-        println!("  - [{tag}] {}", source.path().display());
+        log::info!("  - [{tag}] {}", source.path().display());
     }
-    println!("output dir:      {}", cli.out_dir.display());
-    println!("build args:      {:?}", cli.build_args);
-    println!("threads = {}, keep = {}", cli.threads, cli.keep);
+    log::info!("output dir:      {}", cli.out_dir.display());
+    log::info!("build args:      {:?}", cli.build_args);
+    log::info!("threads = {}, keep = {}", cli.threads, cli.keep);
 
     // Written to as each build or operation finishes (see `append_report_row`), not batched
     // up until the end, so a partial report still exists if the harness is interrupted or a
     // later step hangs.
     init_report(&cli.report_path).expect("failed to create report");
-    println!("report:          {} (appended to as each step finishes)\n", cli.report_path.display());
+    log::info!("report:          {} (appended to as each step finishes)", cli.report_path.display());
 
     let sbwts: Vec<PathBuf> = cli.inputs.iter().enumerate()
         .map(|(i, source)| build_one(&cli, i, source))
         .collect();
 
-    println!();
     let mut all_ok = true;
     for i in 0..sbwts.len() {
         for j in (i + 1)..sbwts.len() {
@@ -207,9 +206,9 @@ pub fn run(args: Args) {
     }
 
     if all_ok {
-        println!("\nAll builds, set operations, and checks completed successfully.");
+        log::info!("All builds, set operations, and checks completed successfully.");
     } else {
-        eprintln!("\nOne or more builds, set operations, or checks failed.");
+        log::error!("One or more builds, set operations, or checks failed.");
         std::process::exit(1);
     }
 }
@@ -229,13 +228,14 @@ fn run_pair(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
 fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
     let input = match source {
         Source::Sbwt(path) => {
-            println!("SBWT {index}: using prebuilt {}", path.display());
+            log::info!("SBWT {index}: using prebuilt {}", path.display());
             return path.clone();
         }
         Source::Seq(path) => path,
     };
 
-    print!("Building SBWT {index} from {} ... ", input.display());
+    let label = format!("Building SBWT {index} from {}", input.display());
+    log::info!("{label} ...");
     let prefix = cli.out_dir.join(format!("sbwt-{index}"));
     let mut cmd = Command::new(&cli.sbwt_bin);
     cmd.arg("--threads").arg(cli.threads.to_string())
@@ -246,7 +246,7 @@ fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
         .args(&cli.build_args);
 
     let run = common::run_timed(&cmd);
-    print_status(&run);
+    log_status(&label, &run);
 
     let row = ReportRow {
         op: "build".to_string(), left: index.to_string(), right: String::new(),
@@ -255,8 +255,8 @@ fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
     if !run.success {
-        eprintln!("--- stderr ---\n{}", run.stderr);
-        eprintln!("\nerror: failed to build SBWT {index} from {}", input.display());
+        log::error!("--- stderr ---\n{}", run.stderr);
+        log::error!("failed to build SBWT {index} from {}", input.display());
         std::process::exit(1);
     }
 
@@ -268,7 +268,8 @@ fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
 /// path). Returns whether it succeeded; does not exit the process on failure, so the
 /// remaining operations still get a chance to run.
 fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, output: &Path) -> bool {
-    print!("{op:<10} {i} , {j} ... ");
+    let label = format!("{op:<10} {i} , {j}");
+    log::info!("{label} ...");
     let mut cmd = Command::new(&cli.sbwt_bin);
     cmd.arg("--threads").arg(cli.threads.to_string())
         .arg(op)
@@ -276,7 +277,7 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
         .arg("--output").arg(output);
 
     let run = common::run_timed(&cmd);
-    print_status(&run);
+    log_status(&label, &run);
 
     let row = ReportRow {
         op: op.to_string(), left: i.to_string(), right: j.to_string(),
@@ -285,7 +286,7 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
     if !run.success {
-        eprintln!("--- stderr ---\n{}", run.stderr);
+        log::error!("--- stderr ---\n{}", run.stderr);
     }
     run.success
 }
@@ -296,7 +297,8 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
 /// sequence file, so `--seq1`/`--seq2` is omitted and `check-set-operation` falls back to
 /// exporting that SBWT's own unitigs. Returns whether the check passed.
 fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, result: &Path) -> bool {
-    print!("{op:<10} {i} , {j} check ... ");
+    let label = format!("{op:<10} {i} , {j} check");
+    log::info!("{label} ...");
     let mut cmd = Command::new(&cli.sbwt_bin);
     cmd.arg("check-set-operation").arg("--op").arg(op);
     if let Source::Seq(path) = &cli.inputs[i] {
@@ -311,7 +313,7 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
         .arg("--temp-dir").arg(&cli.out_dir);
 
     let run = common::run_timed(&cmd);
-    print_status(&run);
+    log_status(&label, &run);
 
     let row = ReportRow {
         op: format!("{op}-check"), left: i.to_string(), right: j.to_string(),
@@ -320,15 +322,21 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
     if !run.success {
-        eprintln!("--- stderr ---\n{}", run.stderr);
+        log::error!("--- stderr ---\n{}", run.stderr);
     }
     run.success
 }
 
-fn print_status(run: &TimedRun) {
+/// Logs how the step described by `label` (already logged as "<label> ..." before the step
+/// started) turned out. The label is repeated so the outcome line stands on its own, since
+/// other steps' output may be interleaved between the two.
+fn log_status(label: &str, run: &TimedRun) {
     if run.success {
-        println!("ok ({})", common::format_duration(run.elapsed));
+        log::info!("{label} ... ok ({})", common::format_duration(run.elapsed));
     } else {
-        println!("FAILED (exit {:?}, {})", run.status_code, common::format_duration(run.elapsed));
+        log::error!(
+            "{label} ... FAILED (exit {:?}, {})",
+            run.status_code, common::format_duration(run.elapsed)
+        );
     }
 }

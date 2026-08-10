@@ -9,8 +9,8 @@ pub const TIME_BIN: &str = "/usr/bin/time";
 /// peak memory for every build) isn't installed.
 pub fn require_time_binary() {
     if !Path::new(TIME_BIN).is_file() {
-        eprintln!(
-            "error: {TIME_BIN} not found. This harness uses GNU time to measure wall-clock \
+        log::error!(
+            "{TIME_BIN} not found. This harness uses GNU time to measure wall-clock \
              time and peak memory (e.g. `apt install time` on Debian/Ubuntu)."
         );
         std::process::exit(2);
