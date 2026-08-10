@@ -26,6 +26,15 @@ pub fn default_sbwt_bin_path() -> PathBuf {
     path
 }
 
+/// Appends `.{ext}` to `prefix` (e.g. an `--output-prefix` value) to get the actual output
+/// file path.
+pub fn with_ext(prefix: &Path, ext: &str) -> PathBuf {
+    let mut s = prefix.as_os_str().to_os_string();
+    s.push(".");
+    s.push(ext);
+    PathBuf::from(s)
+}
+
 pub fn format_duration(d: Duration) -> String {
     format!("{:.2}s", d.as_secs_f64())
 }

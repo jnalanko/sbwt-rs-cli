@@ -437,12 +437,12 @@ fn compare_outputs(successes: &[&AlgoRun]) -> Vec<String> {
     let mut mismatches = Vec::new();
     for ext in ["sbwt", "lcs"] {
         let baseline = successes[0];
-        let baseline_path = with_ext(&baseline.prefix, ext);
+        let baseline_path = common::with_ext(&baseline.prefix, ext);
         let baseline_bytes = std::fs::read(&baseline_path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", baseline_path.display()));
 
         for run in &successes[1..] {
-            let path = with_ext(&run.prefix, ext);
+            let path = common::with_ext(&run.prefix, ext);
             let bytes = std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
             match first_difference(&baseline_bytes, &bytes) {
@@ -530,13 +530,6 @@ fn append_report_row(path: &Path, row: &ReportRow) -> std::io::Result<()> {
         row.elapsed.as_secs_f64(),
         peak_rss_bytes.map(|b| b.to_string()).unwrap_or_default(),
     )
-}
-
-fn with_ext(prefix: &Path, ext: &str) -> PathBuf {
-    let mut s = prefix.as_os_str().to_os_string();
-    s.push(".");
-    s.push(ext);
-    PathBuf::from(s)
 }
 
 fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
