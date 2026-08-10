@@ -28,4 +28,4 @@ bitvec = "1.0.1"
 
 [features]
 libsais = ["sbwt/libsais"]
-tests = []
+tests = ["clap/derive"]

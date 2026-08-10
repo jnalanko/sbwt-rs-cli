@@ -2,18 +2,25 @@ mod common;
 mod build;
 mod set_operations;
 
-fn main() {
-    let matches = clap::Command::new("sbwt-cli-test-harness")
-        .about("Calls sbwt through the CLI and checks outputs.")
-        .subcommand_required(true)
-        .arg_required_else_help(true)
-        .subcommand(build::subcommand())
-        .subcommand(set_operations::subcommand())
-        .get_matches();
+use clap::Parser;
 
-    match matches.subcommand() {
-        Some(("build", sub_matches)) => build::run(sub_matches),
-        Some(("set-operations", sub_matches)) => set_operations::run(sub_matches),
-        _ => unreachable!("clap subcommand_required guarantees one of the above matched"),
+/// Calls sbwt through the CLI and checks outputs.
+#[derive(Parser)]
+#[command(name = "sbwt-cli-test-harness", arg_required_else_help = true)]
+struct Harness {
+    #[command(subcommand)]
+    command: Subcommand,
+}
+
+#[derive(clap::Subcommand)]
+enum Subcommand {
+    Build(build::Args),
+    SetOperations(set_operations::Args),
+}
+
+fn main() {
+    match Harness::parse().command {
+        Subcommand::Build(args) => build::run(args),
+        Subcommand::SetOperations(args) => set_operations::run(args),
     }
 }
