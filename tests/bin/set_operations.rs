@@ -27,6 +27,7 @@ struct Cli {
     out_dir: PathBuf,
     threads: usize,
     keep: bool,
+    verbose: bool,
     report_path: PathBuf,
 }
 
@@ -91,6 +92,11 @@ pub struct Args {
     /// output directory yet, since there's no correctness check to consume its contents first.
     #[arg(long)]
     keep: bool,
+
+    /// Pass -v to the sbwt CLI, so that it logs at its debug level. Its output is shown on
+    /// the harness's own stdout and stderr either way.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 /// Validates parsed argv: at least two `--input` XOR `--sbwt-input` sources (enforced mutually
@@ -134,11 +140,12 @@ fn parse_args(args: Args) -> Cli {
 
     let threads = args.threads;
     let keep = args.keep;
+    let verbose = args.verbose;
 
     let report_path = args.report
         .unwrap_or_else(|| out_dir.join("set-operations-report.tsv"));
 
-    Cli { inputs, build_args, sbwt_bin, out_dir, threads, keep, report_path }
+    Cli { inputs, build_args, sbwt_bin, out_dir, threads, keep, verbose, report_path }
 }
 
 /// Creates (truncating any existing file) the report and writes just its header. Rows are
@@ -179,7 +186,7 @@ pub fn run(args: Args) {
     }
     log::info!("output dir:      {}", cli.out_dir.display());
     log::info!("build args:      {:?}", cli.build_args);
-    log::info!("threads = {}, keep = {}", cli.threads, cli.keep);
+    log::info!("threads = {}, keep = {}, verbose = {}", cli.threads, cli.keep, cli.verbose);
 
     // Written to as each build or operation finishes (see `append_report_row`), not batched
     // up until the end, so a partial report still exists if the harness is interrupted or a
@@ -238,6 +245,7 @@ fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
     log::info!("{label} ...");
     let prefix = cli.out_dir.join(format!("sbwt-{index}"));
     let mut cmd = Command::new(&cli.sbwt_bin);
+    verbose_flag(cli, &mut cmd);
     cmd.arg("--threads").arg(cli.threads.to_string())
         .arg("build")
         .arg("--input").arg(input)
@@ -245,7 +253,7 @@ fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
         .arg("--temp-dir").arg(&cli.out_dir)
         .args(&cli.build_args);
 
-    let run = common::run_timed(&cmd);
+    let run = common::run_timed(&cmd, &cli.out_dir);
     log_status(&label, &run);
 
     let row = ReportRow {
@@ -255,7 +263,6 @@ fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
     if !run.success {
-        log::error!("--- stderr ---\n{}", run.stderr);
         log::error!("failed to build SBWT {index} from {}", input.display());
         std::process::exit(1);
     }
@@ -271,12 +278,13 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
     let label = format!("{op:<10} {i} , {j}");
     log::info!("{label} ...");
     let mut cmd = Command::new(&cli.sbwt_bin);
+    verbose_flag(cli, &mut cmd);
     cmd.arg("--threads").arg(cli.threads.to_string())
         .arg(op)
         .arg(sbwt1).arg(sbwt2)
         .arg("--output").arg(output);
 
-    let run = common::run_timed(&cmd);
+    let run = common::run_timed(&cmd, &cli.out_dir);
     log_status(&label, &run);
 
     let row = ReportRow {
@@ -285,9 +293,6 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
     };
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
-    if !run.success {
-        log::error!("--- stderr ---\n{}", run.stderr);
-    }
     run.success
 }
 
@@ -300,6 +305,7 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
     let label = format!("{op:<10} {i} , {j} check");
     log::info!("{label} ...");
     let mut cmd = Command::new(&cli.sbwt_bin);
+    verbose_flag(cli, &mut cmd);
     cmd.arg("check-set-operation").arg("--op").arg(op);
     if let Source::Seq(path) = &cli.inputs[i] {
         cmd.arg("--seq1").arg(path);
@@ -312,7 +318,7 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
         .arg("--result").arg(result)
         .arg("--temp-dir").arg(&cli.out_dir);
 
-    let run = common::run_timed(&cmd);
+    let run = common::run_timed(&cmd, &cli.out_dir);
     log_status(&label, &run);
 
     let row = ReportRow {
@@ -321,10 +327,16 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
     };
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
-    if !run.success {
-        log::error!("--- stderr ---\n{}", run.stderr);
-    }
     run.success
+}
+
+/// Adds the sbwt CLI's own -v to `cmd` under --verbose, making the output it streams to the
+/// harness's stderr the more detailed one. It has to go before the subcommand name, so this is
+/// called before any other argument is pushed.
+fn verbose_flag(cli: &Cli, cmd: &mut Command) {
+    if cli.verbose {
+        cmd.arg("-v");
+    }
 }
 
 /// Logs how the step described by `label` (already logged as "<label> ..." before the step

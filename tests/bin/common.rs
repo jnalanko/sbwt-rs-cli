@@ -1,6 +1,6 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const TIME_BIN: &str = "/usr/bin/time";
@@ -65,29 +65,78 @@ pub struct TimedRun {
     pub status_code: Option<i32>,
     pub elapsed: Duration,
     pub peak_rss_kb: Option<u64>,
+    /// Everything the command wrote to stderr. It has also already been echoed to the
+    /// harness's own stderr as it arrived, so this is for inspecting, not for printing.
     pub stderr: String,
 }
 
 /// Runs `cmd` wrapped in `/usr/bin/time -v`, measuring wall-clock time and peak resident
 /// memory. Falls back to a manually measured wall-clock time if `/usr/bin/time`'s own report
-/// couldn't be parsed.
-pub fn run_timed(cmd: &Command) -> TimedRun {
+/// couldn't be parsed. `temp_dir` holds the scratch file that `/usr/bin/time` writes its
+/// report to, which is removed again as soon as it has been read.
+///
+/// The command's output always goes to the harness's own: stdout is inherited, and stderr is
+/// streamed through as it arrives, so a long-running command can be watched live rather than
+/// only being reported on once it has finished. Stderr is captured into [`TimedRun::stderr`]
+/// on the way past as well, for callers that want to look at what it said.
+pub fn run_timed(cmd: &Command, temp_dir: &Path) -> TimedRun {
+    // GNU time reports to its own stderr by default, which would both pollute the command's
+    // captured stderr and bury the command's output in a screenful of resource statistics
+    // after every step. "-o" sends it to a file instead, leaving the stderr stream as purely
+    // the command's own.
+    let report_path = temp_dir.join(format!(
+        "time-report-{}-{}.txt",
+        std::process::id(),
+        NEXT_REPORT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+
     let mut wrapped = Command::new(TIME_BIN);
     // This "-v" is /usr/bin/time's own verbose flag, not the wrapped command's.
-    wrapped.arg("-v").arg(cmd.get_program()).args(cmd.get_args());
+    wrapped.arg("-v").arg("-o").arg(&report_path)
+        .arg(cmd.get_program()).args(cmd.get_args())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped());
     if let Some(dir) = cmd.get_current_dir() {
         wrapped.current_dir(dir);
     }
 
     let wall_clock_start = Instant::now();
-    let output = wrapped.output().expect("failed to run /usr/bin/time");
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let mut child = wrapped.spawn().expect("failed to run /usr/bin/time");
+    let stderr = tee_stderr(&mut child);
+    let status = child.wait().expect("failed to wait for /usr/bin/time");
 
-    let success = output.status.success();
-    let elapsed = parse_elapsed(&stderr).unwrap_or_else(|| wall_clock_start.elapsed());
-    let peak_rss_kb = parse_max_rss_kb(&stderr);
+    let time_report = std::fs::read_to_string(&report_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&report_path);
 
-    TimedRun { success, status_code: output.status.code(), elapsed, peak_rss_kb, stderr }
+    let elapsed = parse_elapsed(&time_report).unwrap_or_else(|| wall_clock_start.elapsed());
+    let peak_rss_kb = parse_max_rss_kb(&time_report);
+
+    TimedRun { success: status.success(), status_code: status.code(), elapsed, peak_rss_kb, stderr }
+}
+
+/// Distinguishes the scratch files of concurrent [`run_timed`] calls. Nothing runs commands in
+/// parallel today, but the counter costs nothing and keeps the file name from being a shared
+/// fixed path.
+static NEXT_REPORT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Drains `child`'s piped stderr to EOF, returning everything it wrote. Each chunk is also
+/// written straight through to the harness's stderr as it arrives — unbuffered and unprefixed,
+/// so the command's output looks the same as if it had been run directly.
+fn tee_stderr(child: &mut std::process::Child) -> String {
+    let mut reader = child.stderr.take().expect("stderr was piped");
+    let mut captured: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        captured.extend_from_slice(&buf[..n]);
+        let mut out = std::io::stderr();
+        let _ = out.write_all(&buf[..n]);
+        let _ = out.flush();
+    }
+    String::from_utf8_lossy(&captured).into_owned()
 }
 
 /// Creates (truncating any existing file) `path` and writes `header` as its first line. Rows
