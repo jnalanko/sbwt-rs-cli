@@ -17,8 +17,9 @@
 //! `difference` is not symmetric, so both directions (i\j and j\i) are run for every pair;
 //! `merge` and `intersect` are symmetric, so only one call per pair is needed.
 //!
-//! Correctness of the results is not checked yet - this just exercises the CLI and reports
-//! whether every build and every operation succeeded.
+//! Every operation's output is verified with `sbwt check-set-operation`, which confirms the
+//! result has exactly the expected k-mer set without ever dumping the (possibly huge) result
+//! index as text - see `src/check.rs`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,10 +39,10 @@ struct Cli {
     report_path: PathBuf,
 }
 
-/// One row of the TSV report: a build or a pairwise set operation, its inputs (by --input
-/// index), whether it succeeded, and what it cost.
+/// One row of the TSV report: a build, a pairwise set operation, or a check of one, its
+/// inputs (by --input index), whether it succeeded, and what it cost.
 struct ReportRow {
-    op: &'static str,
+    op: String,
     left: String,
     right: String,
     success: bool,
@@ -53,7 +54,7 @@ struct ReportRow {
 pub fn subcommand() -> clap::Command {
     clap::Command::new("set-operations")
         .about("Builds one SBWT per --input, then runs merge/intersect/difference between \
-                every pair of them. Does not yet check the results for correctness.")
+                every pair of them, verifying each result with `sbwt check-set-operation`.")
         .arg(clap::Arg::new("input")
             .help("Input fasta or fastq sequence file. Give at least twice, once per SBWT \
                    to build; unlike `build`'s --input-list, each occurrence here produces \
@@ -203,23 +204,32 @@ pub fn run(matches: &clap::ArgMatches) {
     let mut all_ok = true;
     for i in 0..sbwts.len() {
         for j in (i + 1)..sbwts.len() {
-            all_ok &= run_op(&cli, "merge", i, &sbwts[i], j, &sbwts[j],
-                              &cli.out_dir.join(format!("merge_{i}_{j}.sbwt")));
-            all_ok &= run_op(&cli, "intersect", i, &sbwts[i], j, &sbwts[j],
-                              &cli.out_dir.join(format!("intersect_{i}_{j}.sbwt")));
-            all_ok &= run_op(&cli, "difference", i, &sbwts[i], j, &sbwts[j],
-                              &cli.out_dir.join(format!("difference_{i}_{j}.sbwt")));
-            all_ok &= run_op(&cli, "difference", j, &sbwts[j], i, &sbwts[i],
-                              &cli.out_dir.join(format!("difference_{j}_{i}.sbwt")));
+            all_ok &= run_pair(&cli, "merge", i, &sbwts[i], j, &sbwts[j],
+                                &cli.out_dir.join(format!("merge_{i}_{j}.sbwt")));
+            all_ok &= run_pair(&cli, "intersect", i, &sbwts[i], j, &sbwts[j],
+                                &cli.out_dir.join(format!("intersect_{i}_{j}.sbwt")));
+            all_ok &= run_pair(&cli, "difference", i, &sbwts[i], j, &sbwts[j],
+                                &cli.out_dir.join(format!("difference_{i}_{j}.sbwt")));
+            all_ok &= run_pair(&cli, "difference", j, &sbwts[j], i, &sbwts[i],
+                                &cli.out_dir.join(format!("difference_{j}_{i}.sbwt")));
         }
     }
 
     if all_ok {
-        println!("\nAll builds and set operations completed successfully.");
+        println!("\nAll builds, set operations, and checks completed successfully.");
     } else {
-        eprintln!("\nOne or more builds or set operations failed.");
+        eprintln!("\nOne or more builds, set operations, or checks failed.");
         std::process::exit(1);
     }
+}
+
+/// Runs one pairwise set operation and, if it succeeds, verifies its output with
+/// `sbwt check-set-operation`. Returns whether both the operation and its check succeeded.
+fn run_pair(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, output: &Path) -> bool {
+    if !run_op(cli, op, i, sbwt1, j, sbwt2, output) {
+        return false;
+    }
+    check_op(cli, op, i, sbwt1, j, sbwt2, output)
 }
 
 /// Builds the SBWT for `input` (the `index`-th `--input`), wrapped in `/usr/bin/time -v`.
@@ -239,7 +249,7 @@ fn build_one(cli: &Cli, index: usize, input: &Path) -> PathBuf {
     print_status(&run);
 
     let row = ReportRow {
-        op: "build", left: index.to_string(), right: String::new(),
+        op: "build".to_string(), left: index.to_string(), right: String::new(),
         success: run.success, elapsed: run.elapsed, peak_rss_kb: run.peak_rss_kb,
     };
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
@@ -269,7 +279,36 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
     print_status(&run);
 
     let row = ReportRow {
-        op, left: i.to_string(), right: j.to_string(),
+        op: op.to_string(), left: i.to_string(), right: j.to_string(),
+        success: run.success, elapsed: run.elapsed, peak_rss_kb: run.peak_rss_kb,
+    };
+    append_report_row(&cli.report_path, &row).expect("failed to append to report");
+
+    if !run.success {
+        eprintln!("--- stderr ---\n{}", run.stderr);
+    }
+    run.success
+}
+
+/// Runs `sbwt check-set-operation` to verify that `result` (the output of `op` on the i-th
+/// and j-th built SBWTs) has exactly the expected k-mer set, computed from the original
+/// `--input` files rather than by dumping `result` itself. Returns whether the check passed.
+fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, result: &Path) -> bool {
+    print!("{op:<10} {i} , {j} check ... ");
+    let mut cmd = Command::new(&cli.sbwt_bin);
+    cmd.arg("check-set-operation")
+        .arg("--op").arg(op)
+        .arg("--seq1").arg(&cli.inputs[i])
+        .arg("--seq2").arg(&cli.inputs[j])
+        .arg("--sbwt1").arg(sbwt1)
+        .arg("--sbwt2").arg(sbwt2)
+        .arg("--result").arg(result);
+
+    let run = common::run_timed(&cmd);
+    print_status(&run);
+
+    let row = ReportRow {
+        op: format!("{op}-check"), left: i.to_string(), right: j.to_string(),
         success: run.success, elapsed: run.elapsed, peak_rss_kb: run.peak_rss_kb,
     };
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
