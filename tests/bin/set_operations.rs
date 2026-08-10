@@ -88,8 +88,10 @@ pub struct Args {
     #[arg(long)]
     report: Option<PathBuf>,
 
-    /// Do not delete the output directory when done. Currently a no-op: nothing deletes the
-    /// output directory yet, since there's no correctness check to consume its contents first.
+    /// Pass --keep-unitigs to `sbwt check-set-operation`, so that the unitig fasta files it
+    /// generates in --out-dir survive the run. Only a --sbwt-input source generates any: one
+    /// given as --input is checked against its own sequence file instead. Nothing else the run
+    /// writes is deleted either way, so this affects nothing when there is no --sbwt-input.
     #[arg(long)]
     keep: bool,
 
@@ -317,6 +319,9 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
         .arg("--sbwt2").arg(sbwt2)
         .arg("--result").arg(result)
         .arg("--temp-dir").arg(&cli.out_dir);
+    if cli.keep {
+        cmd.arg("--keep-unitigs");
+    }
 
     let run = common::run_timed(&cmd, &cli.out_dir);
     log_status(&label, &run);
