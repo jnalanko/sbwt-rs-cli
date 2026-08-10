@@ -166,7 +166,8 @@ pub struct Args {
     #[arg(long)]
     fuzz: bool,
 
-    /// Pass -v to the sbwt CLI, and print its stderr for every build (not just failed ones).
+    /// Pass -v to the sbwt CLI, so that it logs at its debug level. Its output is shown on
+    /// the harness's own stdout and stderr either way.
     #[arg(short, long)]
     verbose: bool,
 }
@@ -362,19 +363,15 @@ fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algori
     }
     cmd.args(algo.extra_args);
 
-    let run = common::run_timed(&cmd);
+    let run = common::run_timed(&cmd, combo_dir);
 
     if run.success {
         log::info!("Building with {} ... ok ({})", algo.name, common::format_duration(run.elapsed));
-        if cli.verbose {
-            log::info!("--- stderr for {} ---\n{}", algo.name, run.stderr);
-        }
     } else {
         log::error!(
             "Building with {} ... FAILED (exit {:?}, {})",
             algo.name, run.status_code, common::format_duration(run.elapsed)
         );
-        log::error!("--- stderr for {} ---\n{}", algo.name, run.stderr);
         if algo.name == "libsais" && run.stderr.contains("--features libsais") {
             log::error!(
                 "Rebuild the sbwt binary with the libsais feature enabled: \
