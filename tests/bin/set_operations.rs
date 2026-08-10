@@ -1,13 +1,16 @@
-//! `set-operations` subcommand: builds one SBWT per `--input`, then runs merge (union),
-//! intersect and difference between every pair of them.
+//! `set-operations` subcommand: builds one SBWT per `--input` (or reuses one given directly
+//! via `--sbwt-input`), then runs merge (union), intersect and difference between every pair.
 //!
 //! Usage:
 //!   sbwt-cli-test-harness set-operations --input <FILE> --input <FILE> [--input <FILE> ...] \
 //!       --out-dir <DIR> --build-args "-k 31 --add-revcomp"
+//!   sbwt-cli-test-harness set-operations --input <FILE> --sbwt-input <FILE.sbwt> \
+//!       --out-dir <DIR> --build-args "-k 31"
 //!
 //! Unlike `build`'s `--input-list` (many sequence files merged into one SBWT), each `--input`
 //! occurrence here is built into its own separate SBWT, and the set operations run between
-//! those SBWTs.
+//! those SBWTs. `--sbwt-input` occurrences skip the build step and are used as-is; --input and
+//! --sbwt-input may be combined, and together must total at least two sources.
 //!
 //! `sbwt build` has no default `-k`, so a k-mer length (and any other build flags) must be
 //! passed via `--build-args`, a single string split on whitespace and appended as-is to every
@@ -28,9 +31,23 @@ use std::time::Duration;
 use crate::common;
 use crate::common::TimedRun;
 
+/// One `--input` (a sequence file to build) or `--sbwt-input` (a prebuilt SBWT to use as-is).
+enum Source {
+    Seq(PathBuf),
+    Sbwt(PathBuf),
+}
+
+impl Source {
+    fn path(&self) -> &Path {
+        match self {
+            Source::Seq(p) | Source::Sbwt(p) => p,
+        }
+    }
+}
+
 /// Fully parsed and validated configuration for a `set-operations` run.
 struct Cli {
-    inputs: Vec<PathBuf>,
+    inputs: Vec<Source>,
     build_args: Vec<String>,
     sbwt_bin: PathBuf,
     out_dir: PathBuf,
@@ -56,12 +73,21 @@ pub fn subcommand() -> clap::Command {
         .about("Builds one SBWT per --input, then runs merge/intersect/difference between \
                 every pair of them, verifying each result with `sbwt check-set-operation`.")
         .arg(clap::Arg::new("input")
-            .help("Input fasta or fastq sequence file. Give at least twice, once per SBWT \
-                   to build; unlike `build`'s --input-list, each occurrence here produces \
-                   its own separate SBWT rather than being merged into one.")
+            .help("Input fasta/fastq sequence file to build into an SBWT, or a prebuilt \
+                   .sbwt file to use as-is. Give at least twice, once per SBWT; unlike \
+                   `build`'s --input-list, each occurrence here produces its own separate \
+                   SBWT rather than being merged into one.")
             .short('i')
             .long("input")
-            .required(true)
+            .required(false)
+            .action(clap::ArgAction::Append)
+            .value_parser(clap::value_parser!(PathBuf)))
+        .arg(clap::Arg::new("sbwt-input")
+            .help("A prebuilt SBWT file to use as-is, skipping the build step. May be given \
+                   alongside or instead of --input; combined, --input and --sbwt-input must \
+                   total at least two sources.")
+            .long("sbwt-input")
+            .required(false)
             .action(clap::ArgAction::Append)
             .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("build-args")
@@ -108,20 +134,24 @@ pub fn subcommand() -> clap::Command {
             .action(clap::ArgAction::SetTrue))
 }
 
-/// Validates parsed argv: at least two `--input` files, all of which must exist, plus a
-/// resolvable `sbwt` binary and a creatable `--out-dir`.
+/// Validates parsed argv: at least two `--input`/`--sbwt-input` sources, all of which must
+/// exist, plus a resolvable `sbwt` binary and a creatable `--out-dir`.
 fn parse_args(matches: &clap::ArgMatches) -> Cli {
-    let inputs: Vec<PathBuf> = matches.get_many::<PathBuf>("input").unwrap().cloned().collect();
+    let seq_inputs = matches.get_many::<PathBuf>("input").unwrap_or_default().cloned();
+    let sbwt_inputs = matches.get_many::<PathBuf>("sbwt-input").unwrap_or_default().cloned();
+    let inputs: Vec<Source> = seq_inputs.map(Source::Seq)
+        .chain(sbwt_inputs.map(Source::Sbwt))
+        .collect();
     if inputs.len() < 2 {
         eprintln!(
-            "error: --input must be given at least twice \
+            "error: --input/--sbwt-input must be given at least twice combined \
              (need at least 2 SBWTs to run set operations between)"
         );
         std::process::exit(2);
     }
-    for path in &inputs {
-        if !path.is_file() {
-            eprintln!("error: input file {} does not exist", path.display());
+    for source in &inputs {
+        if !source.path().is_file() {
+            eprintln!("error: input file {} does not exist", source.path().display());
             std::process::exit(2);
         }
     }
@@ -183,8 +213,12 @@ pub fn run(matches: &clap::ArgMatches) {
 
     println!("sbwt executable: {}", cli.sbwt_bin.display());
     println!("inputs:          {}", cli.inputs.len());
-    for path in &cli.inputs {
-        println!("  - {}", path.display());
+    for source in &cli.inputs {
+        let tag = match source {
+            Source::Seq(_) => "seq",
+            Source::Sbwt(_) => "sbwt",
+        };
+        println!("  - [{tag}] {}", source.path().display());
     }
     println!("output dir:      {}", cli.out_dir.display());
     println!("build args:      {:?}", cli.build_args);
@@ -197,7 +231,7 @@ pub fn run(matches: &clap::ArgMatches) {
     println!("report:          {} (appended to as each step finishes)\n", cli.report_path.display());
 
     let sbwts: Vec<PathBuf> = cli.inputs.iter().enumerate()
-        .map(|(i, input)| build_one(&cli, i, input))
+        .map(|(i, source)| build_one(&cli, i, source))
         .collect();
 
     println!();
@@ -232,9 +266,18 @@ fn run_pair(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
     check_op(cli, op, i, sbwt1, j, sbwt2, output)
 }
 
-/// Builds the SBWT for `input` (the `index`-th `--input`), wrapped in `/usr/bin/time -v`.
+/// Returns the SBWT for the `index`-th source: used directly if it's a `--sbwt-input`
+/// (prebuilt), otherwise built from a `--input` sequence file, wrapped in `/usr/bin/time -v`.
 /// Exits the process if the build fails, since every later step depends on it.
-fn build_one(cli: &Cli, index: usize, input: &Path) -> PathBuf {
+fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
+    let input = match source {
+        Source::Sbwt(path) => {
+            println!("SBWT {index}: using prebuilt {}", path.display());
+            return path.clone();
+        }
+        Source::Seq(path) => path,
+    };
+
     print!("Building SBWT {index} from {} ... ", input.display());
     let prefix = cli.out_dir.join(format!("sbwt-{index}"));
     let mut cmd = Command::new(&cli.sbwt_bin);
@@ -292,15 +335,20 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
 
 /// Runs `sbwt check-set-operation` to verify that `result` (the output of `op` on the i-th
 /// and j-th built SBWTs) has exactly the expected k-mer set, computed from the original
-/// `--input` files rather than by dumping `result` itself. Returns whether the check passed.
+/// `--input` sequence files where available. For a `--sbwt-input` source there's no original
+/// sequence file, so `--seq1`/`--seq2` is omitted and `check-set-operation` falls back to
+/// exporting that SBWT's own unitigs. Returns whether the check passed.
 fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, result: &Path) -> bool {
     print!("{op:<10} {i} , {j} check ... ");
     let mut cmd = Command::new(&cli.sbwt_bin);
-    cmd.arg("check-set-operation")
-        .arg("--op").arg(op)
-        .arg("--seq1").arg(&cli.inputs[i])
-        .arg("--seq2").arg(&cli.inputs[j])
-        .arg("--sbwt1").arg(sbwt1)
+    cmd.arg("check-set-operation").arg("--op").arg(op);
+    if let Source::Seq(path) = &cli.inputs[i] {
+        cmd.arg("--seq1").arg(path);
+    }
+    if let Source::Seq(path) = &cli.inputs[j] {
+        cmd.arg("--seq2").arg(path);
+    }
+    cmd.arg("--sbwt1").arg(sbwt1)
         .arg("--sbwt2").arg(sbwt2)
         .arg("--result").arg(result);
 
