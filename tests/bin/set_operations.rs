@@ -56,6 +56,10 @@ pub fn subcommand() -> clap::Command {
                    `sbwt build` has no default -k, so it must be supplied here.")
             .long("build-args")
             .default_value("")
+            // The value is expected to start with "-" (it's a string of sbwt-build flags),
+            // but clap's default heuristic refuses to consume a value that looks like a flag.
+            // Without this, e.g. `--build-args "-k 31"` fails with "unexpected argument '-k'".
+            .allow_hyphen_values(true)
             .value_parser(clap::value_parser!(String)))
         .arg(clap::Arg::new("sbwt-bin")
             .help("Path to the sbwt executable to test. Defaults to the `sbwt` binary \
