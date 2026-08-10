@@ -11,8 +11,8 @@ name = "sbwt"
 path = "src/main.rs"
 
 [[bin]]
-name = "sbwt-construction-test-harness"
-path = "tests/bin/construction_harness.rs"
+name = "sbwt-cli-test-harness"
+path = "tests/bin/cli_test_harness.rs"
 required-features = ["tests"]
 
 [dependencies]

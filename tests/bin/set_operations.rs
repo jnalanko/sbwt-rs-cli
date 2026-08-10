@@ -2,7 +2,7 @@
 //! difference between them and checks the results.
 //!
 //! Usage:
-//!   sbwt-construction-test-harness set-operations --input <FILE> --input <FILE> [--input <FILE> ...] --out-dir <DIR>
+//!   sbwt-cli-test-harness set-operations --input <FILE> --input <FILE> [--input <FILE> ...] --out-dir <DIR>
 //!
 //! Unlike `build`'s `--input-list` (many sequence files merged into one SBWT), each `--input`
 //! occurrence here is built into its own separate SBWT, and the set operations run between
