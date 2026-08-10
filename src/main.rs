@@ -982,14 +982,20 @@ fn check_command(matches: &clap::ArgMatches) {
 
 fn check_set_operation_command(matches: &clap::ArgMatches) {
     let op = matches.get_one::<String>("op").unwrap().as_str();
-    let seq1_path = matches.get_one::<std::path::PathBuf>("seq1").unwrap();
-    let seq2_path = matches.get_one::<std::path::PathBuf>("seq2").unwrap();
+    let seq1_path = matches.get_one::<std::path::PathBuf>("seq1").map(|p| p.as_path());
+    let seq2_path = matches.get_one::<std::path::PathBuf>("seq2").map(|p| p.as_path());
     let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
     let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
     let result_path = matches.get_one::<std::path::PathBuf>("result").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
+    let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
+    let keep_unitigs = matches.get_flag("keep-unitigs");
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
 
-    check::run_check_set_operation(op, seq1_path, seq2_path, sbwt1_path, sbwt2_path, result_path, cpp_format);
+    check::run_check_set_operation(
+        op, seq1_path, seq2_path, sbwt1_path, sbwt2_path, result_path, cpp_format,
+        temp_dir, keep_unitigs, n_threads,
+    );
 }
 
 fn transform_index_command(matches: &clap::ArgMatches) {
@@ -1579,7 +1585,9 @@ fn main() {
         .subcommand(clap::Command::new("check-set-operation")
             .about("Verify that `result` is exactly `sbwt1 <op> sbwt2`, computed from seq1/seq2 \
                     (the original sequences sbwt1/sbwt2 were built from) rather than by \
-                    enumerating result's own k-mers, which may be far too many to dump as text.")
+                    enumerating result's own k-mers, which may be far too many to dump as text. \
+                    If seq1/seq2 aren't given, the unitigs of sbwt1/sbwt2 are exported to \
+                    --temp-dir and used in their place.")
             .arg_required_else_help(true)
             .arg(clap::Arg::new("op")
                 .help("Which set operation was used to produce `result`.")
@@ -1588,16 +1596,29 @@ fn main() {
                 .value_parser(["merge", "intersect", "difference"])
             )
             .arg(clap::Arg::new("seq1")
-                .help("Fasta/fastq file that sbwt1 was built from.")
+                .help("Fasta/fastq file that sbwt1 was built from. If not given, the unitigs \
+                       of sbwt1 are exported to --temp-dir and used instead.")
                 .long("seq1")
-                .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("seq2")
-                .help("Fasta/fastq file that sbwt2 was built from.")
+                .help("Fasta/fastq file that sbwt2 was built from. Only used by --op merge; \
+                       if not given (and needed), the unitigs of sbwt2 are exported to \
+                       --temp-dir and used instead.")
                 .long("seq2")
-                .required(true)
                 .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("temp-dir")
+                .help("Directory to write generated unitig fasta files to, when --seq1/--seq2 \
+                       are not given. Created if it doesn't exist.")
+                .long("temp-dir")
+                .default_value(".")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("keep-unitigs")
+                .help("Do not delete generated unitig fasta files (see --temp-dir) when done.")
+                .long("keep-unitigs")
+                .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("sbwt1")
                 .help("SBWT index built from seq1.")
