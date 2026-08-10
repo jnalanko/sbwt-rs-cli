@@ -330,7 +330,7 @@ fn _build_sbwt_region(
             k_range_count += 1;
         }
 
-        if aux.shorter_than_k.get(index) {
+        if aux.shorter_than_k.bit(index) {
             has_dummy_kmer = true;
             if dummy_marks.keep_dummy.bit(index) {
                 if build_lcs && !include_dummy_kmer {
@@ -549,7 +549,7 @@ pub(crate) struct FullAuxiliaryData {
     /// Used to figure out whether a k-mer at the beginning of a sequence has a true k-mer as a
     /// predecessor in order to figure out whether the dummy k-mer is necessary. In the final pass
     /// it is used to figure out if a given (k-1)-range contains a region of dummy k-mers.
-    pub(crate) shorter_than_k: BitVector,
+    pub(crate) shorter_than_k: RawVector,
     /// Used in the pass which marks the dummy k-mers that need to be kept in order to identify the
     /// k-mers which are at the beginning of an input sequence.
     ///
@@ -724,11 +724,7 @@ pub(crate) fn par_build_full_auxiliary_data(
         crate::util::bitvec_to_simple_sds_raw_bitvec(intermediate)
     }
 
-    log::info!("[par_build_full_auxiliary_data] shorter_than_k");
     let shorter_than_k     = convert_atomic_bitmap(shorter_than_k);
-    let mut shorter_than_k = BitVector::from(shorter_than_k);
-    shorter_than_k.enable_rank();
-
     let equal_to_k         = convert_atomic_bitmap(equal_to_k);
 
     log::info!("[par_build_full_auxiliary_data] k_minus_one_ranges");
@@ -819,12 +815,15 @@ fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> D
     let scan_start = bwt.counts[1];
     let length = bwt.len();
     let keep_dummy  = AtomicBitmap::new(length);
+    let included_k_minus_one_range = AtomicBitmap::new(length);
 
     let scan_length = length - scan_start;
     let thread_region_length = scan_length.div_ceil(threads);
 
     rayon::scope(|s| {
         let keep_dummy  = &keep_dummy;
+        let included_k_minus_one_range = &included_k_minus_one_range;
+
         for thread_index in 0..threads {
             s.spawn(move |_| {
                 let start = scan_start + thread_index * thread_region_length;
@@ -844,7 +843,7 @@ fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> D
                         predecessor_confirmed = false;
                     }
 
-                    if !aux.shorter_than_k.get(index) {
+                    if !aux.shorter_than_k.bit(index) {
                         if aux.equal_to_k_minus_one_or_k.bit(index) {
                             // Equal to k.
                             let predecessor = bwt.inverse_lf_step(index);
@@ -855,7 +854,13 @@ fn par_build_dummy_marks(threads: usize, k: usize, aux: &FullAuxiliaryData) -> D
                             }
 
                             if !predecessor_confirmed {
-                                keep_predecessors_atomic(predecessor, bwt, k, keep_dummy);
+                                keep_predecessors_atomic(
+                                    predecessor,
+                                    aux,
+                                    k,
+                                    keep_dummy,
+                                    included_k_minus_one_range
+                                );
                             }
                         } else {
                             // Longer than k.
@@ -885,7 +890,7 @@ pub(crate) fn has_full_kmer_predecessor(
     predecessor: usize,
     bwt: &Bwt,
     k_minus_one_ranges: &BitVector, 
-    shorter_than_k: &BitVector
+    shorter_than_k: &RawVector
 ) -> bool {
     let range_start = predecessor;
     let one_index = k_minus_one_ranges.rank(range_start + 1);
@@ -895,16 +900,29 @@ pub(crate) fn has_full_kmer_predecessor(
         // There is at least one 1 after the current position.
         k_minus_one_ranges.select(one_index).unwrap()
     };
-    let range_length = range_end - range_start;
-    let number_of_prefixes_with_true_length_smaller_than_k =
-        shorter_than_k.rank(range_end) - shorter_than_k.rank(range_start);
-    number_of_prefixes_with_true_length_smaller_than_k < range_length
+    !shorter_than_k.bit(range_end - 1)
 }
 
-fn keep_predecessors_atomic(mut predecessor: usize, bwt: &Bwt, mut k: usize, keep_dummy: &AtomicBitmap) {
+fn keep_predecessors_atomic(
+    mut predecessor: usize,
+    aux: &FullAuxiliaryData,
+    mut k: usize,
+    keep_dummy: &AtomicBitmap,
+    included_k_minus_one_range: &AtomicBitmap,
+) {
+    let previous_k_minus_one_range_start_index = aux.k_minus_one_ranges.rank(predecessor);
+    if previous_k_minus_one_range_start_index < aux.k_minus_one_ranges.count_ones() {
+        // Bit will exist.
+        let start_of_k_minus_one_range = aux.k_minus_one_ranges.select(previous_k_minus_one_range_start_index).unwrap();
+        if included_k_minus_one_range.get(start_of_k_minus_one_range) {
+            return;
+        } else {
+            included_k_minus_one_range.set(start_of_k_minus_one_range, true);
+        }
+    }
     while k > 0 {
         keep_dummy.set(predecessor, true);
-        let next = bwt.inverse_lf_step(predecessor);
+        let next = aux.bwt.inverse_lf_step(predecessor);
         predecessor = next;
         k -= 1;
     }
