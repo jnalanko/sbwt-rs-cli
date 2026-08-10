@@ -2,8 +2,8 @@
 //! same input and checks that they all produce byte-identical `.sbwt` and `.lcs` output.
 //!
 //! Usage:
-//!   sbwt-construction-test-harness build --input <FILE> -k <K> --out-dir <DIR>
-//!   sbwt-construction-test-harness build --input-list <FILE> -k <K> --out-dir <DIR>
+//!   sbwt-cli-test-harness build --input <FILE> -k <K> --out-dir <DIR>
+//!   sbwt-cli-test-harness build --input-list <FILE> -k <K> --out-dir <DIR>
 //!
 //! With --fuzz, any of -k, --threads, --add-revcomp, --add-all-dummy-paths and --dedup-batches
 //! that were *not* explicitly given try multiple values instead of just their default, and

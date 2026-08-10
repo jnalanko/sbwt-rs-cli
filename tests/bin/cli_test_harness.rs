@@ -7,7 +7,7 @@
 //!   set-operations   builds one SBWT per input file and checks merge/intersect/difference
 //!                    between them.
 //!
-//! Run `cargo run --release --features libsais --bin sbwt-construction-test-harness -- <subcommand> --help`
+//! Run `cargo run --release --features libsais --bin sbwt-cli-test-harness -- <subcommand> --help`
 //! for each subcommand's options.
 
 mod common;
@@ -15,7 +15,7 @@ mod build;
 mod set_operations;
 
 fn main() {
-    let matches = clap::Command::new("sbwt-construction-test-harness")
+    let matches = clap::Command::new("sbwt-cli-test-harness")
         .about("Drives the sbwt CLI through construction and set-operation workflows and \
                 checks its output.")
         .subcommand_required(true)
