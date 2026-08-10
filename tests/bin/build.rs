@@ -1,24 +1,3 @@
-//! `build` subcommand: drives the `sbwt` CLI through all four construction algorithms on the
-//! same input and checks that they all produce byte-identical `.sbwt` and `.lcs` output.
-//!
-//! Usage:
-//!   sbwt-cli-test-harness build --input <FILE> -k <K> --out-dir <DIR>
-//!   sbwt-cli-test-harness build --input-list <FILE> -k <K> --out-dir <DIR>
-//!
-//! With --fuzz, any of -k, --threads, --add-revcomp, --add-all-dummy-paths and --dedup-batches
-//! that were *not* explicitly given try multiple values instead of just their default, and
-//! every resulting combination is built and compared separately. --mem-gb is never fuzzed.
-//!
-//! Every build (one row per parameter combination x algorithm) is appended to a TSV report as
-//! it finishes, written to construction-report.tsv inside --out-dir by default, or to --report
-//! if given.
-//!
-//! This complements the library-level `all_algorithms_agree` test in `api/src/builder.rs`,
-//! which calls the builders directly. That test can't catch bugs in the CLI's own plumbing
-//! (argument parsing, flag-to-builder wiring, output serialization), since it never goes
-//! through `main.rs`. This harness runs the actual `sbwt` binary instead, so it exercises
-//! the same code path a real user would.
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;

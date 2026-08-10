@@ -1,15 +1,3 @@
-//! Standalone harness (not run by `cargo test`) for exercising the `sbwt` CLI end to end,
-//! rather than calling the library builders/set operations directly.
-//!
-//! Subcommands:
-//!   build            drives all four construction algorithms on the same input and checks
-//!                    that they produce byte-identical output.
-//!   set-operations   builds one SBWT per input file and runs merge/intersect/difference
-//!                    between every pair of them (not yet checked for correctness).
-//!
-//! Run `cargo run --release --features libsais --bin sbwt-cli-test-harness -- <subcommand> --help`
-//! for each subcommand's options.
-
 mod common;
 mod build;
 mod set_operations;

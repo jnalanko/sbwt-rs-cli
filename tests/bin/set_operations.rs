@@ -1,30 +1,3 @@
-//! `set-operations` subcommand: builds one SBWT per `--input`, then runs merge (union),
-//! intersect and difference between every pair of them. `--sbwt-input` is an alternative to
-//! `--input` that skips the build step, using prebuilt SBWTs directly; the two are mutually
-//! exclusive (one run either builds all its SBWTs or reuses all prebuilt ones, not both).
-//!
-//! Usage:
-//!   sbwt-cli-test-harness set-operations --input <FILE> --input <FILE> [--input <FILE> ...] \
-//!       --out-dir <DIR> --build-args "-k 31 --add-revcomp"
-//!   sbwt-cli-test-harness set-operations --sbwt-input <FILE.sbwt> --sbwt-input <FILE.sbwt> \
-//!       --out-dir <DIR>
-//!
-//! Unlike `build`'s `--input-list` (many sequence files merged into one SBWT), each `--input`
-//! occurrence here is built into its own separate SBWT, and the set operations run between
-//! those SBWTs.
-//!
-//! `sbwt build` has no default `-k`, so a k-mer length (and any other build flags) must be
-//! passed via `--build-args`, a single string split on whitespace and appended as-is to every
-//! `sbwt build` invocation. There's no quoting support here (unlike a real shell) - if a path
-//! in --build-args needs a space, this won't handle it.
-//!
-//! `difference` is not symmetric, so both directions (i\j and j\i) are run for every pair;
-//! `merge` and `intersect` are symmetric, so only one call per pair is needed.
-//!
-//! Every operation's output is verified with `sbwt check-set-operation`, which confirms the
-//! result has exactly the expected k-mer set without ever dumping the (possibly huge) result
-//! index as text - see `src/check.rs`.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
