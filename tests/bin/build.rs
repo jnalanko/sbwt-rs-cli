@@ -500,25 +500,17 @@ fn cleanup(out_dir: &Path, keep: bool, report_path: &Path) {
 /// Creates (truncating any existing file) the report and writes just its header. Rows are
 /// appended one at a time afterwards, by `append_report_row`, as each build finishes.
 fn init_report(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut out = std::fs::File::create(path)?;
-    writeln!(
-        out,
+    common::init_tsv_report(
+        path,
         "k\tthreads\tadd_revcomp\tadd_all_dummy_paths\tdedup_batches\talgorithm\tsuccess\ttime_seconds\tpeak_rss_bytes"
     )
 }
 
 /// Appends one TSV row to the report: a build's parameters, whether it succeeded, wall-clock
-/// time in seconds, and peak resident memory in bytes. Opened and closed fresh for each row
-/// (rather than keeping a file handle open across the whole run) so a row already written is
-/// durable on disk even if the harness is later killed or a subsequent build hangs.
+/// time in seconds, and peak resident memory in bytes.
 fn append_report_row(path: &Path, row: &ReportRow) -> std::io::Result<()> {
-    let mut out = std::fs::OpenOptions::new().append(true).open(path)?;
     let peak_rss_bytes = row.peak_rss_kb.map(|kb| kb * 1024);
-    writeln!(
-        out,
+    let line = format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}",
         row.params.k,
         row.params.threads,
@@ -529,7 +521,8 @@ fn append_report_row(path: &Path, row: &ReportRow) -> std::io::Result<()> {
         row.success,
         row.elapsed.as_secs_f64(),
         peak_rss_bytes.map(|b| b.to_string()).unwrap_or_default(),
-    )
+    );
+    common::append_tsv_row(path, &line)
 }
 
 fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
