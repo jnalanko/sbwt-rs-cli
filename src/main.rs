@@ -15,6 +15,8 @@ use sbwt::*;
 use sbwt::benchmark;
 use std::sync::Arc;
 
+mod check;
+
 struct MySeqReader {
     inner: jseqio::reader::DynamicFastXReader,
 }
@@ -975,86 +977,19 @@ fn check_command(matches: &clap::ArgMatches) {
     let original_sequences = matches.get_one::<std::path::PathBuf>("original-sequences");
     let add_revcomp = matches.get_flag("add-revcomp");
 
-    log::info!("Loading index from {:?}", index_path);
-    let mut index = load_index(index_path, cpp_format);
-    let lcs = load_lcs_if_exists(&default_lcs_path(index_path), &format!("LCS file not found at {} -> running without it", default_lcs_path(index_path).display()));
+    check::run_check(index_path, cpp_format, invariant_check, original_sequences, add_revcomp);
+}
 
-    let n = index.n_sets();
-    let sigma = index.alphabet().len();
-    log::info!("Index loaded: {} sets, {} k-mers, k={}, sigma={}", n, index.n_kmers(), index.k(), sigma);
+fn check_set_operation_command(matches: &clap::ArgMatches) {
+    let op = matches.get_one::<String>("op").unwrap().as_str();
+    let seq1_path = matches.get_one::<std::path::PathBuf>("seq1").unwrap();
+    let seq2_path = matches.get_one::<std::path::PathBuf>("seq2").unwrap();
+    let sbwt1_path = matches.get_one::<std::path::PathBuf>("sbwt1").unwrap();
+    let sbwt2_path = matches.get_one::<std::path::PathBuf>("sbwt2").unwrap();
+    let result_path = matches.get_one::<std::path::PathBuf>("result").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
 
-    if invariant_check {
-        log::info!("Checking SBWT structural invariant: sum_c rank(c, n_sets) + 1 == n_sets");
-        let in_edges: usize = (0..sigma).map(|c| index.rank(c as u8, n)).sum();
-        if in_edges + 1 == n {
-            log::info!("OK: {} in-edge(s) + root == {} sets", in_edges, n);
-            println!("PASS");
-        } else {
-            log::error!(
-                "FAIL: invariant violated: {} in-edge(s) + root != {} sets; {} node(s) have no in-coming edge",
-                in_edges, n, n - 1 - in_edges
-            );
-            println!("FAIL");
-            std::process::exit(1);
-        }
-    }
-
-    let streaming_index = lcs.as_ref().map(|lcs| {
-        index.get_streaming_index(&lcs)
-    });
-
-    if let Some(original_sequences) = original_sequences {
-        // Open reader early to fail early if there is a problem
-        let reader = sbwt::FastXReader::new(original_sequences).unwrap();
-        let mut reader = sbwt::SeqStreamWithPossiblyRevComp::new(reader, add_revcomp);
-
-        log::info!("Marking dummy nodes");
-        let mut visited_marks = index.compute_dummy_node_marks();
-        log::info!("Searching all sequences in {}", original_sequences.display());
-        let k = index.k();
-        while let Some(seq) = reader.stream_next() {
-            if let Some(streaming_index) = &streaming_index {
-                let mut prev_non_ACGT_char = -1_isize;
-                for (pos, (len, colex)) in streaming_index.matching_statistics_iter(seq).enumerate() {
-                    if !sbwt::is_dna(seq[pos]) {
-                        prev_non_ACGT_char = pos as isize;
-                    }
-                    let dna_run_len = (pos as isize - prev_non_ACGT_char) as usize;
-                    if dna_run_len >= k {
-                        // Found in input data -> must be found in the SBWT
-                        assert!(len == k); // is found in the SBWT
-                        assert!(colex.len() == 1); // k-mer should have colex range of length 1
-
-                        // Mark as found
-                        visited_marks.set(colex.start, true);
-                    }
-                }
-            } else {
-                for kmer in seq.windows(k) {
-                    if kmer.iter().all(|&c| is_dna(c)) {
-                        // Found in input data -> must be found in the SBWT
-                        let colex = index.search(kmer).expect(&format!("k-mer {} not found in the SBWT", String::from_utf8_lossy(kmer)));
-                        assert!(colex.len() == 1); // k-mer should have colex range of length 1
-
-                        // Mark as found
-                        visited_marks.set(colex.start, true);
-
-                    }
-                }
-            }
-        }
-
-        // Check that all the k-mers in the SBWT were in the input sequences
-
-        if visited_marks.count_ones() != visited_marks.len() {
-            log::info!("SBWT has a k-mer that was not in the input sequences. Fetching the k-mer...");
-            index.build_select();
-            let kmer = index.access_kmer(visited_marks.first_zero().unwrap());
-            panic!("SBWT has k-mer {}, which is not in the input sequences.", String::from_utf8_lossy(&kmer));
-        }
-        log::info!("OK. The SBWT has exactly the same k-mers as the input sequences.");
-    }
-
+    check::run_check_set_operation(op, seq1_path, seq2_path, sbwt1_path, sbwt2_path, result_path, cpp_format);
 }
 
 fn transform_index_command(matches: &clap::ArgMatches) {
@@ -1641,6 +1576,53 @@ fn main() {
                 .args(["invariant", "original-sequences"]))
 
         )
+        .subcommand(clap::Command::new("check-set-operation")
+            .about("Verify that `result` is exactly `sbwt1 <op> sbwt2`, computed from seq1/seq2 \
+                    (the original sequences sbwt1/sbwt2 were built from) rather than by \
+                    enumerating result's own k-mers, which may be far too many to dump as text.")
+            .arg_required_else_help(true)
+            .arg(clap::Arg::new("op")
+                .help("Which set operation was used to produce `result`.")
+                .long("op")
+                .required(true)
+                .value_parser(["merge", "intersect", "difference"])
+            )
+            .arg(clap::Arg::new("seq1")
+                .help("Fasta/fastq file that sbwt1 was built from.")
+                .long("seq1")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("seq2")
+                .help("Fasta/fastq file that sbwt2 was built from.")
+                .long("seq2")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("sbwt1")
+                .help("SBWT index built from seq1.")
+                .long("sbwt1")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("sbwt2")
+                .help("SBWT index built from seq2.")
+                .long("sbwt2")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("result")
+                .help("SBWT index produced by running --op on sbwt1 and sbwt2.")
+                .long("result")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load sbwt1/sbwt2/result from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         .subcommand(clap::Command::new("sort-kmers-to-disk")
             .about("Sort and deduplicate the reverse k-mers of the input sequences into a file on disk. Prints the path to the resulting k-mers file (and, if --add-all-dummy-paths is given, the first-mers file) to stdout. The files are not deleted, and can be later given to build-from-kmers-on-disk.")
             .arg_required_else_help(true)
@@ -1788,6 +1770,7 @@ fn main() {
         Some(("transform-index", sub_matches)) => transform_index_command(sub_matches),
         Some(("kmer-at-colex", sub_matches)) => kmer_at_rank_command(sub_matches),
         Some(("check", sub_matches)) => check_command(sub_matches),
+        Some(("check-set-operation", sub_matches)) => check_set_operation_command(sub_matches),
         _ => unreachable!(),
     }
     
