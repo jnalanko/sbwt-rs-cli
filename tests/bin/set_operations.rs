@@ -22,6 +22,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::common;
 use crate::common::TimedRun;
@@ -34,6 +35,18 @@ struct Cli {
     out_dir: PathBuf,
     threads: usize,
     keep: bool,
+    report_path: PathBuf,
+}
+
+/// One row of the TSV report: a build or a pairwise set operation, its inputs (by --input
+/// index), whether it succeeded, and what it cost.
+struct ReportRow {
+    op: &'static str,
+    left: String,
+    right: String,
+    success: bool,
+    elapsed: Duration,
+    peak_rss_kb: Option<u64>,
 }
 
 /// Defines the `set-operations` subcommand's CLI schema.
@@ -79,6 +92,13 @@ pub fn subcommand() -> clap::Command {
             .short('t')
             .default_value("4")
             .value_parser(clap::value_parser!(usize)))
+        .arg(clap::Arg::new("report")
+            .help("Path to write the TSV report (one row per build and per set operation: \
+                   which step, the --input index/indices involved, success, time, peak \
+                   memory) to. Defaults to set-operations-report.tsv inside --out-dir; a path \
+                   given here is used as-is, so it doesn't have to be under --out-dir.")
+            .long("report")
+            .value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::Arg::new("keep")
             .help("Do not delete the output directory when done. Currently a no-op: nothing \
                    deletes the output directory yet, since there's no correctness check to \
@@ -127,7 +147,33 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
     let threads = *matches.get_one::<usize>("threads").unwrap();
     let keep = matches.get_flag("keep");
 
-    Cli { inputs, build_args, sbwt_bin, out_dir, threads, keep }
+    let report_path = matches.get_one::<PathBuf>("report").cloned()
+        .unwrap_or_else(|| out_dir.join("set-operations-report.tsv"));
+
+    Cli { inputs, build_args, sbwt_bin, out_dir, threads, keep, report_path }
+}
+
+/// Creates (truncating any existing file) the report and writes just its header. Rows are
+/// appended one at a time afterwards, by `append_report_row`, as each build or operation
+/// finishes.
+fn init_report(path: &Path) -> std::io::Result<()> {
+    common::init_tsv_report(path, "op\tleft\tright\tsuccess\ttime_seconds\tpeak_rss_bytes")
+}
+
+/// Appends one TSV row to the report: a build's or operation's inputs (by --input index),
+/// whether it succeeded, wall-clock time in seconds, and peak resident memory in bytes.
+fn append_report_row(path: &Path, row: &ReportRow) -> std::io::Result<()> {
+    let peak_rss_bytes = row.peak_rss_kb.map(|kb| kb * 1024);
+    let line = format!(
+        "{}\t{}\t{}\t{}\t{:.3}\t{}",
+        row.op,
+        row.left,
+        row.right,
+        row.success,
+        row.elapsed.as_secs_f64(),
+        peak_rss_bytes.map(|b| b.to_string()).unwrap_or_default(),
+    );
+    common::append_tsv_row(path, &line)
 }
 
 pub fn run(matches: &clap::ArgMatches) {
@@ -141,7 +187,13 @@ pub fn run(matches: &clap::ArgMatches) {
     }
     println!("output dir:      {}", cli.out_dir.display());
     println!("build args:      {:?}", cli.build_args);
-    println!("threads = {}, keep = {}\n", cli.threads, cli.keep);
+    println!("threads = {}, keep = {}", cli.threads, cli.keep);
+
+    // Written to as each build or operation finishes (see `append_report_row`), not batched
+    // up until the end, so a partial report still exists if the harness is interrupted or a
+    // later step hangs.
+    init_report(&cli.report_path).expect("failed to create report");
+    println!("report:          {} (appended to as each step finishes)\n", cli.report_path.display());
 
     let sbwts: Vec<PathBuf> = cli.inputs.iter().enumerate()
         .map(|(i, input)| build_one(&cli, i, input))
@@ -151,13 +203,13 @@ pub fn run(matches: &clap::ArgMatches) {
     let mut all_ok = true;
     for i in 0..sbwts.len() {
         for j in (i + 1)..sbwts.len() {
-            all_ok &= run_op(&cli, "merge", &sbwts[i], &sbwts[j],
+            all_ok &= run_op(&cli, "merge", i, &sbwts[i], j, &sbwts[j],
                               &cli.out_dir.join(format!("merge_{i}_{j}.sbwt")));
-            all_ok &= run_op(&cli, "intersect", &sbwts[i], &sbwts[j],
+            all_ok &= run_op(&cli, "intersect", i, &sbwts[i], j, &sbwts[j],
                               &cli.out_dir.join(format!("intersect_{i}_{j}.sbwt")));
-            all_ok &= run_op(&cli, "difference", &sbwts[i], &sbwts[j],
+            all_ok &= run_op(&cli, "difference", i, &sbwts[i], j, &sbwts[j],
                               &cli.out_dir.join(format!("difference_{i}_{j}.sbwt")));
-            all_ok &= run_op(&cli, "difference", &sbwts[j], &sbwts[i],
+            all_ok &= run_op(&cli, "difference", j, &sbwts[j], i, &sbwts[i],
                               &cli.out_dir.join(format!("difference_{j}_{i}.sbwt")));
         }
     }
@@ -184,7 +236,14 @@ fn build_one(cli: &Cli, index: usize, input: &Path) -> PathBuf {
         .args(&cli.build_args);
 
     let run = common::run_timed(&cmd);
-    report(&run);
+    print_status(&run);
+
+    let row = ReportRow {
+        op: "build", left: index.to_string(), right: String::new(),
+        success: run.success, elapsed: run.elapsed, peak_rss_kb: run.peak_rss_kb,
+    };
+    append_report_row(&cli.report_path, &row).expect("failed to append to report");
+
     if !run.success {
         eprintln!("--- stderr ---\n{}", run.stderr);
         eprintln!("\nerror: failed to build SBWT {index} from {}", input.display());
@@ -194,11 +253,12 @@ fn build_one(cli: &Cli, index: usize, input: &Path) -> PathBuf {
     common::with_ext(&prefix, "sbwt")
 }
 
-/// Runs `sbwt <op> <sbwt1> <sbwt2> --output <output>`, wrapped in `/usr/bin/time -v`.
-/// Returns whether it succeeded; does not exit the process on failure, so the remaining
-/// operations still get a chance to run.
-fn run_op(cli: &Cli, op: &str, sbwt1: &Path, sbwt2: &Path, output: &Path) -> bool {
-    print!("{op:<10} {} , {} ... ", sbwt1.display(), sbwt2.display());
+/// Runs `sbwt <op> <sbwt1> <sbwt2> --output <output>`, wrapped in `/usr/bin/time -v`, where
+/// `sbwt1`/`sbwt2` are the `i`-th/`j`-th built SBWTs (recorded in the report by index, not by
+/// path). Returns whether it succeeded; does not exit the process on failure, so the
+/// remaining operations still get a chance to run.
+fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, output: &Path) -> bool {
+    print!("{op:<10} {i} , {j} ... ");
     let mut cmd = Command::new(&cli.sbwt_bin);
     cmd.arg("--threads").arg(cli.threads.to_string())
         .arg(op)
@@ -206,14 +266,21 @@ fn run_op(cli: &Cli, op: &str, sbwt1: &Path, sbwt2: &Path, output: &Path) -> boo
         .arg("--output").arg(output);
 
     let run = common::run_timed(&cmd);
-    report(&run);
+    print_status(&run);
+
+    let row = ReportRow {
+        op, left: i.to_string(), right: j.to_string(),
+        success: run.success, elapsed: run.elapsed, peak_rss_kb: run.peak_rss_kb,
+    };
+    append_report_row(&cli.report_path, &row).expect("failed to append to report");
+
     if !run.success {
         eprintln!("--- stderr ---\n{}", run.stderr);
     }
     run.success
 }
 
-fn report(run: &TimedRun) {
+fn print_status(run: &TimedRun) {
     if run.success {
         println!("ok ({})", common::format_duration(run.elapsed));
     } else {

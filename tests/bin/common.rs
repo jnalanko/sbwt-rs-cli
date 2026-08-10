@@ -1,6 +1,8 @@
 //! Helpers shared by the `build` and `set-operations` subcommands: running a command wrapped
-//! in `/usr/bin/time -v` and parsing its output, and locating the `sbwt` binary under test.
+//! in `/usr/bin/time -v` and parsing its output, locating the `sbwt` binary under test, and
+//! writing a TSV report one row at a time.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -90,4 +92,23 @@ pub fn run_timed(cmd: &Command) -> TimedRun {
     let peak_rss_kb = parse_max_rss_kb(&stderr);
 
     TimedRun { success, status_code: output.status.code(), elapsed, peak_rss_kb, stderr }
+}
+
+/// Creates (truncating any existing file) `path` and writes `header` as its first line. Rows
+/// are appended one at a time afterwards, by `append_tsv_row`, so a partial report survives
+/// if the harness is interrupted or a later step hangs.
+pub fn init_tsv_report(path: &Path, header: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = std::fs::File::create(path)?;
+    writeln!(out, "{header}")
+}
+
+/// Appends one already tab-separated `line` to the report at `path`. Opened and closed fresh
+/// for each row (rather than keeping a file handle open across the whole run) so a row already
+/// written is durable on disk even if the harness is later killed.
+pub fn append_tsv_row(path: &Path, line: &str) -> std::io::Result<()> {
+    let mut out = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(out, "{line}")
 }
