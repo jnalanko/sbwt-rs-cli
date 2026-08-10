@@ -1,7 +1,3 @@
-//! Helpers shared by the `build` and `set-operations` subcommands: running a command wrapped
-//! in `/usr/bin/time -v` and parsing its output, locating the `sbwt` binary under test, and
-//! writing a TSV report one row at a time.
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
