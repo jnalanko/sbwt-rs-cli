@@ -16,8 +16,7 @@ mod set_operations;
 
 fn main() {
     let matches = clap::Command::new("sbwt-cli-test-harness")
-        .about("Drives the sbwt CLI through construction and set-operation workflows and \
-                checks its output.")
+        .about("Calls sbwt through the CLI and checks outputs.")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(build::subcommand())
