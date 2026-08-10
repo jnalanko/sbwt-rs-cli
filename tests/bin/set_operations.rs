@@ -41,82 +41,64 @@ struct ReportRow {
     peak_rss_kb: Option<u64>,
 }
 
-/// Defines the `set-operations` subcommand's CLI schema.
-pub fn subcommand() -> clap::Command {
-    clap::Command::new("set-operations")
-        .about("Builds one SBWT per --input, then runs merge/intersect/difference between \
-                every pair of them, verifying each result with `sbwt check-set-operation`.")
-        .arg(clap::Arg::new("input")
-            .help("Input fasta/fastq sequence file to build into an SBWT. Give at least \
-                   twice, once per SBWT; unlike `build`'s --input-list, each occurrence here \
-                   produces its own separate SBWT rather than being merged into one. \
-                   Mutually exclusive with --sbwt-input.")
-            .short('i')
-            .long("input")
-            .required(false)
-            .action(clap::ArgAction::Append)
-            .conflicts_with("sbwt-input")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("sbwt-input")
-            .help("A prebuilt SBWT file to use as-is, skipping the build step. Give at least \
-                   twice. Mutually exclusive with --input.")
-            .long("sbwt-input")
-            .required(false)
-            .action(clap::ArgAction::Append)
-            .conflicts_with("input")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("build-args")
-            .help("Extra arguments passed to every `sbwt build` invocation, split on \
-                   whitespace (no quoting support), e.g. --build-args \"-k 31 --add-revcomp\". \
-                   `sbwt build` has no default -k, so it must be supplied here.")
-            .long("build-args")
-            .default_value("")
-            // The value is expected to start with "-" (it's a string of sbwt-build flags),
-            // but clap's default heuristic refuses to consume a value that looks like a flag.
-            // Without this, e.g. `--build-args "-k 31"` fails with "unexpected argument '-k'".
-            .allow_hyphen_values(true)
-            .value_parser(clap::value_parser!(String)))
-        .arg(clap::Arg::new("sbwt-bin")
-            .help("Path to the sbwt executable to test. Defaults to the `sbwt` binary \
-                   built alongside this harness.")
-            .long("sbwt-bin")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("out-dir")
-            .help("Directory to write built SBWTs and set-operation outputs to. Created if \
-                   it doesn't exist.")
-            .long("out-dir")
-            .required(true)
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("threads")
-            .help("Number of threads to pass to the sbwt CLI, both for building and for \
-                   the set operations.")
-            .long("threads")
-            .short('t')
-            .default_value("4")
-            .value_parser(clap::value_parser!(usize)))
-        .arg(clap::Arg::new("report")
-            .help("Path to write the TSV report (one row per build and per set operation: \
-                   which step, the --input index/indices involved, success, time, peak \
-                   memory) to. Defaults to set-operations-report.tsv inside --out-dir; a path \
-                   given here is used as-is, so it doesn't have to be under --out-dir.")
-            .long("report")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("keep")
-            .help("Do not delete the output directory when done. Currently a no-op: nothing \
-                   deletes the output directory yet, since there's no correctness check to \
-                   consume its contents first.")
-            .long("keep")
-            .action(clap::ArgAction::SetTrue))
+/// Builds one SBWT per --input, then runs merge/intersect/difference between every pair of
+/// them, verifying each result with `sbwt check-set-operation`.
+#[derive(clap::Args)]
+pub struct Args {
+    /// Input fasta/fastq sequence file to build into an SBWT. Give at least twice, once per
+    /// SBWT; unlike `build`'s --input-list, each occurrence here produces its own separate
+    /// SBWT rather than being merged into one. Mutually exclusive with --sbwt-input.
+    #[arg(short, long, conflicts_with = "sbwt_input")]
+    input: Vec<PathBuf>,
+
+    /// A prebuilt SBWT file to use as-is, skipping the build step. Give at least twice.
+    /// Mutually exclusive with --input.
+    #[arg(long)]
+    sbwt_input: Vec<PathBuf>,
+
+    /// Extra arguments passed to every `sbwt build` invocation, split on whitespace (no
+    /// quoting support), e.g. --build-args "-k 31 --add-revcomp". `sbwt build` has no default
+    /// -k, so it must be supplied here.
+    // The value is expected to start with "-" (it's a string of sbwt-build flags), but clap's
+    // default heuristic refuses to consume a value that looks like a flag. Without
+    // allow_hyphen_values, e.g. `--build-args "-k 31"` fails with "unexpected argument '-k'".
+    #[arg(long, default_value = "", allow_hyphen_values = true)]
+    build_args: String,
+
+    /// Path to the sbwt executable to test. Defaults to the `sbwt` binary
+    /// built alongside this harness.
+    #[arg(long)]
+    sbwt_bin: Option<PathBuf>,
+
+    /// Directory to write built SBWTs and set-operation outputs to. Created if it doesn't
+    /// exist.
+    #[arg(long, required = true)]
+    out_dir: PathBuf,
+
+    /// Number of threads to pass to the sbwt CLI, both for building and for the set
+    /// operations.
+    #[arg(short, long, default_value_t = 4)]
+    threads: usize,
+
+    /// Path to write the TSV report (one row per build and per set operation: which step, the
+    /// --input index/indices involved, success, time, peak memory) to. Defaults to
+    /// set-operations-report.tsv inside --out-dir; a path given here is used as-is, so it
+    /// doesn't have to be under --out-dir.
+    #[arg(long)]
+    report: Option<PathBuf>,
+
+    /// Do not delete the output directory when done. Currently a no-op: nothing deletes the
+    /// output directory yet, since there's no correctness check to consume its contents first.
+    #[arg(long)]
+    keep: bool,
 }
 
 /// Validates parsed argv: at least two `--input` XOR `--sbwt-input` sources (enforced mutually
 /// exclusive by clap), all of which must exist, plus a resolvable `sbwt` binary and a
 /// creatable `--out-dir`.
-fn parse_args(matches: &clap::ArgMatches) -> Cli {
-    let seq_inputs = matches.get_many::<PathBuf>("input").unwrap_or_default().cloned();
-    let sbwt_inputs = matches.get_many::<PathBuf>("sbwt-input").unwrap_or_default().cloned();
-    let inputs: Vec<Source> = seq_inputs.map(Source::Seq)
-        .chain(sbwt_inputs.map(Source::Sbwt))
+fn parse_args(args: Args) -> Cli {
+    let inputs: Vec<Source> = args.input.into_iter().map(Source::Seq)
+        .chain(args.sbwt_input.into_iter().map(Source::Sbwt))
         .collect();
     if inputs.len() < 2 {
         eprintln!(
@@ -132,13 +114,12 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
         }
     }
 
-    let build_args: Vec<String> = matches.get_one::<String>("build-args").unwrap()
+    let build_args: Vec<String> = args.build_args
         .split_whitespace()
         .map(String::from)
         .collect();
 
-    let sbwt_bin = matches.get_one::<PathBuf>("sbwt-bin").cloned()
-        .unwrap_or_else(common::default_sbwt_bin_path);
+    let sbwt_bin = args.sbwt_bin.unwrap_or_else(common::default_sbwt_bin_path);
     if !sbwt_bin.is_file() {
         eprintln!(
             "error: sbwt executable not found at {}\n\
@@ -148,13 +129,13 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
         std::process::exit(2);
     }
 
-    let out_dir = matches.get_one::<PathBuf>("out-dir").unwrap().clone();
+    let out_dir = args.out_dir;
     std::fs::create_dir_all(&out_dir).expect("failed to create --out-dir");
 
-    let threads = *matches.get_one::<usize>("threads").unwrap();
-    let keep = matches.get_flag("keep");
+    let threads = args.threads;
+    let keep = args.keep;
 
-    let report_path = matches.get_one::<PathBuf>("report").cloned()
+    let report_path = args.report
         .unwrap_or_else(|| out_dir.join("set-operations-report.tsv"));
 
     Cli { inputs, build_args, sbwt_bin, out_dir, threads, keep, report_path }
@@ -183,9 +164,9 @@ fn append_report_row(path: &Path, row: &ReportRow) -> std::io::Result<()> {
     common::append_tsv_row(path, &line)
 }
 
-pub fn run(matches: &clap::ArgMatches) {
+pub fn run(args: Args) {
     common::require_time_binary();
-    let cli = parse_args(matches);
+    let cli = parse_args(args);
 
     println!("sbwt executable: {}", cli.sbwt_bin.display());
     println!("inputs:          {}", cli.inputs.len());

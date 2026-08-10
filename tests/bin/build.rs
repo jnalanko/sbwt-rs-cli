@@ -3,9 +3,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use clap::parser::ValueSource;
-
 use crate::common;
+
+/// Values used for the parameters the user left out. Kept here rather than in clap's
+/// `default_value`, because a defaulted parameter is exactly the one --fuzz is allowed to vary,
+/// so the parsed value has to stay distinguishable from an explicitly given one.
+const DEFAULT_K: usize = 31;
+const DEFAULT_THREADS: usize = 4;
+const DEFAULT_MEM_GB: usize = 8;
 
 struct Algorithm {
     name: &'static str,
@@ -98,99 +103,81 @@ struct Cli {
     report_path: PathBuf,
 }
 
-/// Defines the `build` subcommand's CLI schema.
-pub fn subcommand() -> clap::Command {
-    clap::Command::new("build")
-        .about("Runs all sbwt construction algorithms through the sbwt CLI on the same input \
-                and checks that they produce byte-identical output.")
-        .arg(clap::Arg::new("input")
-            .help("Input fasta or fastq sequence file (same as `sbwt build --input`).")
-            .short('i')
-            .long("input")
-            .required_unless_present("input-list")
-            .conflicts_with("input-list")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("input-list")
-            .help("File listing input fasta/fastq files, one path per line \
-                   (same format as `sbwt build --input-list`).")
-            .long("input-list")
-            .required_unless_present("input")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("k")
-            .help("k-mer length")
-            .short('k')
-            .default_value("31")
-            .value_parser(clap::value_parser!(usize)))
-        .arg(clap::Arg::new("sbwt-bin")
-            .help("Path to the sbwt executable to test. Defaults to the `sbwt` binary \
-                   built alongside this harness.")
-            .long("sbwt-bin")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("out-dir")
-            .help("Directory to write build outputs (and on-disk algorithm scratch files) to. \
-                   Created if it doesn't exist.")
-            .long("out-dir")
-            .required(true)
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("keep")
-            .help("Do not delete the output directory when done.")
-            .long("keep")
-            .action(clap::ArgAction::SetTrue))
-        .arg(clap::Arg::new("report")
-            .help("Path to write the TSV report (one row per build: parameters, time, peak \
-                   memory) to. Defaults to construction-report.tsv inside --out-dir; a path \
-                   given here is used as-is, so it doesn't have to be under --out-dir.")
-            .long("report")
-            .value_parser(clap::value_parser!(PathBuf)))
-        .arg(clap::Arg::new("threads")
-            .help("Number of threads to pass to the sbwt CLI.")
-            .long("threads")
-            .short('t')
-            .default_value("4")
-            .value_parser(clap::value_parser!(usize)))
-        .arg(clap::Arg::new("mem-gb")
-            .help("Memory budget in gigabytes to pass to the sbwt CLI's --mem-gb \
-                   (used by the on-disk and in-memory algorithms only). Never fuzzed.")
-            .long("mem-gb")
-            .short('m')
-            .default_value("8")
-            .value_parser(clap::value_parser!(usize)))
-        .arg(clap::Arg::new("add-revcomp")
-            .help("Pass --add-revcomp to every build.")
-            .long("add-revcomp")
-            .action(clap::ArgAction::SetTrue))
-        .arg(clap::Arg::new("add-all-dummy-paths")
-            .help("Pass --add-all-dummy-paths to every build.")
-            .long("add-all-dummy-paths")
-            .action(clap::ArgAction::SetTrue))
-        .arg(clap::Arg::new("dedup-batches")
-            .help("Pass --dedup-batches to every build.")
-            .long("dedup-batches")
-            .short('d')
-            .action(clap::ArgAction::SetTrue))
-        .arg(clap::Arg::new("fuzz")
-            .help("For each of -k, --threads, --add-revcomp, --add-all-dummy-paths and \
-                   --dedup-batches that was not explicitly given, try multiple values \
-                   instead of just the default, and build+compare every combination. \
-                   --mem-gb is never fuzzed.")
-            .long("fuzz")
-            .action(clap::ArgAction::SetTrue))
-        .arg(clap::Arg::new("verbose")
-            .help("Pass -v to the sbwt CLI, and print its stderr for every build \
-                   (not just failed ones).")
-            .short('v')
-            .long("verbose")
-            .action(clap::ArgAction::SetTrue))
+/// Runs all sbwt construction algorithms through the sbwt CLI on the same input and checks
+/// that they produce byte-identical output.
+#[derive(clap::Args)]
+pub struct Args {
+    /// Input fasta or fastq sequence file (same as `sbwt build --input`).
+    #[arg(short, long, required_unless_present = "input_list", conflicts_with = "input_list")]
+    input: Option<PathBuf>,
+
+    /// File listing input fasta/fastq files, one path per line
+    /// (same format as `sbwt build --input-list`).
+    #[arg(long, required_unless_present = "input")]
+    input_list: Option<PathBuf>,
+
+    /// k-mer length [default: 31]
+    #[arg(short)]
+    k: Option<usize>,
+
+    /// Path to the sbwt executable to test. Defaults to the `sbwt` binary
+    /// built alongside this harness.
+    #[arg(long)]
+    sbwt_bin: Option<PathBuf>,
+
+    /// Directory to write build outputs (and on-disk algorithm scratch files) to.
+    /// Created if it doesn't exist.
+    #[arg(long, required = true)]
+    out_dir: PathBuf,
+
+    /// Do not delete the output directory when done.
+    #[arg(long)]
+    keep: bool,
+
+    /// Path to write the TSV report (one row per build: parameters, time, peak memory) to.
+    /// Defaults to construction-report.tsv inside --out-dir; a path given here is used as-is,
+    /// so it doesn't have to be under --out-dir.
+    #[arg(long)]
+    report: Option<PathBuf>,
+
+    /// Number of threads to pass to the sbwt CLI [default: 4]
+    #[arg(short, long)]
+    threads: Option<usize>,
+
+    /// Memory budget in gigabytes to pass to the sbwt CLI's --mem-gb
+    /// (used by the on-disk and in-memory algorithms only). Never fuzzed [default: 8]
+    #[arg(short = 'm', long)]
+    mem_gb: Option<usize>,
+
+    /// Pass --add-revcomp to every build.
+    #[arg(long)]
+    add_revcomp: bool,
+
+    /// Pass --add-all-dummy-paths to every build.
+    #[arg(long)]
+    add_all_dummy_paths: bool,
+
+    /// Pass --dedup-batches to every build.
+    #[arg(short, long)]
+    dedup_batches: bool,
+
+    /// For each of -k, --threads, --add-revcomp, --add-all-dummy-paths and --dedup-batches
+    /// that was not explicitly given, try multiple values instead of just the default, and
+    /// build+compare every combination. --mem-gb is never fuzzed.
+    #[arg(long)]
+    fuzz: bool,
+
+    /// Pass -v to the sbwt CLI, and print its stderr for every build (not just failed ones).
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 /// Validates parsed argv and works out the set of parameter combinations to run (a single
 /// one, unless --fuzz expands some of them).
-fn parse_args(matches: &clap::ArgMatches) -> Cli {
-    let input = matches.get_one::<PathBuf>("input");
-    let input_list = matches.get_one::<PathBuf>("input-list");
-    let (input_arg, input_path) = match (input, input_list) {
-        (Some(path), None) => ("--input", path.clone()),
-        (None, Some(path)) => ("--input-list", path.clone()),
+fn parse_args(args: Args) -> Cli {
+    let (input_arg, input_path) = match (args.input, args.input_list) {
+        (Some(path), None) => ("--input", path),
+        (None, Some(path)) => ("--input-list", path),
         _ => unreachable!("clap enforces exactly one of --input / --input-list"),
     };
     if !input_path.is_file() {
@@ -198,28 +185,19 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
         std::process::exit(2);
     }
 
-    let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
-    let verbose = matches.get_flag("verbose");
-    let fuzz = matches.get_flag("fuzz");
+    let mem_gb = args.mem_gb.unwrap_or(DEFAULT_MEM_GB);
+    let verbose = args.verbose;
+    let fuzz = args.fuzz;
 
     // Only parameters the user left at their default get multiple candidate values; anything
     // passed explicitly is pinned to that one value. This lets a caller narrow the search
     // space to whatever they're actually unsure about instead of always paying for the full
     // combinatorial product.
-    let explicit = |id: &str| matches.value_source(id) == Some(ValueSource::CommandLine);
-    let k_candidates = candidates_usize(
-        fuzz, explicit("k"), *matches.get_one::<usize>("k").unwrap(), &[3, 31, 32, 100],
-    );
-    let threads_candidates = candidates_usize(
-        fuzz, explicit("threads"), *matches.get_one::<usize>("threads").unwrap(), &[1, 4],
-    );
-    let add_revcomp_candidates =
-        candidates_bool(fuzz, explicit("add-revcomp"), matches.get_flag("add-revcomp"));
-    let add_all_dummy_paths_candidates = candidates_bool(
-        fuzz, explicit("add-all-dummy-paths"), matches.get_flag("add-all-dummy-paths"),
-    );
-    let dedup_batches_candidates =
-        candidates_bool(fuzz, explicit("dedup-batches"), matches.get_flag("dedup-batches"));
+    let k_candidates = candidates_usize(fuzz, args.k, DEFAULT_K, &[3, 31, 32, 100]);
+    let threads_candidates = candidates_usize(fuzz, args.threads, DEFAULT_THREADS, &[1, 4]);
+    let add_revcomp_candidates = candidates_bool(fuzz, args.add_revcomp);
+    let add_all_dummy_paths_candidates = candidates_bool(fuzz, args.add_all_dummy_paths);
+    let dedup_batches_candidates = candidates_bool(fuzz, args.dedup_batches);
 
     let mut combos = Vec::new();
     for &k in &k_candidates {
@@ -234,8 +212,7 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
         }
     }
 
-    let sbwt_bin = matches.get_one::<PathBuf>("sbwt-bin").cloned()
-        .unwrap_or_else(common::default_sbwt_bin_path);
+    let sbwt_bin = args.sbwt_bin.unwrap_or_else(common::default_sbwt_bin_path);
     if !sbwt_bin.is_file() {
         eprintln!(
             "error: sbwt executable not found at {}\n\
@@ -245,32 +222,37 @@ fn parse_args(matches: &clap::ArgMatches) -> Cli {
         std::process::exit(2);
     }
 
-    let out_dir = matches.get_one::<PathBuf>("out-dir").unwrap().clone();
+    let out_dir = args.out_dir;
     std::fs::create_dir_all(&out_dir).expect("failed to create --out-dir");
-    let keep = matches.get_flag("keep");
+    let keep = args.keep;
 
-    let report_path = matches.get_one::<PathBuf>("report").cloned()
+    let report_path = args.report
         .unwrap_or_else(|| out_dir.join("construction-report.tsv"));
 
     Cli { input_arg, input_path, mem_gb, verbose, sbwt_bin, out_dir, keep, combos, report_path }
 }
 
-/// Candidate values for a boolean build flag: both `false` and `true` if it's being fuzzed
-/// (i.e. --fuzz was given and the user didn't pin this flag explicitly), otherwise just
-/// whatever value was actually parsed.
-fn candidates_bool(fuzz: bool, explicit: bool, actual: bool) -> Vec<bool> {
-    if fuzz && !explicit { vec![false, true] } else { vec![actual] }
+/// Candidate values for a boolean build flag: both `false` and `true` if it's being fuzzed,
+/// otherwise just the value that was parsed. A flag can only ever be given explicitly as
+/// `true`, so a `true` here means the user pinned it and it isn't fuzzed.
+fn candidates_bool(fuzz: bool, actual: bool) -> Vec<bool> {
+    if fuzz && !actual { vec![false, true] } else { vec![actual] }
 }
 
 /// Same as [`candidates_bool`], but for a numeric option, with the fuzzed value set given
-/// explicitly by the caller.
-fn candidates_usize(fuzz: bool, explicit: bool, actual: usize, fuzzed: &[usize]) -> Vec<usize> {
-    if fuzz && !explicit { fuzzed.to_vec() } else { vec![actual] }
+/// explicitly by the caller. `actual` is `None` when the option was left out, i.e. when it is
+/// eligible for fuzzing.
+fn candidates_usize(fuzz: bool, actual: Option<usize>, default: usize, fuzzed: &[usize]) -> Vec<usize> {
+    match actual {
+        Some(value) => vec![value],
+        None if fuzz => fuzzed.to_vec(),
+        None => vec![default],
+    }
 }
 
-pub fn run(matches: &clap::ArgMatches) {
+pub fn run(args: Args) {
     common::require_time_binary();
-    let cli = parse_args(matches);
+    let cli = parse_args(args);
 
     println!("sbwt executable: {}", cli.sbwt_bin.display());
     println!("input ({}): {}", cli.input_arg, cli.input_path.display());
