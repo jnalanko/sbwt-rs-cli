@@ -353,7 +353,8 @@ fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
     }
     cmd.arg("--sbwt1").arg(sbwt1)
         .arg("--sbwt2").arg(sbwt2)
-        .arg("--result").arg(result);
+        .arg("--result").arg(result)
+        .arg("--temp-dir").arg(&cli.out_dir);
 
     let run = common::run_timed(&cmd);
     print_status(&run);
