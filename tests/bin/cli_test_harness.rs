@@ -19,6 +19,10 @@ enum Subcommand {
 }
 
 fn main() {
+    // INFO is the default level, so all of the harness's own progress output shows without
+    // anything being set. RUST_LOG still overrides it (e.g. RUST_LOG=warn to quieten it down).
+    env_logger::builder().filter_level(log::LevelFilter::Info).init();
+
     match Harness::parse().command {
         Subcommand::Build(args) => build::run(args),
         Subcommand::SetOperations(args) => set_operations::run(args),

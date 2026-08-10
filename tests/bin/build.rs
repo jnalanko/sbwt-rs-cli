@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -181,7 +180,7 @@ fn parse_args(args: Args) -> Cli {
         _ => unreachable!("clap enforces exactly one of --input / --input-list"),
     };
     if !input_path.is_file() {
-        eprintln!("error: input file {} does not exist", input_path.display());
+        log::error!("input file {} does not exist", input_path.display());
         std::process::exit(2);
     }
 
@@ -214,8 +213,8 @@ fn parse_args(args: Args) -> Cli {
 
     let sbwt_bin = args.sbwt_bin.unwrap_or_else(common::default_sbwt_bin_path);
     if !sbwt_bin.is_file() {
-        eprintln!(
-            "error: sbwt executable not found at {}\n\
+        log::error!(
+            "sbwt executable not found at {}\n\
              Build it first (e.g. `cargo build --release --features libsais`) or pass --sbwt-bin.",
             sbwt_bin.display()
         );
@@ -254,21 +253,21 @@ pub fn run(args: Args) {
     common::require_time_binary();
     let cli = parse_args(args);
 
-    println!("sbwt executable: {}", cli.sbwt_bin.display());
-    println!("input ({}): {}", cli.input_arg, cli.input_path.display());
-    println!("output dir:      {}", cli.out_dir.display());
-    println!("mem-gb = {}", cli.mem_gb);
+    log::info!("sbwt executable: {}", cli.sbwt_bin.display());
+    log::info!("input ({}): {}", cli.input_arg, cli.input_path.display());
+    log::info!("output dir:      {}", cli.out_dir.display());
+    log::info!("mem-gb = {}", cli.mem_gb);
     if cli.combos.len() > 1 {
-        println!("fuzzing {} parameter combination(s)\n", cli.combos.len());
+        log::info!("fuzzing {} parameter combination(s)", cli.combos.len());
     } else {
-        println!("{}\n", cli.combos[0].label());
+        log::info!("{}", cli.combos[0].label());
     }
 
     // Written to as each build finishes (see `append_report_row`), not batched up until the
     // end, so a partial report still exists if the harness is interrupted or a later build
     // hangs.
     init_report(&cli.report_path).expect("failed to create report");
-    println!("report:          {} (appended to as each build finishes)\n", cli.report_path.display());
+    log::info!("report:          {} (appended to as each build finishes)", cli.report_path.display());
 
     let mut outcomes = Vec::new();
     for (i, params) in cli.combos.iter().enumerate() {
@@ -280,28 +279,28 @@ pub fn run(args: Args) {
     cleanup(&cli.out_dir, cli.keep, &cli.report_path);
 
     if cli.combos.len() > 1 {
-        println!("\n=== fuzz summary ===");
+        log::info!("=== fuzz summary ===");
         for outcome in &outcomes {
             let status = if outcome.is_ok() { "OK" } else { "FAILED" };
-            println!("{status:<6} {}", outcome.label);
+            log::info!("{status:<6} {}", outcome.label);
         }
     }
 
     if outcomes.iter().all(ComboOutcome::is_ok) {
-        println!("\nAll combination(s) agree across all construction algorithms.");
+        log::info!("All combination(s) agree across all construction algorithms.");
     } else {
         let failed = outcomes.iter().filter(|o| !o.is_ok()).count();
-        eprintln!("\n{failed} of {} combination(s) failed.", outcomes.len());
+        log::error!("{failed} of {} combination(s) failed.", outcomes.len());
         std::process::exit(1);
     }
 }
 
 /// Builds all four construction algorithms with the given parameters and byte-compares
-/// their `.sbwt` and `.lcs` output. `label`, if given, is printed as a header (used when
+/// their `.sbwt` and `.lcs` output. `label`, if given, is logged as a header (used when
 /// running more than one parameter combination under --fuzz).
 fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) -> ComboOutcome {
     if let Some(label) = label {
-        println!("--- {label} ---");
+        log::info!("--- {label} ---");
     }
     std::fs::create_dir_all(combo_dir).expect("failed to create combo output dir");
 
@@ -309,27 +308,26 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
         .map(|algo| build_and_measure(cli, params, combo_dir, algo))
         .collect();
 
-    print_measurements(&runs);
+    log_measurements(&runs);
 
     let failed_algorithms: Vec<&'static str> =
         runs.iter().filter(|r| !r.success).map(|r| r.name).collect();
     let label = label.unwrap_or("(default parameters)").to_string();
     if !failed_algorithms.is_empty() {
-        eprintln!(
-            "\n{} algorithm(s) failed to build: {}",
+        log::error!(
+            "{} algorithm(s) failed to build: {}",
             failed_algorithms.len(),
             failed_algorithms.join(", ")
         );
         return ComboOutcome { label, failed_algorithms, mismatches: Vec::new() };
     }
 
-    println!();
     let successes: Vec<&AlgoRun> = runs.iter().filter(|r| r.success).collect();
     let mismatches = compare_outputs(&successes);
     if mismatches.is_empty() {
-        println!("\nAll {} construction algorithms agree.", successes.len());
+        log::info!("All {} construction algorithms agree.", successes.len());
     } else {
-        eprintln!("\n{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
+        log::error!("{} mismatch(es): {}", mismatches.len(), mismatches.join(", "));
     }
 
     ComboOutcome { label, failed_algorithms, mismatches }
@@ -338,8 +336,7 @@ fn run_combo(cli: &Cli, params: &Params, combo_dir: &Path, label: Option<&str>) 
 /// Runs `sbwt build ...` (wrapped in `/usr/bin/time -v`) for one construction algorithm and
 /// reports its success, wall-clock time and peak resident memory.
 fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algorithm) -> AlgoRun {
-    print!("Building with {:<21} ... ", algo.name);
-    std::io::stdout().flush().ok();
+    log::info!("Building with {} ...", algo.name);
 
     let prefix = combo_dir.join(algo.name);
     let mut cmd = Command::new(&cli.sbwt_bin);
@@ -368,15 +365,18 @@ fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algori
     let run = common::run_timed(&cmd);
 
     if run.success {
-        println!("ok ({})", common::format_duration(run.elapsed));
+        log::info!("Building with {} ... ok ({})", algo.name, common::format_duration(run.elapsed));
         if cli.verbose {
-            eprintln!("--- stderr for {} ---\n{}", algo.name, run.stderr);
+            log::info!("--- stderr for {} ---\n{}", algo.name, run.stderr);
         }
     } else {
-        println!("FAILED (exit {:?}, {})", run.status_code, common::format_duration(run.elapsed));
-        eprintln!("--- stderr for {} ---\n{}", algo.name, run.stderr);
+        log::error!(
+            "Building with {} ... FAILED (exit {:?}, {})",
+            algo.name, run.status_code, common::format_duration(run.elapsed)
+        );
+        log::error!("--- stderr for {} ---\n{}", algo.name, run.stderr);
         if algo.name == "libsais" && run.stderr.contains("--features libsais") {
-            eprintln!(
+            log::error!(
                 "Rebuild the sbwt binary with the libsais feature enabled: \
                  `cargo build --release --features \"tests libsais\"`."
             );
@@ -393,7 +393,7 @@ fn build_and_measure(cli: &Cli, params: &Params, combo_dir: &Path, algo: &Algori
 }
 
 /// Byte-compares every successful run's `.sbwt` and `.lcs` output against the first
-/// (baseline) run, printing a line per comparison. Returns a description of each mismatch.
+/// (baseline) run, logging a line per comparison. Returns a description of each mismatch.
 fn compare_outputs(successes: &[&AlgoRun]) -> Vec<String> {
     let mut mismatches = Vec::new();
     for ext in ["sbwt", "lcs"] {
@@ -407,12 +407,12 @@ fn compare_outputs(successes: &[&AlgoRun]) -> Vec<String> {
             let bytes = std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
             match first_difference(&baseline_bytes, &bytes) {
-                None => println!(
+                None => log::info!(
                     "{:<21} .{ext} matches {} ({} bytes)",
                     run.name, baseline.name, bytes.len()
                 ),
                 Some(offset) => {
-                    println!(
+                    log::error!(
                         "{:<21} .{ext} MISMATCH vs {} \
                          (first differing byte at offset {offset}, sizes {} vs {})",
                         run.name, baseline.name, baseline_bytes.len(), bytes.len()
@@ -425,8 +425,8 @@ fn compare_outputs(successes: &[&AlgoRun]) -> Vec<String> {
     mismatches
 }
 
-fn print_measurements(runs: &[AlgoRun]) {
-    println!("\n{:<21} {:>10} {:>14}", "algorithm", "time", "peak RSS");
+fn log_measurements(runs: &[AlgoRun]) {
+    log::info!("{:<21} {:>10} {:>14}", "algorithm", "time", "peak RSS");
     for r in runs {
         let time_str = common::format_duration(r.elapsed);
         let mem_str = match r.peak_rss_kb {
@@ -434,7 +434,7 @@ fn print_measurements(runs: &[AlgoRun]) {
             None => "n/a".to_string(),
         };
         let name = if r.success { r.name.to_string() } else { format!("{} (failed)", r.name) };
-        println!("{name:<21} {time_str:>10} {mem_str:>14}");
+        log::info!("{name:<21} {time_str:>10} {mem_str:>14}");
     }
 }
 
