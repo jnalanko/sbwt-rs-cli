@@ -3,7 +3,11 @@
 //! text - only ever searching for k-mers we already know about from a bounded-size source
 //! (a sequence file, or another index queried via a bounded-size sequence file).
 
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
+
 use jseqio::reader::DynamicFastXReader;
+use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
 use sbwt::*;
 
@@ -185,6 +189,59 @@ fn for_each_kmer_in_seq1_not_sbwt2(
     }
 }
 
+/// A fasta file used as a "seq1"/"seq2" source: either given directly by the caller, or
+/// generated (unitigs exported from an index, when the caller didn't have the original
+/// sequences on hand). Deletes the file on drop if it was generated and `keep` wasn't
+/// requested; never deletes a file the caller gave us. This runs even if the check later
+/// panics on a mismatch, since Rust still unwinds (and therefore still drops) by default.
+struct SeqSource {
+    path: PathBuf,
+    delete_on_drop: bool,
+}
+
+impl SeqSource {
+    fn given(path: &Path) -> Self {
+        SeqSource { path: path.to_path_buf(), delete_on_drop: false }
+    }
+
+    fn generated(path: PathBuf, keep: bool) -> Self {
+        SeqSource { path, delete_on_drop: !keep }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SeqSource {
+    fn drop(&mut self) {
+        if self.delete_on_drop {
+            log::info!("Deleting generated file {}", self.path.display());
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Exports the unitigs of `index` to `out_path` in FASTA format, for use as a substitute
+/// "original sequences" source when the caller didn't have them. Windowing a set of unitigs
+/// yields exactly the k-mer set of the index, without ever dumping every individual k-mer as
+/// text (which, unlike a handful of unitigs, could be enormous). Mirrors the same
+/// build_select + Dbg + parallel_export_unitigs sequence as `dump_unitigs` in `main.rs`, but
+/// takes `index` by mutable reference so the caller can keep using it afterwards.
+fn export_unitigs_to_file(index: &mut SbwtIndexVariant, lcs: Option<&LcsArray>, out_path: &Path, n_threads: usize) {
+    let mut out = BufWriter::new(std::fs::File::create(out_path).unwrap());
+    match index {
+        SbwtIndexVariant::SubsetMatrix(sbwt) => {
+            sbwt.build_select();
+            Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(&mut out, n_threads);
+        }
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+            sbwt.build_select();
+            Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(&mut out, n_threads);
+        }
+    }
+}
+
 /// Verification logic behind the `check-set-operation` subcommand; see
 /// `main.rs::check_set_operation_command` for the clap argument parsing that calls this.
 ///
@@ -193,19 +250,29 @@ fn for_each_kmer_in_seq1_not_sbwt2(
 /// from) rather than by enumerating `result`'s own k-mers, since `result` may be far too large
 /// to dump as text. Uses streaming search (via the `.lcs` file next to `sbwt2`, if present)
 /// when checking k-mer membership in `sbwt2`, falling back to plain per-k-mer search otherwise.
+///
+/// `seq1`/`seq2` are optional: seq1 is needed for every operation, and seq2 only for `merge`
+/// (intersect/difference never read it - see `for_each_kmer_in_seq1_and_sbwt2`/
+/// `for_each_kmer_in_seq1_not_sbwt2`, which only take sbwt2, not seq2). Whichever of those is
+/// needed but not given has its index's unitigs exported to `temp_dir` and used in its place;
+/// see `export_unitigs_to_file`.
+#[allow(clippy::too_many_arguments)]
 pub fn run_check_set_operation(
     op: &str,
-    seq1_path: &std::path::Path,
-    seq2_path: &std::path::Path,
-    sbwt1_path: &std::path::Path,
-    sbwt2_path: &std::path::Path,
-    result_path: &std::path::Path,
+    seq1_path: Option<&Path>,
+    seq2_path: Option<&Path>,
+    sbwt1_path: &Path,
+    sbwt2_path: &Path,
+    result_path: &Path,
     cpp_format: bool,
+    temp_dir: &Path,
+    keep_unitigs: bool,
+    n_threads: usize,
 ) {
     log::info!("Loading sbwt1 from {}", sbwt1_path.display());
-    let index1 = load_index(sbwt1_path, cpp_format);
+    let mut index1 = load_index(sbwt1_path, cpp_format);
     log::info!("Loading sbwt2 from {}", sbwt2_path.display());
-    let index2 = load_index(sbwt2_path, cpp_format);
+    let mut index2 = load_index(sbwt2_path, cpp_format);
     log::info!("Loading result index from {}", result_path.display());
     let mut result = load_index(result_path, cpp_format);
 
@@ -217,6 +284,33 @@ pub fn run_check_set_operation(
         &default_lcs_path(sbwt2_path),
         "falling back to non-streaming search against sbwt2",
     );
+
+    // seq1 is needed regardless of --op.
+    let seq1_source = match seq1_path {
+        Some(p) => SeqSource::given(p),
+        None => {
+            std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
+            let lcs1 = load_lcs_if_exists(&default_lcs_path(sbwt1_path), "no LCS for sbwt1 -> unitig export will be slower");
+            let path = temp_dir.join("check-set-operation-seq1-unitigs.fasta");
+            log::info!("--seq1 not given; exporting unitigs of sbwt1 to {}", path.display());
+            export_unitigs_to_file(&mut index1, lcs1.as_ref(), &path, n_threads);
+            SeqSource::generated(path, keep_unitigs)
+        }
+    };
+
+    // seq2 is only read by the "merge" branch below, so only resolve it (and pay for unitig
+    // export, if needed) when it's actually going to be used.
+    let seq2_source = (op == "merge").then(|| match seq2_path {
+        Some(p) => SeqSource::given(p),
+        None => {
+            std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
+            let path = temp_dir.join("check-set-operation-seq2-unitigs.fasta");
+            log::info!("--seq2 not given; exporting unitigs of sbwt2 to {}", path.display());
+            export_unitigs_to_file(&mut index2, lcs2.as_ref(), &path, n_threads);
+            SeqSource::generated(path, keep_unitigs)
+        }
+    });
+
     let streaming2 = lcs2.as_ref().map(|lcs| index2.get_streaming_index(lcs));
 
     // Pre-marks dummy nodes as visited, same as `check_command`: a node is only "unexpected"
@@ -236,16 +330,16 @@ pub fn run_check_set_operation(
     match op {
         "merge" => {
             log::info!("Checking that every k-mer of seq1 and of seq2 is in the result (union)");
-            for_each_valid_kmer(seq1_path, k, &mut expect_in_result);
-            for_each_valid_kmer(seq2_path, k, &mut expect_in_result);
+            for_each_valid_kmer(seq1_source.path(), k, &mut expect_in_result);
+            for_each_valid_kmer(seq2_source.as_ref().unwrap().path(), k, &mut expect_in_result);
         }
         "intersect" => {
             log::info!("Checking that every k-mer of seq1 that's also in sbwt2 is in the result (intersection)");
-            for_each_kmer_in_seq1_and_sbwt2(seq1_path, k, &index2, streaming2.as_ref(), &mut expect_in_result);
+            for_each_kmer_in_seq1_and_sbwt2(seq1_source.path(), k, &index2, streaming2.as_ref(), &mut expect_in_result);
         }
         "difference" => {
             log::info!("Checking that every k-mer of seq1 that's not in sbwt2 is in the result (seq1 \\ seq2)");
-            for_each_kmer_in_seq1_not_sbwt2(seq1_path, k, &index2, streaming2.as_ref(), &mut expect_in_result);
+            for_each_kmer_in_seq1_not_sbwt2(seq1_source.path(), k, &index2, streaming2.as_ref(), &mut expect_in_result);
         }
         other => {
             eprintln!("error: unknown --op '{other}', expected one of: merge, intersect, difference");
