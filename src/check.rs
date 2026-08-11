@@ -1,8 +1,3 @@
-//! `check` and `check-set-operation`: verifying that an SBWT index has exactly the k-mer set
-//! it's supposed to have, without ever dumping an index's own (possibly huge) k-mer set as
-//! text - only ever searching for k-mers we already know about from a bounded-size source
-//! (a sequence file, or another index queried via a bounded-size sequence file).
-
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
@@ -13,8 +8,6 @@ use sbwt::*;
 
 use crate::{default_lcs_path, load_index, load_lcs_if_exists};
 
-/// Verification logic behind the `check` subcommand; see `main.rs::check_command` for the
-/// clap argument parsing that calls this.
 pub fn run_check(
     index_path: &std::path::Path,
     cpp_format: bool,
@@ -104,8 +97,6 @@ pub fn run_check(
 
 }
 
-/// Calls `visit(kmer)` for every ACGT-only k-mer window across every record in the
-/// fasta/fastq file at `path`.
 fn for_each_valid_kmer(path: &std::path::Path, k: usize, visit: &mut impl FnMut(&[u8])) {
     let mut reader = DynamicFastXReader::from_file(&path).unwrap();
     while let Some(rec) = reader.read_next().unwrap() {
@@ -117,10 +108,6 @@ fn for_each_valid_kmer(path: &std::path::Path, k: usize, visit: &mut impl FnMut(
     }
 }
 
-/// Calls `expect_in_result(kmer)` for every ACGT-only k-mer window of `seq1_path` that is also
-/// present in `sbwt2` (used to verify `result = intersect(sbwt1, sbwt2)`). Uses `streaming2`
-/// for a single streaming pass per record when available (much faster than searching from
-/// scratch for every k-mer), or falls back to a plain per-k-mer search against `sbwt2`.
 fn for_each_kmer_in_seq1_and_sbwt2(
     seq1_path: &std::path::Path,
     k: usize,
@@ -153,10 +140,6 @@ fn for_each_kmer_in_seq1_and_sbwt2(
     }
 }
 
-/// Calls `expect_in_result(kmer)` for every ACGT-only k-mer window of `seq1_path` that is NOT
-/// present in `sbwt2` (used to verify `result = difference(sbwt1, sbwt2)`, i.e. seq1 \ seq2).
-/// Uses `streaming2` for a single streaming pass per record when available, or falls back to a
-/// plain per-k-mer search against `sbwt2`.
 fn for_each_kmer_in_seq1_not_sbwt2(
     seq1_path: &std::path::Path,
     k: usize,
@@ -188,12 +171,6 @@ fn for_each_kmer_in_seq1_not_sbwt2(
         }
     }
 }
-
-/// A fasta file used as a "seq1"/"seq2" source: either given directly by the caller, or
-/// generated (unitigs exported from an index, when the caller didn't have the original
-/// sequences on hand). Deletes the file on drop if it was generated and `keep` wasn't
-/// requested; never deletes a file the caller gave us. This runs even if the check later
-/// panics on a mismatch, since Rust still unwinds (and therefore still drops) by default.
 struct SeqSource {
     path: PathBuf,
     delete_on_drop: bool,
@@ -222,12 +199,6 @@ impl Drop for SeqSource {
     }
 }
 
-/// Exports the unitigs of `index` to `out_path` in FASTA format, for use as a substitute
-/// "original sequences" source when the caller didn't have them. Windowing a set of unitigs
-/// yields exactly the k-mer set of the index, without ever dumping every individual k-mer as
-/// text (which, unlike a handful of unitigs, could be enormous). Mirrors the same
-/// build_select + Dbg + parallel_export_unitigs sequence as `dump_unitigs` in `main.rs`, but
-/// takes `index` by mutable reference so the caller can keep using it afterwards.
 fn export_unitigs_to_file(index: &mut SbwtIndexVariant, lcs: Option<&LcsArray>, out_path: &Path, n_threads: usize) {
     let mut out = BufWriter::new(std::fs::File::create(out_path).unwrap());
     match index {
@@ -242,21 +213,6 @@ fn export_unitigs_to_file(index: &mut SbwtIndexVariant, lcs: Option<&LcsArray>, 
     }
 }
 
-/// Verification logic behind the `check-set-operation` subcommand; see
-/// `main.rs::check_set_operation_command` for the clap argument parsing that calls this.
-///
-/// Verifies that `result` (claimed to be `sbwt1 <op> sbwt2`) contains exactly the expected
-/// k-mer set, computed from `seq1`/`seq2` (the original sequences `sbwt1`/`sbwt2` were built
-/// from) rather than by enumerating `result`'s own k-mers, since `result` may be far too large
-/// to dump as text. Uses streaming search (via the `.lcs` file next to `sbwt2`, if present)
-/// when checking k-mer membership in `sbwt2`, falling back to plain per-k-mer search otherwise.
-///
-/// `seq1`/`seq2` are optional: seq1 is needed for every operation, and seq2 only for `merge`
-/// (intersect/difference never read it - see `for_each_kmer_in_seq1_and_sbwt2`/
-/// `for_each_kmer_in_seq1_not_sbwt2`, which only take sbwt2, not seq2). Whichever of those is
-/// needed but not given has its index's unitigs exported to `temp_dir` and used in its place;
-/// see `export_unitigs_to_file`.
-#[allow(clippy::too_many_arguments)]
 pub fn run_check_set_operation(
     op: &str,
     seq1_path: Option<&Path>,
