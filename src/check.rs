@@ -97,17 +97,6 @@ pub fn run_check(
 
 }
 
-fn for_each_valid_kmer(path: &std::path::Path, k: usize, callback: &mut impl FnMut(&[u8])) {
-    let mut reader = DynamicFastXReader::from_file(&path).unwrap();
-    while let Some(rec) = reader.read_next().unwrap() {
-        for kmer in rec.seq.windows(k) {
-            if kmer.iter().all(|&c| is_dna(c)) {
-                callback(kmer);
-            }
-        }
-    }
-}
-
 fn lookup_each_valid_kmer_nonstreaming_and_callback (
     seq1_path: &std::path::Path,
     index2: &SbwtIndexVariant,
