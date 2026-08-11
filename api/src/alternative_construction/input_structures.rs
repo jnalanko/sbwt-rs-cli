@@ -18,6 +18,7 @@ const fn make_char_to_index_table() -> [usize; TABLE_SIZE] {
     table
 }
 
+#[derive(Debug)]
 pub struct Bwt {
     pub data: Vec<BitVector>,
     pub counts: [usize; 5],
@@ -112,6 +113,7 @@ impl Bwt {
     }
 }
 
+#[derive(Debug)]
 pub struct Lcp {
     data: Vec<u8>,
     len: usize,

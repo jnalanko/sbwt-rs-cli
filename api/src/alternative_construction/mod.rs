@@ -757,50 +757,91 @@ pub(crate) fn par_build_full_auxiliary_data(
         }
     });
 
-    // note(mk): Perhaps a bit more time can be reduced here if the conversion of the different
-    // structures is done on separate threads.
-
-    log::info!("[par_build_full_auxiliary_data] bwt");
-    let bwt_bit_vectors = bwt_vectors.into_iter()
-        .map(|value| {
-            let intermediate = convert_atomic_bitmap(value);
-            BitVector::from(intermediate)
-        })
-        .collect::<Vec<_>>();
-    let bwtk = Bwt::new(bwt_bit_vectors);
-
-    log::info!("[par_build_full_auxiliary_data] lcp");
-    let mut collected_lcp_data = Vec::<u8>::with_capacity(length * lcp_width);
-    for lcp in lcp_result.lock().unwrap().iter_mut() {
-        let bytes: Vec<u8> = lcp.take().unwrap().into();
-        collected_lcp_data.extend_from_slice(&bytes);
-    }
-    let lcp = Lcp::new_with_width(collected_lcp_data, lcp_width);
+    use rayon::prelude::*;
 
     fn convert_atomic_bitmap(value: AtomicBitmap) -> RawVector {
         let intermediate = value.into_bitvec_u64();
         crate::util::bitvec_to_simple_sds_raw_bitvec(intermediate)
     }
 
-    let shorter_than_k     = convert_atomic_bitmap(shorter_than_k);
-    let equal_to_k         = convert_atomic_bitmap(equal_to_k);
+    let mut bwt_op = None;
+    let mut lcp_op = None;
+    let mut shorter_than_k_op     = None;
+    let mut equal_to_k_op         = None;
+    let mut k_minus_one_ranges_op = None;
+    let mut k_ranges_op           = None;
 
-    log::info!("[par_build_full_auxiliary_data] k_minus_one_ranges");
-    let k_minus_one_ranges = convert_atomic_bitmap(k_minus_one_ranges);
-    let mut k_minus_one_ranges = BitVector::from(k_minus_one_ranges);
-    k_minus_one_ranges.enable_rank();
-    k_minus_one_ranges.enable_select();
+    rayon::scope(|s| {
+        s.spawn(|_| {
+            log::info!("[par_build_full_auxiliary_data] bwt begin");
+            let bwt_bit_vectors = bwt_vectors.into_par_iter()
+                .map(|value| {
+                    let intermediate = convert_atomic_bitmap(value);
+                    BitVector::from(intermediate)
+                })
+                .collect::<Vec<_>>();
+            let bwt = Bwt::new(bwt_bit_vectors);
+            bwt_op = Some(bwt);
+            log::info!("[par_build_full_auxiliary_data] bwt done");
+        });
 
-    let k_ranges           = convert_atomic_bitmap(k_ranges);
+        s.spawn(|_| {
+            log::info!("[par_build_full_auxiliary_data] lcp begin");
+            let mut collected_lcp_data = vec![0_u8; length * lcp_width];
+            let mut slice: &mut [u8] = &mut collected_lcp_data;
+            rayon::scope(|s| {
+                let lcp_result = {
+                    let mutex = Arc::try_unwrap(lcp_result).unwrap();
+                    mutex.into_inner().unwrap()
+                };
+                for lcp in lcp_result.into_iter() {
+                    let bytes: Vec<u8> = lcp.unwrap().into();
+                    let (destination_slice, the_rest) = slice.split_at_mut(bytes.len());
+                    slice = the_rest;
+                    s.spawn(move |_| {
+                        destination_slice.copy_from_slice(&bytes);
+                    });
+                }
+            });
+            let lcp = Lcp::new_with_width(collected_lcp_data, lcp_width);
+            lcp_op = Some(lcp);
+            log::info!("[par_build_full_auxiliary_data] lcp done");
+        });
+
+        s.spawn(|_| {
+            let shorter_than_k = convert_atomic_bitmap(shorter_than_k);
+            shorter_than_k_op = Some(shorter_than_k);
+        });
+
+        s.spawn(|_| {
+            let equal_to_k = convert_atomic_bitmap(equal_to_k);
+            equal_to_k_op = Some(equal_to_k);
+        });
+
+        s.spawn(|_| {
+            let k_ranges = convert_atomic_bitmap(k_ranges);
+            k_ranges_op = Some(k_ranges);
+        });
+
+        s.spawn(|_| {
+            log::info!("[par_build_full_auxiliary_data] k_minus_one_ranges begin");
+            let k_minus_one_ranges = convert_atomic_bitmap(k_minus_one_ranges);
+            let mut k_minus_one_ranges = BitVector::from(k_minus_one_ranges);
+            k_minus_one_ranges.enable_rank();
+            k_minus_one_ranges.enable_select();
+            k_minus_one_ranges_op = Some(k_minus_one_ranges);
+            log::info!("[par_build_full_auxiliary_data] k_minus_one_ranges done");
+        });
+    });
 
     FullAuxiliaryData {
         kmer_count: kmer_count.load(std::sync::atomic::Ordering::Relaxed),
-        bwt: bwtk,
-        lcp,
-        shorter_than_k,
-        equal_to_k_minus_one_or_k: equal_to_k,
-        k_minus_one_ranges,
-        k_ranges
+        bwt: bwt_op.unwrap(),
+        lcp: lcp_op.unwrap(),
+        shorter_than_k            : shorter_than_k_op.unwrap(),
+        equal_to_k_minus_one_or_k : equal_to_k_op.unwrap(),
+        k_minus_one_ranges        : k_minus_one_ranges_op.unwrap(),
+        k_ranges                  : k_ranges_op.unwrap(),
     }
 }
 
