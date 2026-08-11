@@ -992,6 +992,13 @@ fn check_set_operation_command(matches: &clap::ArgMatches) {
     let keep_unitigs = matches.get_flag("keep-unitigs");
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
 
+    let op = match op {
+        "merge" => check::SetOperation::Union,
+        "intersect" => check::SetOperation::Intersection,
+        "difference" => check::SetOperation::Difference,
+        _ => panic!("Unkown set operation {op}"),
+    };
+
     check::run_check_set_operation(
         op, seq1_path, seq2_path, sbwt1_path, sbwt2_path, result_path, cpp_format,
         temp_dir, keep_unitigs, n_threads,
