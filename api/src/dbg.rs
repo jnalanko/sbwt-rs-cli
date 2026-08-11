@@ -316,7 +316,6 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     }
 
     /// Writes the unitigs of the graph to the given writer in FASTA format.
-    /// Uses as many threads as are available with the Rayon initialization.
     pub fn parallel_export_unitigs<W: Write + Send + Sync>(&self, fasta_out: W, n_threads: usize){
         let unitig_id = 0_usize;
         let shared_data = Arc::new(Mutex::new((fasta_out, unitig_id)));
