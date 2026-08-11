@@ -1,4 +1,6 @@
-use crate::{LcsArray, PrefixLookupTable, SbwtIndex, StreamingIndex, SubsetCorrectionSets, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector};
+use std::io::Write;
+
+use crate::{LcsArray, PrefixLookupTable, SbwtIndex, StreamingIndex, SubsetCorrectionSets, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector, dbg::Dbg};
 
 
 /// An enum listing SbwtIndex types built on different subset rank implementations provided in this crate. 
@@ -148,6 +150,20 @@ impl SbwtIndexVariant {
 
     pub fn get_streaming_index<'a>(&'a self, lcs: &'a LcsArray) -> StreamingIndex<'a, Self, LcsArray> {
         StreamingIndex{contract_left: lcs, extend_right: self, n: self.n_sets(), k: self.k()}
+    }
+
+    // &mut self because needs to build select support if it does not exist.
+    pub fn parallel_export_unitigs<W: Write + Send + Sync>(&mut self, out: &mut W, lcs: Option<&LcsArray>, n_threads: usize) {
+        match self {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => {
+                sbwt.build_select();
+                Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(out, n_threads);
+            }
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+                sbwt.build_select();
+                Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(out, n_threads);
+            }
+        }
     }
 }
 

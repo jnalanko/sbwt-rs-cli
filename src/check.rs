@@ -171,47 +171,6 @@ fn for_each_kmer_in_seq1_not_sbwt2(
         }
     }
 }
-struct SeqSource {
-    path: PathBuf,
-    delete_on_drop: bool,
-}
-
-impl SeqSource {
-    fn given(path: &Path) -> Self {
-        SeqSource { path: path.to_path_buf(), delete_on_drop: false }
-    }
-
-    fn generated(path: PathBuf, keep: bool) -> Self {
-        SeqSource { path, delete_on_drop: !keep }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for SeqSource {
-    fn drop(&mut self) {
-        if self.delete_on_drop {
-            log::info!("Deleting generated file {}", self.path.display());
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
-fn export_unitigs_to_file(index: &mut SbwtIndexVariant, lcs: Option<&LcsArray>, out_path: &Path, n_threads: usize) {
-    let mut out = BufWriter::new(std::fs::File::create(out_path).unwrap());
-    match index {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => {
-            sbwt.build_select();
-            Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(&mut out, n_threads);
-        }
-        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
-            sbwt.build_select();
-            Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(&mut out, n_threads);
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SetOperation {
@@ -220,67 +179,33 @@ pub enum SetOperation {
     Difference,
 }
 
-pub fn run_check_set_operation(
+pub struct InputTriple<'a> {
+    pub source_seqs: PathBuf,
+    pub index: &'a SbwtIndexVariant,
+    pub lcs: &'a LcsArray,
+}
+
+pub fn run_check_set_operation<'a>(
     op: SetOperation,
-    seq1_path: Option<&Path>,
-    seq2_path: Option<&Path>,
-    sbwt1_path: &Path,
-    sbwt2_path: &Path,
-    result_path: &Path,
-    cpp_format: bool,
-    temp_dir: &Path,
-    keep_unitigs: bool,
-    n_threads: usize,
+    input1: InputTriple<'a>,
+    input2: InputTriple<'a>,
+    result_index: &mut SbwtIndexVariant,
 ) {
-    log::info!("Loading sbwt1 from {}", sbwt1_path.display());
-    let mut index1 = load_index(sbwt1_path, cpp_format);
-    log::info!("Loading sbwt2 from {}", sbwt2_path.display());
-    let mut index2 = load_index(sbwt2_path, cpp_format);
-    log::info!("Loading result index from {}", result_path.display());
-    let mut result = load_index(result_path, cpp_format);
+
+    let (index1, seq1_source, lcs1) = (input1.index, input1.source_seqs, input1.lcs);
+    let (index2, seq2_source, lcs2) = (input2.index, input2.source_seqs, input2.lcs);
+    let _streaming1 = index1.get_streaming_index(lcs1);
+    let streaming2 = index2.get_streaming_index(lcs2);
 
     let k = index1.k();
     assert_eq!(k, index2.k(), "sbwt1 and sbwt2 must have the same k");
-    assert_eq!(k, result.k(), "the result index must have the same k as sbwt1/sbwt2");
-
-    let lcs2 = load_lcs_if_exists(
-        &default_lcs_path(sbwt2_path),
-        "falling back to non-streaming search against sbwt2",
-    );
-
-    // seq1 is needed regardless of --op.
-    let seq1_source = match seq1_path {
-        Some(p) => SeqSource::given(p),
-        None => {
-            std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
-            let lcs1 = load_lcs_if_exists(&default_lcs_path(sbwt1_path), "no LCS for sbwt1 -> unitig export will be slower");
-            let path = temp_dir.join("check-set-operation-seq1-unitigs.fasta");
-            log::info!("--seq1 not given; exporting unitigs of sbwt1 to {}", path.display());
-            export_unitigs_to_file(&mut index1, lcs1.as_ref(), &path, n_threads);
-            SeqSource::generated(path, keep_unitigs)
-        }
-    };
-
-    // seq2 is only read by the "merge" branch below, so only resolve it (and pay for unitig
-    // export, if needed) when it's actually going to be used.
-    let seq2_source = (op == SetOperation::Union).then(|| match seq2_path {
-        Some(p) => SeqSource::given(p),
-        None => {
-            std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
-            let path = temp_dir.join("check-set-operation-seq2-unitigs.fasta");
-            log::info!("--seq2 not given; exporting unitigs of sbwt2 to {}", path.display());
-            export_unitigs_to_file(&mut index2, lcs2.as_ref(), &path, n_threads);
-            SeqSource::generated(path, keep_unitigs)
-        }
-    });
-
-    let streaming2 = lcs2.as_ref().map(|lcs| index2.get_streaming_index(lcs));
+    assert_eq!(k, result_index.k(), "the result index must have the same k as sbwt1/sbwt2");
 
     // Pre-marks dummy nodes as visited, same as `check_command`: a node is only "unexpected"
     // at the end if it's a real (non-dummy) k-mer that never got marked below.
-    let mut visited_marks = result.compute_dummy_node_marks();
+    let mut visited_marks = result_index.compute_dummy_node_marks();
     let mut expect_in_result = |kmer: &[u8]| {
-        let colex = result.search(kmer).unwrap_or_else(|| {
+        let colex = result_index.search(kmer).unwrap_or_else(|| {
             panic!(
                 "expected k-mer {} to be in the result index (op={op:?}), but it was not found",
                 String::from_utf8_lossy(kmer)
@@ -293,24 +218,24 @@ pub fn run_check_set_operation(
     match op {
         SetOperation::Union => {
             log::info!("Checking that every k-mer of seq1 and of seq2 is in the result (union)");
-            for_each_valid_kmer(seq1_source.path(), k, &mut expect_in_result);
-            for_each_valid_kmer(seq2_source.as_ref().unwrap().path(), k, &mut expect_in_result);
+            for_each_valid_kmer(&seq1_source, k, &mut expect_in_result);
+            for_each_valid_kmer(&seq2_source, k, &mut expect_in_result);
         }
         SetOperation::Intersection => {
             log::info!("Checking that every k-mer of seq1 that's also in sbwt2 is in the result (intersection)");
-            for_each_kmer_in_seq1_and_sbwt2(seq1_source.path(), k, &index2, streaming2.as_ref(), &mut expect_in_result);
+            for_each_kmer_in_seq1_and_sbwt2(&seq1_source, k, &index2, Some(&streaming2), &mut expect_in_result);
         }
         SetOperation::Difference => {
             log::info!("Checking that every k-mer of seq1 that's not in sbwt2 is in the result (seq1 \\ seq2)");
-            for_each_kmer_in_seq1_not_sbwt2(seq1_source.path(), k, &index2, streaming2.as_ref(), &mut expect_in_result);
+            for_each_kmer_in_seq1_not_sbwt2(&seq1_source, k, &index2, Some(&streaming2), &mut expect_in_result);
         }
     }
 
     if visited_marks.count_ones() != visited_marks.len() {
         log::info!("Result index has an unexpected k-mer. Fetching it...");
-        result.build_select();
+        result_index.build_select();
         let unvisited = visited_marks.first_zero().unwrap();
-        let kmer = result.access_kmer(unvisited);
+        let kmer = result_index.access_kmer(unvisited);
         panic!(
             "result index has k-mer {}, which should not be in the {op:?} of the given sequences",
             String::from_utf8_lossy(&kmer)
