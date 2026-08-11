@@ -5,10 +5,12 @@ use std::io::stdout;
 use std::io::BufRead;
 use std::io::BufWriter;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use bitvec::prelude::*;
 use jseqio::reader::DynamicFastXReader;
 use jseqio::reader::SeqStreamWithRevComp;
+use rand::Rng;
 use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
 use sbwt::*;
@@ -104,6 +106,20 @@ fn load_lcs_if_exists(lcs_path: &std::path::Path, not_found_message: &str) -> Op
         Err(_) => {
             log::info!("No LCS array found at {} -> {}", lcs_path.display(), not_found_message);
             None
+        }
+    }
+}
+
+fn load_lcs_or_build_otherwise(lcs_path: &std::path::Path, sbwt: &SbwtIndexVariant, n_threads: usize, optimize_peak_ram: bool) -> LcsArray {
+    match std::fs::File::open(lcs_path) {
+        Ok(f) => {
+            log::info!("Loading LCS array from file {}", lcs_path.display());
+            let mut lcs_reader = std::io::BufReader::new(f);
+            LcsArray::load(&mut lcs_reader).unwrap()
+        }
+        Err(_) => {
+            log::info!("No LCS array found at {} -> building", lcs_path.display());
+            sbwt.build_lcs(n_threads, optimize_peak_ram)
         }
     }
 }
@@ -979,6 +995,81 @@ fn check_command(matches: &clap::ArgMatches) {
 
     check::run_check(index_path, cpp_format, invariant_check, original_sequences, add_revcomp);
 }
+pub struct TempFileManager {
+    directory: PathBuf,
+    rng: rand::rngs::StdRng,
+}
+
+#[derive(Debug)]
+pub struct TempFilePath {
+    path: PathBuf,
+    delete_on_drop: bool,
+}
+
+impl Drop for TempFilePath {
+    fn drop(&mut self) {
+        if self.delete_on_drop {
+            log::trace!("Dropping temp file {}", self.path.display());
+            std::fs::remove_file(&self.path).unwrap();
+        } else {
+            log::trace!("Keeping temp file {} on drop", self.path.display());
+        }
+    }
+}
+
+impl TempFilePath {
+
+    // Does not check if the filename is taken
+    fn pick_random_filename(dir: &Path, prefix: &str, random_infix_length: usize, suffix: &str) -> PathBuf {
+        let mut random_part = String::new();
+        for _ in 0..random_infix_length {
+            let r = rand::random_range(0..26);
+            let c = b'a' + r; // Random character from a..z
+            random_part.push(c as char);
+        }
+
+        let mut fname = String::new();
+        fname.push_str(prefix);
+        fname.push_str(&random_part);
+        fname.push_str(suffix);
+
+        let mut path = dir.to_path_buf();
+        path.push(fname);
+        path
+    }
+
+    // Pick random filenames with the given parameters until it finds one that is free
+    fn new(dir: &Path, prefix: &str, random_infix_length: usize, suffix: &str, delete_on_drop: bool) -> Self {
+        let mut path = Self::pick_random_filename(dir, prefix, random_infix_length, suffix);
+        let mut file = std::fs::File::create_new(&path);
+
+        while let Err(e) = file {
+            match e.kind() {
+                std::io::ErrorKind::AlreadyExists => {
+                    // Try again
+                    log::warn!("Temporary filename collision {}, trying again...", path.display());
+                    path = Self::pick_random_filename(dir, prefix, random_infix_length, suffix);
+                    file = std::fs::File::create_new(&path);
+
+                },
+                _ => panic!("Error creating temp file: {} {}", path.display(), e),
+            }
+        }
+
+        log::trace!("Creating temp file {}", path.display());
+        Self{ path, delete_on_drop }
+
+    }
+}
+
+fn unitigs_to_tempfile(index: &mut SbwtIndexVariant, lcs: &LcsArray, temp_dir: &Path, n_threads: usize, delete_on_drop: bool) -> TempFilePath {
+    std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
+    let unitigs_path = TempFilePath::new(temp_dir, "unitigs", 8, ".fna", delete_on_drop);
+    log::info!("Exporting unitigs of to {}", unitigs_path.path.display());
+    let mut unitigs_out = BufWriter::new(File::open(&unitigs_path.path).unwrap());
+    index.parallel_export_unitigs(&mut unitigs_out, Some(lcs), n_threads);
+    unitigs_path
+}
 
 fn check_set_operation_command(matches: &clap::ArgMatches) {
     let op = matches.get_one::<String>("op").unwrap().as_str();
@@ -992,6 +1083,8 @@ fn check_set_operation_command(matches: &clap::ArgMatches) {
     let keep_unitigs = matches.get_flag("keep-unitigs");
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
 
+    std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
+
     let op = match op {
         "merge" => check::SetOperation::Union,
         "intersect" => check::SetOperation::Intersection,
@@ -999,10 +1092,35 @@ fn check_set_operation_command(matches: &clap::ArgMatches) {
         _ => panic!("Unkown set operation {op}"),
     };
 
-    check::run_check_set_operation(
-        op, seq1_path, seq2_path, sbwt1_path, sbwt2_path, result_path, cpp_format,
-        temp_dir, keep_unitigs, n_threads,
+    log::info!("Loading sbwt1 from {}", sbwt1_path.display());
+    let mut index1 = load_index(sbwt1_path, cpp_format);
+    log::info!("Loading sbwt2 from {}", sbwt2_path.display());
+    let mut index2 = load_index(sbwt2_path, cpp_format);
+    log::info!("Loading result index from {}", result_path.display());
+    let mut result_index = load_index(result_path, cpp_format);
+
+    let lcs1 = load_lcs_or_build_otherwise(
+        &default_lcs_path(sbwt1_path), &index1, n_threads, false // TODO: flag to optimize peak RAM
     );
+
+    let lcs2 = load_lcs_or_build_otherwise(
+        &default_lcs_path(sbwt2_path), &index2, n_threads, false // TODO: flag to optimize peak RAM
+    );
+
+    let seq1_source = match seq1_path {
+        Some(p) => TempFilePath{path: p.to_path_buf(), delete_on_drop: false}, // Never delete existing seq file
+        None => { unitigs_to_tempfile(&mut index1, &lcs1, temp_dir, n_threads, !keep_unitigs) }
+    };
+
+    let seq2_source = match seq2_path {
+        Some(p) => TempFilePath{path: p.to_path_buf(), delete_on_drop: false}, // Never delete existing seq file
+        None => { unitigs_to_tempfile(&mut index2, &lcs2, temp_dir, n_threads, !keep_unitigs) }
+    };
+
+    check::run_check_set_operation(op, 
+        check::InputTriple{ source_seqs: seq1_source.path.to_path_buf(), index: &index1, lcs: &lcs1 }, 
+        check::InputTriple{ source_seqs: seq2_source.path.to_path_buf(), index: &index2, lcs: &lcs2 }, 
+        &mut result_index)
 }
 
 fn transform_index_command(matches: &clap::ArgMatches) {
