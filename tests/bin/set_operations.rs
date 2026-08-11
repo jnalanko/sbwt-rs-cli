@@ -5,23 +5,14 @@ use std::time::Duration;
 use crate::common;
 use crate::common::TimedRun;
 
-/// One `--input` (a sequence file to build) or `--sbwt-input` (a prebuilt SBWT to use as-is).
-enum Source {
-    Seq(PathBuf),
-    Sbwt(PathBuf),
-}
-
-impl Source {
-    fn path(&self) -> &Path {
-        match self {
-            Source::Seq(p) | Source::Sbwt(p) => p,
-        }
-    }
+enum Inputs {
+    Sbwts(Vec<PathBuf>),
+    Seqs(Vec<PathBuf>),
 }
 
 /// Fully parsed and validated configuration for a `set-operations` run.
 struct Cli {
-    inputs: Vec<Source>,
+    inputs: Inputs,
     build_args: Vec<String>,
     sbwt_bin: PathBuf,
     out_dir: PathBuf,
@@ -46,16 +37,12 @@ struct ReportRow {
 /// them, verifying each result with `sbwt check-set-operation`.
 #[derive(clap::Args)]
 pub struct Args {
-    /// Input fasta/fastq sequence file to build into an SBWT. Give at least twice, once per
-    /// SBWT; unlike `build`'s --input-list, each occurrence here produces its own separate
-    /// SBWT rather than being merged into one. Mutually exclusive with --sbwt-input.
-    #[arg(short, long, conflicts_with = "sbwt_input")]
-    input: Vec<PathBuf>,
 
-    /// A prebuilt SBWT file to use as-is, skipping the build step. Give at least twice.
-    /// Mutually exclusive with --input.
-    #[arg(long)]
-    sbwt_input: Vec<PathBuf>,
+    #[arg(long, conflicts_with = "sbwt_input", num_args = 2.., help = "Give either this or sbwt-inputs.")]
+    seqfiles: Option<Vec<PathBuf>>,
+
+    #[arg(long, num_args = 2.., help = "Give either this or --seqfiles.")]
+    sbwt_inputs: Option<Vec<PathBuf>>,
 
     /// Extra arguments passed to every `sbwt build` invocation, split on whitespace (no
     /// quoting support), e.g. --build-args "-k 31 --add-revcomp". `sbwt build` has no default
@@ -105,22 +92,16 @@ pub struct Args {
 /// exclusive by clap), all of which must exist, plus a resolvable `sbwt` binary and a
 /// creatable `--out-dir`.
 fn parse_args(args: Args) -> Cli {
-    let inputs: Vec<Source> = args.input.into_iter().map(Source::Seq)
-        .chain(args.sbwt_input.into_iter().map(Source::Sbwt))
-        .collect();
-    if inputs.len() < 2 {
-        log::error!(
-            "--input or --sbwt-input must be given at least twice \
-             (need at least 2 SBWTs to run set operations between)"
-        );
-        std::process::exit(2);
-    }
-    for source in &inputs {
-        if !source.path().is_file() {
-            log::error!("input file {} does not exist", source.path().display());
-            std::process::exit(2);
-        }
-    }
+
+    let inputs = if let Some(seqfiles) = args.seqfiles {
+        assert!(seqfiles.len() >= 2);
+        Inputs::Seqs(seqfiles)
+    } else if let Some(sbwts) = args.sbwt_inputs {
+        assert!(sbwts.len() >= 2);
+        Inputs::Sbwts(sbwts)
+    } else {
+        panic!("Must give either --seqfiles or --sbwts");
+    };
 
     let build_args: Vec<String> = args.build_args
         .split_whitespace()
@@ -178,14 +159,6 @@ pub fn run(args: Args) {
     let cli = parse_args(args);
 
     log::info!("sbwt executable: {}", cli.sbwt_bin.display());
-    log::info!("inputs:          {}", cli.inputs.len());
-    for source in &cli.inputs {
-        let tag = match source {
-            Source::Seq(_) => "seq",
-            Source::Sbwt(_) => "sbwt",
-        };
-        log::info!("  - [{tag}] {}", source.path().display());
-    }
     log::info!("output dir:      {}", cli.out_dir.display());
     log::info!("build args:      {:?}", cli.build_args);
     log::info!("threads = {}, keep = {}, verbose = {}", cli.threads, cli.keep, cli.verbose);
@@ -195,6 +168,23 @@ pub fn run(args: Args) {
     // later step hangs.
     init_report(&cli.report_path).expect("failed to create report");
     log::info!("report:          {} (appended to as each step finishes)", cli.report_path.display());
+
+    let (seqfiles, sbwts) = match cli.inputs {
+        Inputs::Sbwts(sbwts) => {
+            // SBWTs given, build seqfiles
+            let seqfiles: Vec<PathBuf> = sbwts.iter().enumerate().map(|(i, sbwt_file)| {
+                build_unitigs(&cli, i, sbwt_file)
+            }).collect();
+            (seqfiles, sbwts)
+        },
+        Inputs::Seqs(seqfiles) => {
+            // Seqfiles given, build SBWTs
+            let sbwts: Vec<PathBuf> = seqfiles.iter().enumerate().map(|(i, seqfile)| {
+                build_one(&cli, i, seqfile)
+            }).collect();
+            (seqfiles, sbwts)
+        },
+    };
 
     let sbwts: Vec<PathBuf> = cli.inputs.iter().enumerate()
         .map(|(i, source)| build_one(&cli, i, source))
@@ -228,29 +218,54 @@ fn run_pair(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2
     if !run_op(cli, op, i, sbwt1, j, sbwt2, output) {
         return false;
     }
-    check_op(cli, op, i, sbwt1, j, sbwt2, output)
+    check_op(cli, op, i, seqs1, sbwt1, j, seqs2, sbwt2, output)
+}
+
+/// Returns a fasta file of the unitigs of the `index`-th `--sbwt-input`, dumped with
+/// `sbwt dump-unitigs` and wrapped in `/usr/bin/time -v`. This is the stand-in for the original
+/// sequence file, which a prebuilt SBWT doesn't come with: it spells the same k-mer set, which
+/// is all the later steps need. Exits the process if the dump fails, since every later step
+/// depends on it.
+fn build_unitigs(cli: &Cli, index: usize, sbwtfile: &PathBuf) -> PathBuf {
+    let label = format!("Dumping unitigs {index} from {}", sbwtfile.display());
+    log::info!("{label} ...");
+    let output = cli.out_dir.join(format!("unitigs-{index}.fna"));
+    let mut cmd = Command::new(&cli.sbwt_bin);
+    verbose_flag(cli, &mut cmd);
+    cmd.arg("--threads").arg(cli.threads.to_string())
+        .arg("dump-unitigs")
+        .arg("--index").arg(sbwtfile)
+        .arg("--output").arg(&output);
+
+    let run = common::run_timed(&cmd, &cli.out_dir);
+    log_status(&label, &run);
+
+    let row = ReportRow {
+        op: "dump-unitigs".to_string(), left: index.to_string(), right: String::new(),
+        success: run.success, elapsed: run.elapsed, peak_rss_kb: run.peak_rss_kb,
+    };
+    append_report_row(&cli.report_path, &row).expect("failed to append to report");
+
+    if !run.success {
+        log::error!("failed to dump unitigs {index} from {}", sbwtfile.display());
+        std::process::exit(1);
+    }
+
+    output
 }
 
 /// Returns the SBWT for the `index`-th source: used directly if it's a `--sbwt-input`
 /// (prebuilt), otherwise built from a `--input` sequence file, wrapped in `/usr/bin/time -v`.
 /// Exits the process if the build fails, since every later step depends on it.
-fn build_one(cli: &Cli, index: usize, source: &Source) -> PathBuf {
-    let input = match source {
-        Source::Sbwt(path) => {
-            log::info!("SBWT {index}: using prebuilt {}", path.display());
-            return path.clone();
-        }
-        Source::Seq(path) => path,
-    };
-
-    let label = format!("Building SBWT {index} from {}", input.display());
+fn build_one(cli: &Cli, index: usize, seqfile: &PathBuf) -> PathBuf {
+    let label = format!("Building SBWT {index} from {}", seqfile.display());
     log::info!("{label} ...");
     let prefix = cli.out_dir.join(format!("sbwt-{index}"));
     let mut cmd = Command::new(&cli.sbwt_bin);
     verbose_flag(cli, &mut cmd);
     cmd.arg("--threads").arg(cli.threads.to_string())
         .arg("build")
-        .arg("--input").arg(input)
+        .arg("--input").arg(seqfile)
         .arg("--output-prefix").arg(&prefix)
         .arg("--temp-dir").arg(&cli.out_dir)
         .args(&cli.build_args);
@@ -303,19 +318,15 @@ fn run_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: 
 /// `--input` sequence files where available. For a `--sbwt-input` source there's no original
 /// sequence file, so `--seq1`/`--seq2` is omitted and `check-set-operation` falls back to
 /// exporting that SBWT's own unitigs. Returns whether the check passed.
-fn check_op(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, result: &Path) -> bool {
+fn check_op(cli: &Cli, op: &'static str, i: usize, seqs1: &Path, sbwt1: &Path, j: usize, seqs2: &Path, sbwt2: &Path, result: &Path) -> bool {
     let label = format!("{op:<10} {i} , {j} check");
     log::info!("{label} ...");
     let mut cmd = Command::new(&cli.sbwt_bin);
     verbose_flag(cli, &mut cmd);
-    cmd.arg("check-set-operation").arg("--op").arg(op);
-    if let Source::Seq(path) = &cli.inputs[i] {
-        cmd.arg("--seq1").arg(path);
-    }
-    if let Source::Seq(path) = &cli.inputs[j] {
-        cmd.arg("--seq2").arg(path);
-    }
-    cmd.arg("--sbwt1").arg(sbwt1)
+    cmd.arg("check-set-operation").arg("--op").arg(op)
+        .arg("--seq1").arg(seqs1)
+        .arg("--seq2").arg(seqs2)
+        .arg("--sbwt1").arg(sbwt1)
         .arg("--sbwt2").arg(sbwt2)
         .arg("--result").arg(result)
         .arg("--temp-dir").arg(&cli.out_dir);
