@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 use bitvec::vec::BitVec;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
-use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select};
+use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select, Vector};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
 
 type Word = wide::u8x16;
@@ -115,7 +115,6 @@ pub fn par_build_without_redundant_dummies<SS: SubsetSeq + Send>(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 #[inline]
 fn _par_build_without_redundant_dummies(
     threads: usize,
@@ -180,11 +179,38 @@ fn _par_build_without_redundant_dummies(
     };
     results.sort_by_key(|result| result.start);
 
+    let mut lcs_parts = {
+        let capacity = if build_lcs {
+            results.len()
+        } else {
+            0
+        };
+        Vec::<(Option<IntVector>, usize)>::with_capacity(capacity)
+    };
+    let mut rows_parts: Vec<Vec<BitVec<u64>>> = vec![
+        Vec::with_capacity(results.len()),
+        Vec::with_capacity(results.len()),
+        Vec::with_capacity(results.len()),
+        Vec::with_capacity(results.len()),
+    ];
+    for row_index in 0..4 {
+        rows_parts[row_index].push(bitvec::bitvec![u64, bitvec::order::Lsb0; 0; 1]);
+    }
+    for result in results {
+        let SbwtRegionResult { rows, lcs, last_lcs_value, .. } = result;
+        if build_lcs {
+            lcs_parts.push((lcs, last_lcs_value));
+        }
+        assert!(rows.len() == 4);
+        for (row_index, row) in rows.into_iter().enumerate() {
+            rows_parts[row_index].push(row);
+        }
+    }
+
     log::info!("[_par_build_without_redundant_dummies] agglomerating result");
     let rows = Arc::new(Mutex::new(Vec::<(usize, BitVec<u64>)>::new()));
     let mut lcs = None;
     rayon::scope(|s| {
-        let results = &results;
         let rows = &rows;
         let lcs = &mut lcs;
 
@@ -196,30 +222,26 @@ fn _par_build_without_redundant_dummies(
                 value.push(0);
 
                 let mut last_lcs_value: usize = 0;
-                for result in results {
-                    if result.rows[0].is_empty() {
-                        last_lcs_value = last_lcs_value.min(result.last_lcs_value);
+                for (lcs_part, current_last_lcs_value) in lcs_parts {
+                    let lcs_part = lcs_part.unwrap();
+                    if lcs_part.is_empty() {
+                        last_lcs_value = last_lcs_value.min(current_last_lcs_value);
                         continue;
                     }
-                    let result_lcs = result.lcs.as_ref().unwrap();
-                    let first_value = result_lcs.get(0) as usize;
+                    let first_value = lcs_part.get(0) as usize;
                     let new_first_value =  first_value.min(last_lcs_value);
                     value.push(new_first_value as u64);
-                    value.extend(result_lcs.iter().skip(1));
-                    last_lcs_value = result.last_lcs_value;
+                    value.extend(lcs_part.iter().skip(1));
+                    last_lcs_value = current_last_lcs_value;
                 }
 
                 *lcs = Some(value);
             });
         }
 
-        for row_index in 0..4 {
+        for (row_index, row_parts) in rows_parts.into_iter().enumerate() {
             s.spawn(move |_| {
-                let mut local_row = BitVec::with_capacity(length);
-                local_row.push(false);
-                for result in results {
-                    local_row.extend_from_bitslice(result.rows[row_index].as_bitslice());
-                }
+                let local_row = crate::util::parallel_bitvec_concat(row_parts);
                 rows.lock().unwrap().push((row_index, local_row));
             });
         }
@@ -247,7 +269,6 @@ struct SbwtRegionResult {
     last_lcs_value: usize,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn _build_sbwt_region(
     k: usize,
     start: usize,
