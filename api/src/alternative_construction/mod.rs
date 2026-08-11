@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 use bitvec::vec::BitVec;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
-use simple_sds_sbwt::ops::{Access, BitVec as BitVecTrait, Push, Rank, Select, Vector};
+use simple_sds_sbwt::ops::{BitVec as BitVecTrait, Push, Rank, Select};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
+use simple_sds_sbwt::serialize::Serialize;
 
 type Word = wide::u8x16;
 const LANES: usize = Word::LANES as usize;
@@ -122,8 +123,7 @@ fn _par_build_without_redundant_dummies(
     aux: FullAuxiliaryData,
     dummy_marks: DummyMarks,
     build_lcs: bool,
-) -> (Vec<BitVec<u64>>, Option<IntVector>)
-{
+) -> (Vec<BitVec<u64>>, Option<IntVector>) {
     log::info!("[_par_build_without_redundant_dummies] begin");
 
     let length = aux.bwt.len();
@@ -145,7 +145,6 @@ fn _par_build_without_redundant_dummies(
 
     log::info!("[_par_build_without_redundant_dummies] regions begin");
     rayon::scope(|s| {
-
         let aux         = &aux;
         let dummy_marks = &dummy_marks;
         let results     = &results;
@@ -185,7 +184,7 @@ fn _par_build_without_redundant_dummies(
         } else {
             0
         };
-        Vec::<(Option<IntVector>, usize)>::with_capacity(capacity)
+        Vec::<(Option<BitVec<u64>>, usize)>::with_capacity(capacity)
     };
     let mut rows_parts: Vec<Vec<BitVec<u64>>> = vec![
         Vec::with_capacity(results.len()),
@@ -216,24 +215,50 @@ fn _par_build_without_redundant_dummies(
 
         if build_lcs {
             s.spawn(move |_| {
+                use bitvec::field::BitField;
                 let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
                 let bit_width = bit_width as usize;
-                let mut value = IntVector::with_capacity(length, bit_width).unwrap();
-                value.push(0);
 
                 let mut last_lcs_value: usize = 0;
+                let mut bitvec_lcs_parts = vec![];
+                bitvec_lcs_parts.push(bitvec::bitvec![u64, bitvec::order::Lsb0; 0; bit_width]);
                 for (lcs_part, current_last_lcs_value) in lcs_parts {
-                    let lcs_part = lcs_part.unwrap();
+                    let mut lcs_part = lcs_part.unwrap();
                     if lcs_part.is_empty() {
                         last_lcs_value = last_lcs_value.min(current_last_lcs_value);
                         continue;
                     }
-                    let first_value = lcs_part.get(0) as usize;
-                    let new_first_value =  first_value.min(last_lcs_value);
-                    value.push(new_first_value as u64);
-                    value.extend(lcs_part.iter().skip(1));
+                    let (first_value_slice, _) = lcs_part.split_at_mut(bit_width);
+                    let first_value: usize = first_value_slice.load_le();
+                    let new_first_value = first_value.min(last_lcs_value);
+                    first_value_slice.store_le(new_first_value);
+                    bitvec_lcs_parts.push(lcs_part);
                     last_lcs_value = current_last_lcs_value;
                 }
+
+                let mut bitvec_lcs = crate::util::parallel_bitvec_concat(bitvec_lcs_parts);
+
+                let mut int_vector_header = [0u64, 0u64]; // len, width
+                int_vector_header[0] = (bitvec_lcs.len() / bit_width) as u64;
+                int_vector_header[1] = bit_width as u64;
+                let mut raw_vector_header = [0u64, 0u64]; // bits, words
+                raw_vector_header[0] = bitvec_lcs.len() as u64;
+                raw_vector_header[1] = bitvec_lcs.len().div_ceil(64) as u64;
+
+                let int_vector_header_bytes: &[u8] = bytemuck::cast_slice(&int_vector_header);
+                let raw_vector_header_bytes: &[u8] = bytemuck::cast_slice(&raw_vector_header);
+
+                let original_len = bitvec_lcs.len();
+                bitvec_lcs.resize(original_len.next_multiple_of(64), false);
+                bitvec_lcs.resize(original_len, false);
+
+                let raw_data: &[u8] = bytemuck::cast_slice(bitvec_lcs.as_raw_slice());
+                use std::io::{Cursor, Read};
+                let mut data_with_headers = Cursor::new(int_vector_header_bytes)
+                    .chain(Cursor::new(raw_vector_header_bytes))
+                    .chain(Cursor::new(raw_data));
+
+                let value = IntVector::load(&mut data_with_headers).unwrap();
 
                 *lcs = Some(value);
             });
@@ -265,7 +290,7 @@ fn _par_build_without_redundant_dummies(
 struct SbwtRegionResult {
     start: usize,
     rows: Vec<BitVec<u64>>,
-    lcs: Option<IntVector>,
+    lcs: Option<BitVec<u64>>,
     last_lcs_value: usize,
 }
 
@@ -286,10 +311,12 @@ fn _build_sbwt_region(
         rows.push(BitVec::with_capacity(capacity));
     }
 
-    let mut lcs: Option<IntVector> = if build_lcs {
-        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
-        let bit_width = bit_width as usize;
-        let value = IntVector::with_capacity(capacity, bit_width).unwrap();
+    use bitvec::field::BitField;
+    let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+    let bit_width = bit_width as usize;
+    let mut lcs_count: usize = 0;
+    let mut lcs: Option<BitVec<u64>> = if build_lcs {
+        let value = bitvec::bitvec![u64, bitvec::order::Lsb0; 0; bit_width * capacity];
         Some(value)
     } else {
         None
@@ -355,7 +382,10 @@ fn _build_sbwt_region(
             has_dummy_kmer = true;
             if dummy_marks.keep_dummy.bit(index) {
                 if build_lcs && !include_dummy_kmer {
-                    lcs.as_mut().unwrap().push(current_lcs_value as u64);
+                    let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
+                    let (word, _)   = suffix.split_at_mut(bit_width);
+                    word.store_le(current_lcs_value as u64);
+                    lcs_count += 1;
                     current_lcs_value = k - 1;
                 }
                 include_dummy_kmer = true;
@@ -365,7 +395,10 @@ fn _build_sbwt_region(
             }
         } else {
             if build_lcs && is_start_of_k_range {
-                lcs.as_mut().unwrap().push(current_lcs_value as u64);
+                let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
+                let (word, _)   = suffix.split_at_mut(bit_width);
+                word.store_le(current_lcs_value as u64);
+                lcs_count += 1;
                 current_lcs_value = k - 1;
             }
             current_set = include_letter(&aux.bwt, index, current_set);
@@ -383,6 +416,10 @@ fn _build_sbwt_region(
             current_set = 0;
             k_range_count -= 1;
         }
+    }
+
+    if build_lcs {
+        lcs.as_mut().unwrap().truncate(bit_width * lcs_count);
     }
 
     SbwtRegionResult {
