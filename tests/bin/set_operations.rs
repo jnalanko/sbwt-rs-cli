@@ -169,37 +169,33 @@ pub fn run(args: Args) {
     init_report(&cli.report_path).expect("failed to create report");
     log::info!("report:          {} (appended to as each step finishes)", cli.report_path.display());
 
-    let (seqfiles, sbwts) = match cli.inputs {
+    let (seqfiles, sbwts) = match &cli.inputs {
         Inputs::Sbwts(sbwts) => {
             // SBWTs given, build seqfiles
             let seqfiles: Vec<PathBuf> = sbwts.iter().enumerate().map(|(i, sbwt_file)| {
                 build_unitigs(&cli, i, sbwt_file)
             }).collect();
-            (seqfiles, sbwts)
+            (seqfiles, sbwts.clone())
         },
         Inputs::Seqs(seqfiles) => {
             // Seqfiles given, build SBWTs
             let sbwts: Vec<PathBuf> = seqfiles.iter().enumerate().map(|(i, seqfile)| {
                 build_one(&cli, i, seqfile)
             }).collect();
-            (seqfiles, sbwts)
+            (seqfiles.clone(), sbwts)
         },
     };
-
-    let sbwts: Vec<PathBuf> = cli.inputs.iter().enumerate()
-        .map(|(i, source)| build_one(&cli, i, source))
-        .collect();
 
     let mut all_ok = true;
     for i in 0..sbwts.len() {
         for j in (i + 1)..sbwts.len() {
-            all_ok &= run_pair(&cli, "merge", i, &sbwts[i], j, &sbwts[j],
+            all_ok &= run_pair(&cli, "merge", i, &seqfiles[i], &sbwts[i], j, &seqfiles[j], &sbwts[j],
                                 &cli.out_dir.join(format!("merge_{i}_{j}.sbwt")));
-            all_ok &= run_pair(&cli, "intersect", i, &sbwts[i], j, &sbwts[j],
+            all_ok &= run_pair(&cli, "intersect", i, &seqfiles[i], &sbwts[i], j, &seqfiles[j], &sbwts[j],
                                 &cli.out_dir.join(format!("intersect_{i}_{j}.sbwt")));
-            all_ok &= run_pair(&cli, "difference", i, &sbwts[i], j, &sbwts[j],
+            all_ok &= run_pair(&cli, "difference", i, &seqfiles[i], &sbwts[i], j, &seqfiles[j], &sbwts[j],
                                 &cli.out_dir.join(format!("difference_{i}_{j}.sbwt")));
-            all_ok &= run_pair(&cli, "difference", j, &sbwts[j], i, &sbwts[i],
+            all_ok &= run_pair(&cli, "difference", j, &seqfiles[i], &sbwts[j], i, &seqfiles[j], &sbwts[i],
                                 &cli.out_dir.join(format!("difference_{j}_{i}.sbwt")));
         }
     }
@@ -214,7 +210,7 @@ pub fn run(args: Args) {
 
 /// Runs one pairwise set operation and, if it succeeds, verifies its output with
 /// `sbwt check-set-operation`. Returns whether both the operation and its check succeeded.
-fn run_pair(cli: &Cli, op: &'static str, i: usize, sbwt1: &Path, j: usize, sbwt2: &Path, output: &Path) -> bool {
+fn run_pair(cli: &Cli, op: &'static str, i: usize, seqs1: &Path, sbwt1: &Path, j: usize, seqs2: &Path, sbwt2: &Path, output: &Path) -> bool {
     if !run_op(cli, op, i, sbwt1, j, sbwt2, output) {
         return false;
     }
@@ -280,7 +276,7 @@ fn build_one(cli: &Cli, index: usize, seqfile: &PathBuf) -> PathBuf {
     append_report_row(&cli.report_path, &row).expect("failed to append to report");
 
     if !run.success {
-        log::error!("failed to build SBWT {index} from {}", input.display());
+        log::error!("failed to build SBWT {index} from {}", seqfile.display());
         std::process::exit(1);
     }
 
