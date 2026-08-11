@@ -1066,7 +1066,7 @@ fn unitigs_to_tempfile(index: &mut SbwtIndexVariant, lcs: &LcsArray, temp_dir: &
     std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
     let unitigs_path = TempFilePath::new(temp_dir, "unitigs", 8, ".fna", delete_on_drop);
     log::info!("Exporting unitigs of to {}", unitigs_path.path.display());
-    let mut unitigs_out = BufWriter::new(File::open(&unitigs_path.path).unwrap());
+    let mut unitigs_out = BufWriter::new(File::create(&unitigs_path.path).unwrap());
     index.parallel_export_unitigs(&mut unitigs_out, Some(lcs), n_threads);
     unitigs_path
 }
