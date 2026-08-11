@@ -182,6 +182,7 @@ pub fn run_check_set_operation<'a>(
             };
 
             lookup_each_valid_kmer_nonstreaming_and_callback(&seq1_source, &result_index, &mut check);
+            lookup_each_valid_kmer_nonstreaming_and_callback(&seq2_source, &result_index, &mut check);
         },
         SetOperation::Intersection => {
             log::info!("Checking that every k-mer of seq1 that's also in sbwt2 is in the result (intersection)");
