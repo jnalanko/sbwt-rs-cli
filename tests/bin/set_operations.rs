@@ -195,7 +195,7 @@ pub fn run(args: Args) {
                                 &cli.out_dir.join(format!("intersect_{i}_{j}.sbwt")));
             all_ok &= run_pair(&cli, "difference", i, &seqfiles[i], &sbwts[i], j, &seqfiles[j], &sbwts[j],
                                 &cli.out_dir.join(format!("difference_{i}_{j}.sbwt")));
-            all_ok &= run_pair(&cli, "difference", j, &seqfiles[i], &sbwts[j], i, &seqfiles[j], &sbwts[i],
+            all_ok &= run_pair(&cli, "difference", j, &seqfiles[j], &sbwts[j], i, &seqfiles[i], &sbwts[i],
                                 &cli.out_dir.join(format!("difference_{j}_{i}.sbwt")));
         }
     }
