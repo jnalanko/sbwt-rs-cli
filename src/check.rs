@@ -213,8 +213,15 @@ fn export_unitigs_to_file(index: &mut SbwtIndexVariant, lcs: Option<&LcsArray>, 
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SetOperation {
+    Intersection,
+    Union,
+    Difference,
+}
+
 pub fn run_check_set_operation(
-    op: &str,
+    op: SetOperation,
     seq1_path: Option<&Path>,
     seq2_path: Option<&Path>,
     sbwt1_path: &Path,
@@ -256,7 +263,7 @@ pub fn run_check_set_operation(
 
     // seq2 is only read by the "merge" branch below, so only resolve it (and pay for unitig
     // export, if needed) when it's actually going to be used.
-    let seq2_source = (op == "merge").then(|| match seq2_path {
+    let seq2_source = (op == SetOperation::Union).then(|| match seq2_path {
         Some(p) => SeqSource::given(p),
         None => {
             std::fs::create_dir_all(temp_dir).expect("failed to create --temp-dir");
@@ -275,7 +282,7 @@ pub fn run_check_set_operation(
     let mut expect_in_result = |kmer: &[u8]| {
         let colex = result.search(kmer).unwrap_or_else(|| {
             panic!(
-                "expected k-mer {} to be in the result index (op={op}), but it was not found",
+                "expected k-mer {} to be in the result index (op={op:?}), but it was not found",
                 String::from_utf8_lossy(kmer)
             )
         });
@@ -284,22 +291,18 @@ pub fn run_check_set_operation(
     };
 
     match op {
-        "merge" => {
+        SetOperation::Union => {
             log::info!("Checking that every k-mer of seq1 and of seq2 is in the result (union)");
             for_each_valid_kmer(seq1_source.path(), k, &mut expect_in_result);
             for_each_valid_kmer(seq2_source.as_ref().unwrap().path(), k, &mut expect_in_result);
         }
-        "intersect" => {
+        SetOperation::Intersection => {
             log::info!("Checking that every k-mer of seq1 that's also in sbwt2 is in the result (intersection)");
             for_each_kmer_in_seq1_and_sbwt2(seq1_source.path(), k, &index2, streaming2.as_ref(), &mut expect_in_result);
         }
-        "difference" => {
+        SetOperation::Difference => {
             log::info!("Checking that every k-mer of seq1 that's not in sbwt2 is in the result (seq1 \\ seq2)");
             for_each_kmer_in_seq1_not_sbwt2(seq1_source.path(), k, &index2, streaming2.as_ref(), &mut expect_in_result);
-        }
-        other => {
-            eprintln!("error: unknown --op '{other}', expected one of: merge, intersect, difference");
-            std::process::exit(2);
         }
     }
 
@@ -309,11 +312,11 @@ pub fn run_check_set_operation(
         let unvisited = visited_marks.first_zero().unwrap();
         let kmer = result.access_kmer(unvisited);
         panic!(
-            "result index has k-mer {}, which should not be in the {op} of the given sequences",
+            "result index has k-mer {}, which should not be in the {op:?} of the given sequences",
             String::from_utf8_lossy(&kmer)
         );
     }
 
-    log::info!("OK. The result index has exactly the expected k-mer set for {op}.");
+    log::info!("OK. The result index has exactly the expected k-mer set for {op:?}.");
     println!("PASS");
 }
