@@ -810,6 +810,37 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         dummy_marks
     } 
 
+    // Returns whether the node was necessary
+    fn mark_all_unnecessary_recursion(&self, v: usize, depth: usize, marks: &mut bitvec::vec::BitVec, outlabels_buf: &mut Vec<u8>) -> bool {
+
+        if depth == self.k { // All full k-mers are necessary
+            return true;
+        }
+
+        outlabels_buf.clear();
+        self.sbwt.append_set_to_buf(v, outlabels_buf);
+        let suffix_group_size: usize = todo!(); // Needs LCS or suffix group marks?
+
+        let mut exists_necessary_outneighbor = false;
+        for &c_idx in outlabels_buf.iter() {
+            let u = self.lf_step(v, c_idx as usize);
+            exists_necessary_outneighbor |= self.mark_all_unnecessary_recursion(u, depth+1, &mut marks, &mut outlabels_buf);
+        }
+
+        exists_necessary_outneighbor && suffix_group_size == 1
+    }
+
+    pub fn mark_all_unnecessary_dummies(&self) -> bitvec::vec::BitVec {
+        let mut marks = bitvec![0; self.n_sets()];
+        let mut outlabels_buf = Vec::<u8>::new();
+        let root_node = 0;
+        let depth = 0;
+
+        marks.set(root_node, true); // By definition
+        self.mark_all_unnecessary_recursion(root_node, depth, &mut marks, &mut outlabels_buf);
+        marks
+    }
+
 }
 
 
