@@ -352,7 +352,7 @@ fn mark_dead_chains<SS: SubsetSeq>( //todolore can/should this parallelized?
             if index1.sbwt.set_contains(p, c as u8) {
                 let t = index1.lf_step(p, c);
                 if !redundant[t] && has_incoming.get(t) {
-                    has_incoming.set(t, false); //todolore make test that has this scenario
+                    has_incoming.set(t, false);
                     n_orphans += 1;
                 }
             }
