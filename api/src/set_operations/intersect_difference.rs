@@ -71,6 +71,15 @@ fn compute_result_counts(interleaving: &MergeInterleaving, difference: bool) -> 
 ///
 /// The intersection variant additionally pre-sets bit 0 (the shared root) so that the
 /// root is always counted as covered, matching how `isec_length` is computed.
+///
+/// Also returns **dead-end dummies**: dummy result nodes with no surviving outgoing
+/// edge, detected as a byproduct of the same `flush_group` scan (no extra pass, no
+/// atomics needed since a group's successor status is thread-local). A (k-1)-suffix
+/// group can have more than one `in_result` member (e.g. at a shared branch point), but
+/// by the SBWT pruning invariant only the first one in colex order can retain a
+/// non-empty row — every later member is unconditionally all-empty, hence a dead end
+/// whenever it's a dummy. So each group buffers its `in_result` members (≤ `sigma`) and
+/// resolves them at flush time.
 fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
@@ -83,13 +92,13 @@ fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
     difference: bool,
-) -> AtomicBitmap {
+) -> (AtomicBitmap, Vec<usize>) {
     let has_incoming = AtomicBitmap::new(index1.n_sets());
     // Intersection: pre-set bit 0 (shared root); difference: omit to avoid inflating n_incoming.
     if !difference && result_length > 0 { has_incoming.set(0, true); }
 
-    thread_pool.install(|| {
-        (0..n_threads).into_par_iter().for_each(|thread_idx| {
+    let dead_end_dummies_per_piece: Vec<Vec<usize>> = thread_pool.install(|| {
+        (0..n_threads).into_par_iter().map(|thread_idx| {
             let colex_range = &piece_ranges[thread_idx];
             let mut s1_colex: usize = s1_pops[..thread_idx].iter().sum();
             let mut s2_colex: usize = s2_pops[..thread_idx].iter().sum();
@@ -102,32 +111,51 @@ fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
             let mut s2_group_read = false;
             // s1_colex of the first s1 element in the current group (used for lf_step).
             let mut s1_first_in_group = 0usize;
-            // True iff the current group contains at least one result position.
-            let mut group_has_result = false;
+            // (s1_colex, is_dummy) of each `in_result` member seen so far in this group,
+            // in colex order (bounded by `sigma`, see doc comment above).
+            let mut group_result_members: Vec<(usize, bool)> = Vec::with_capacity(sigma);
+            let mut local_dead_ends: Vec<usize> = Vec::new();
 
             // Marks LF-step targets for each surviving edge in the current group.
-            let flush_group = |s1_or: &[bool], s2_or: &[bool], s1_first: usize| {
+            // Returns whether at least one outgoing edge survived.
+            let flush_group = |s1_or: &[bool], s2_or: &[bool], s1_first: usize| -> bool {
+                let mut any_edge = false;
                 for c in 0..sigma {
                     let edge = if difference {
                         s1_or[c] && !s2_or[c]
                     } else {
                         s1_or[c] && s2_or[c]
                     };
-                    if edge { has_incoming.set(index1.lf_step(s1_first, c), true); }
+                    if edge {
+                        any_edge = true;
+                        has_incoming.set(index1.lf_step(s1_first, c), true);
+                    }
+                }
+                any_edge
+            };
+
+            // Resolves dead-end status for the group's buffered `in_result` members: only
+            // the first can have a surviving edge, every later one is unconditionally dead.
+            let flush_dead_ends = |members: &[(usize, bool)], any_edge: bool, dead_ends: &mut Vec<usize>| {
+                for (idx, &(pos, is_dummy)) in members.iter().enumerate() {
+                    let dead = if idx == 0 { is_dummy && !any_edge } else { is_dummy };
+                    if dead { dead_ends.push(pos); }
                 }
             };
 
             for merged_colex in colex_range.clone() {
                 if interleaving.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    // Flush: if any result position exists, mark LF-step targets.
-                    if group_has_result {
-                        flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
+                    // Flush: if any result position exists, mark LF-step targets and
+                    // resolve dead-end status for every buffered member.
+                    if !group_result_members.is_empty() {
+                        let any_edge = flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
+                        flush_dead_ends(&group_result_members, any_edge, &mut local_dead_ends);
                     }
                     s1_group_read = false;
                     s2_group_read = false;
                     s1_group_or.fill(false);
                     s2_group_or.fill(false);
-                    group_has_result = false;
+                    group_result_members.clear();
                 }
 
                 if !s1_group_read && interleaving.s1[merged_colex] {
@@ -144,23 +172,37 @@ fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
                 } else {
                     interleaving.s1[merged_colex] && interleaving.s2[merged_colex]
                 };
-                if in_result { group_has_result = true; }
+                // `in_result` implies s1[merged_colex], so s1_colex (not yet incremented
+                // this iteration) is this member's identifying position.
+                if in_result {
+                    group_result_members.push((s1_colex, interleaving.is_dummy[merged_colex]));
+                }
 
                 s1_colex += interleaving.s1[merged_colex] as usize;
                 s2_colex += interleaving.s2[merged_colex] as usize;
             }
 
             // Flush the last group in this piece.
-            if group_has_result {
-                flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
+            if !group_result_members.is_empty() {
+                let any_edge = flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
+                flush_dead_ends(&group_result_members, any_edge, &mut local_dead_ends);
             }
-        });
+
+            local_dead_ends
+        }).collect()
     });
 
-    has_incoming
+    // Pieces were scanned in increasing colex-range order and s1_colex is monotonically
+    // increasing within and across pieces, so this concatenation is already sorted.
+    let dead_end_dummies: Vec<usize> = dead_end_dummies_per_piece.into_iter().flatten().collect();
+
+    (has_incoming, dead_end_dummies)
 }
 
 /// Pass 1 for intersection: delegates to [`pass1_has_incoming_impl`] with `difference = false`.
+/// Returns the incoming-edge bitmap together with the `s1_colex` positions of dead-end
+/// dummies (dummy result nodes with no surviving outgoing edge); see
+/// [`pass1_has_incoming_impl`] for details.
 fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
@@ -172,7 +214,7 @@ fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
     s2_pops: &[usize],
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
-) -> AtomicBitmap {
+) -> (AtomicBitmap, Vec<usize>) {
     pass1_has_incoming_impl(index1, index2, interleaving, isec_length, sigma,
         piece_ranges, s1_pops, s2_pops, n_threads, thread_pool, false)
 }
@@ -367,6 +409,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     mut index1: SbwtIndex<SS>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
+    dead_end_dummies: Vec<usize>,
     sigma: usize,
     k: usize,
     optimize_peak_ram: bool,
@@ -533,11 +576,12 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
         thread_pool.install(|| compute_piece_ranges(merged_length, n_threads, &interleaving));
 
     log::info!("[intersect] Pass 1: computing incoming-edge coverage (parallel)");
-    let has_incoming = pass1_has_incoming(
+    let (has_incoming, dead_end_dummies) = pass1_has_incoming(
         &index1, &index2, &interleaving,
         isec_length, sigma, &piece_ranges, &s1_pops, &s2_pops,
         n_threads, &thread_pool,
     );
+    log::info!("[intersect] Dead-end dummies (no surviving outgoing edge): {}", dead_end_dummies.len());
 
     // Count covered positions in parallel; bit 0 is pre-set (root), so complete == isec_length.
     let n_incoming: usize = thread_pool.install(|| {
@@ -546,7 +590,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
             .sum()
     });
 
-    let new_rows = if n_incoming == isec_length {
+    let new_rows = if (dead_end_dummies.len() == 0) && (n_incoming == isec_length) {
         log::info!("All {} intersection positions have incoming edges; no auxiliary dummy chains needed", isec_length);
         log::info!("[intersect] Pass 2: building intersection SBWT bit-rows (parallel)");
         intersect_rows_direct(
@@ -565,7 +609,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
         // Unwrap the Arc; refcount is 1 here since nothing else cloned it.
         let index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
         intersect_rows_with_dummy_repair(
-            index1, index2, source_colexes,
+            index1, index2, source_colexes, dead_end_dummies,
             sigma, k, optimize_peak_ram, n_threads, &thread_pool,
         )
     };
@@ -588,7 +632,7 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     s2_pops: &[usize],
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
-) -> AtomicBitmap {
+) -> (AtomicBitmap, Vec<usize>) {
     pass1_has_incoming_impl(index1, index2, interleaving, diff_length, sigma,
         piece_ranges, s1_pops, s2_pops, n_threads, thread_pool, true)
 }
@@ -862,11 +906,12 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
         thread_pool.install(|| compute_piece_ranges(merged_length, n_threads, &interleaving));
 
     log::info!("[difference] Pass 1: computing incoming-edge coverage (parallel)");
-    let has_incoming = pass1_has_incoming_diff(
+    let (has_incoming, dead_end_dummies) = pass1_has_incoming_diff(
         &index1, &index2, &interleaving,
         diff_length, sigma, &piece_ranges, &s1_pops, &s2_pops,
         n_threads, &thread_pool,
     );
+    log::info!("[difference] Dead-end dummies (no surviving outgoing edge): {}", dead_end_dummies.len());
 
     let source_colexes = collect_result_source_nodes(
         &interleaving, &has_incoming, merged_length,
