@@ -11,6 +11,7 @@ use crate::{LcsArray, SbwtIndex, SubsetSeq};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 use bitvec::vec::BitVec;
+use bitvec::field::BitField;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
 use simple_sds_sbwt::ops::{BitVec as BitVecTrait, Push, Rank, Select};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
@@ -89,7 +90,8 @@ pub fn par_build<SS: SubsetSeq + Send>(
     let output = if !add_all_dummies {
         par_build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
     } else {
-        build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
+        // build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
+        par_build_with_all_dummies(threads, input, suffix_array, k, build_lcs, build_counts)
     };
     log::info!("[par_build] done");
     output
@@ -154,7 +156,7 @@ fn _par_build_without_redundant_dummies(
                 let start = separator_count + thread_index * thread_region_length;
                 let end = (start + thread_region_length).min(length);
                 let is_last_thread = thread_index == threads - 1;
-                let result = _build_sbwt_region(
+                let result = _build_sbwt_region_without_redundant_dummies(
                     k,
                     start,
                     end,
@@ -178,14 +180,6 @@ fn _par_build_without_redundant_dummies(
     };
     results.sort_by_key(|result| result.start);
 
-    let mut lcs_parts = {
-        let capacity = if build_lcs {
-            results.len()
-        } else {
-            0
-        };
-        Vec::<(Option<BitVec<u64>>, usize)>::with_capacity(capacity)
-    };
     let mut rows_parts: Vec<Vec<BitVec<u64>>> = vec![
         Vec::with_capacity(results.len()),
         Vec::with_capacity(results.len()),
@@ -195,12 +189,24 @@ fn _par_build_without_redundant_dummies(
     for row_index in 0..4 {
         rows_parts[row_index].push(bitvec::bitvec![u64, bitvec::order::Lsb0; 0; 1]);
     }
+
+    let mut lcs_parts = {
+        let capacity = if build_lcs {
+            results.len()
+        } else {
+            0
+        };
+        Vec::<(Option<BitVec<u64>>, usize)>::with_capacity(capacity)
+    };
+
     for result in results {
         let SbwtRegionResult { rows, lcs, last_lcs_value, .. } = result;
+        if rows.is_empty() {
+            continue;
+        }
         if build_lcs {
             lcs_parts.push((lcs, last_lcs_value));
         }
-        assert!(rows.len() == 4);
         for (row_index, row) in rows.into_iter().enumerate() {
             rows_parts[row_index].push(row);
         }
@@ -211,11 +217,10 @@ fn _par_build_without_redundant_dummies(
     let mut lcs = None;
     rayon::scope(|s| {
         let rows = &rows;
-        let lcs = &mut lcs;
+        let lcs  = &mut lcs;
 
         if build_lcs {
             s.spawn(move |_| {
-                use bitvec::field::BitField;
                 let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
                 let bit_width = bit_width as usize;
 
@@ -236,30 +241,7 @@ fn _par_build_without_redundant_dummies(
                     last_lcs_value = current_last_lcs_value;
                 }
 
-                let mut bitvec_lcs = crate::util::parallel_bitvec_concat(bitvec_lcs_parts);
-
-                let mut int_vector_header = [0u64, 0u64]; // len, width
-                int_vector_header[0] = (bitvec_lcs.len() / bit_width) as u64;
-                int_vector_header[1] = bit_width as u64;
-                let mut raw_vector_header = [0u64, 0u64]; // bits, words
-                raw_vector_header[0] = bitvec_lcs.len() as u64;
-                raw_vector_header[1] = bitvec_lcs.len().div_ceil(64) as u64;
-
-                let int_vector_header_bytes: &[u8] = bytemuck::cast_slice(&int_vector_header);
-                let raw_vector_header_bytes: &[u8] = bytemuck::cast_slice(&raw_vector_header);
-
-                let original_len = bitvec_lcs.len();
-                bitvec_lcs.resize(original_len.next_multiple_of(64), false);
-                bitvec_lcs.resize(original_len, false);
-
-                let raw_data: &[u8] = bytemuck::cast_slice(bitvec_lcs.as_raw_slice());
-                use std::io::{Cursor, Read};
-                let mut data_with_headers = Cursor::new(int_vector_header_bytes)
-                    .chain(Cursor::new(raw_vector_header_bytes))
-                    .chain(Cursor::new(raw_data));
-
-                let value = IntVector::load(&mut data_with_headers).unwrap();
-
+                let value = par_concatenate_lcs(bit_width, bitvec_lcs_parts);
                 *lcs = Some(value);
             });
         }
@@ -294,7 +276,7 @@ struct SbwtRegionResult {
     last_lcs_value: usize,
 }
 
-fn _build_sbwt_region(
+fn _build_sbwt_region_without_redundant_dummies(
     k: usize,
     start: usize,
     end: usize,
@@ -306,28 +288,8 @@ fn _build_sbwt_region(
     let length = aux.bwt.len();
     let capacity = end - start;
 
-    let mut rows = Vec::<BitVec<u64>>::new();
-    for _ in 0..4 {
-        rows.push(BitVec::with_capacity(capacity));
-    }
-
-    use bitvec::field::BitField;
-    let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
-    let bit_width = bit_width as usize;
-    let mut lcs_count: usize = 0;
-    let mut lcs: Option<BitVec<u64>> = if build_lcs {
-        let value = bitvec::bitvec![u64, bitvec::order::Lsb0; 0; bit_width * capacity];
-        Some(value)
-    } else {
-        None
-    };
-
     let mut index = start;
-    let mut current_set = 0;
     let mut current_lcs_value  = k - 1;
-    let mut include_dummy_kmer = false;
-    let mut has_dummy_kmer     = false;
-    let mut k_range_count = 0;
 
     while index < end {
         if build_lcs {
@@ -339,14 +301,34 @@ fn _build_sbwt_region(
         index += 1;
     }
 
-    if index == end {
+    if index >= end {
         return SbwtRegionResult {
             start,
-            rows,
-            lcs,
+            rows: vec![],
+            lcs: None,
             last_lcs_value: current_lcs_value
         };
     }
+
+    let mut rows = Vec::<BitVec<u64>>::new();
+    for _ in 0..4 {
+        rows.push(BitVec::with_capacity(capacity));
+    }
+
+    let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+    let bit_width = bit_width as usize;
+    let mut lcs_count: usize = 0;
+    let mut lcs: Option<BitVec<u64>> = if build_lcs {
+        let value = bitvec::bitvec![u64, bitvec::order::Lsb0; 0; bit_width * capacity];
+        Some(value)
+    } else {
+        None
+    };
+
+    let mut current_set = 0;
+    let mut include_dummy_kmer = false;
+    let mut has_dummy_kmer     = false;
+    let mut k_range_count = 0;
 
     while index < length {
         if aux.k_minus_one_ranges.get(index) {
@@ -428,6 +410,32 @@ fn _build_sbwt_region(
         lcs,
         last_lcs_value: current_lcs_value
     }
+}
+
+pub(crate) fn par_concatenate_lcs(bit_width: usize, bitvec_lcs_parts: Vec<BitVec<u64>>) -> IntVector {
+    let mut bitvec_lcs = crate::util::parallel_bitvec_concat(bitvec_lcs_parts);
+
+    let mut int_vector_header = [0u64, 0u64]; // len, width
+    int_vector_header[0] = (bitvec_lcs.len() / bit_width) as u64;
+    int_vector_header[1] = bit_width as u64;
+    let mut raw_vector_header = [0u64, 0u64]; // bits, words
+    raw_vector_header[0] = bitvec_lcs.len() as u64;
+    raw_vector_header[1] = bitvec_lcs.len().div_ceil(64) as u64;
+
+    let int_vector_header_bytes: &[u8] = bytemuck::cast_slice(&int_vector_header);
+    let raw_vector_header_bytes: &[u8] = bytemuck::cast_slice(&raw_vector_header);
+
+    let original_len = bitvec_lcs.len();
+    bitvec_lcs.resize(original_len.next_multiple_of(64), false);
+    bitvec_lcs.resize(original_len, false);
+
+    let raw_data: &[u8] = bytemuck::cast_slice(bitvec_lcs.as_raw_slice());
+    use std::io::{Cursor, Read};
+    let mut data_with_headers = Cursor::new(int_vector_header_bytes)
+        .chain(Cursor::new(raw_vector_header_bytes))
+        .chain(Cursor::new(raw_data));
+
+    IntVector::load(&mut data_with_headers).unwrap()
 }
 
 pub(crate) fn collect_output<SS: SubsetSeq + Send>(
@@ -629,7 +637,7 @@ pub(crate) struct FullAuxiliaryData {
 pub(crate) fn par_build_full_auxiliary_data(
     threads: usize,
     mut input: Vec<u8>,
-    bounded_context_suffix_array: Vec<usize>,
+    suffix_array: Vec<usize>,
     k: usize
 ) -> FullAuxiliaryData {
     // The prefix of a suffix up to the first '$' will be referred to as the true prefix and
@@ -647,7 +655,7 @@ pub(crate) fn par_build_full_auxiliary_data(
 
     log::info!("[par_build_full_auxiliary_data] begin");
 
-    let length = bounded_context_suffix_array.len();
+    let length = suffix_array.len();
     pad_input(&mut input, k, length);
     let word_count = k.div_ceil(LANES);
 
@@ -680,7 +688,7 @@ pub(crate) fn par_build_full_auxiliary_data(
 
     rayon::scope(|s| {
         let input              = &input;
-        let bounded_context_suffix_array = &bounded_context_suffix_array;
+        let suffix_array       = &suffix_array;
         let bwt_vectors        = &bwt_vectors;
         let lcp_result         = &lcp_result;
         let kmer_count         = &kmer_count;
@@ -710,7 +718,7 @@ pub(crate) fn par_build_full_auxiliary_data(
                 }
 
                 for rank in start..end {
-                    let current_suffix_index = bounded_context_suffix_array[rank];
+                    let current_suffix_index = suffix_array[rank];
 
                     // Set the bit in the bitvector corresponding to the previous character in the input
                     // for the (bounded) BWT.
@@ -721,7 +729,7 @@ pub(crate) fn par_build_full_auxiliary_data(
                         bwt_vectors[previous_character_index].set(rank, true);
                     }
 
-                    let previous_suffix_index = bounded_context_suffix_array[rank - 1];
+                    let previous_suffix_index = suffix_array[rank - 1];
                     let (length, lcp_value) = find_length_and_lcp_value(
                         k,
                         input,
@@ -1028,11 +1036,11 @@ fn keep_predecessors_atomic(
 }
 
 pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
-    mut input: Vec<u8>, bounded_context_suffix_array: Vec<usize>, k: usize, build_lcs: bool, build_counts: bool
+    mut input: Vec<u8>, suffix_array: Vec<usize>, k: usize, build_lcs: bool, build_counts: bool
 ) -> Output<SS> {
     log::info!("[build_with_all_dummies] begin");
     let word_count = k.div_ceil(LANES);
-    let length = bounded_context_suffix_array.len();
+    let length = suffix_array.len();
     pad_input(&mut input, k, length);
 
     let mut rows = Vec::<BitVec<u64>>::new();
@@ -1078,7 +1086,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     let mut start_of_k_minus_one_range;
 
     for rank in 1..length {
-        let current_suffix_index = bounded_context_suffix_array[rank];
+        let current_suffix_index = suffix_array[rank];
 
         let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
         let previous_character = input[previous_character_index_in_input];
@@ -1090,7 +1098,7 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
         let (length, lcp_value) = if first_character_index == 0 {
             (0, 0)
         } else {
-            let previous_suffix_index = bounded_context_suffix_array[rank - 1];
+            let previous_suffix_index = suffix_array[rank - 1];
             find_length_and_lcp_value(
                 k,
                 &input,
@@ -1177,6 +1185,403 @@ pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
     let result = collect_output(k, rows, lcs, counts, kmer_count);
     log::info!("[build_with_all_dummies] done");
     result
+}
+
+pub fn par_build_with_all_dummies<SS: SubsetSeq + Send>(
+    threads: usize,
+    mut input: Vec<u8>,
+    suffix_array: Vec<usize>,
+    k: usize,
+    build_lcs: bool,
+    build_counts: bool
+) -> Output<SS> {
+    log::info!("[par_build_with_all_dummies] begin");
+    let length = suffix_array.len();
+    pad_input(&mut input, k, length);
+
+    let length = suffix_array.len();
+    let results = Arc::new(Mutex::new(Vec::<SbwtAllDummiesRegionResult>::with_capacity(threads)));
+    let threads_total_length = length - 1;
+    let thread_region_length = threads_total_length.div_ceil(threads);
+
+    log::info!("[par_build_with_all_dummies] regions begin");
+    rayon::scope(|s| {
+        let input         = &input;
+        let suffix_array  = &suffix_array;
+        let results       = &results;
+
+        for thread_index in 0..threads {
+            s.spawn(move |_| {
+                let start = 1 + thread_index * thread_region_length;
+                let end = (start + thread_region_length).min(length);
+                let is_last_thread = thread_index == threads - 1;
+                let result = _build_sbwt_region_with_all_dummies(
+                    k,
+                    start,
+                    end,
+                    is_last_thread,
+                    input,
+                    suffix_array,
+                    build_lcs,
+                    build_counts
+                );
+                results.lock().unwrap().push(result);
+            });
+        }
+    });
+    log::info!("[par_build_with_all_dummies] regions done");
+
+    let mut results = {
+        let mutex = Arc::try_unwrap(results).unwrap();
+        mutex.into_inner().unwrap()
+    };
+    results.sort_by_key(|result| result.start);
+
+    let mut total_kmer_count = 0;
+
+    let mut rows_parts: Vec<Vec<BitVec<u64>>> = vec![
+        Vec::with_capacity(results.len()),
+        Vec::with_capacity(results.len()),
+        Vec::with_capacity(results.len()),
+        Vec::with_capacity(results.len()),
+    ];
+    let mut lcs_parts = {
+        let capacity = if build_lcs {
+            results.len()
+        } else {
+            0
+        };
+        Vec::<Option<BitVec<u64>>>::with_capacity(capacity)
+    };
+    let mut counts_parts = {
+        let capacity = if build_counts {
+            results.len()
+        } else {
+            0
+        };
+        Vec::<Option<(Vec<u8>, Vec<u64>)>>::with_capacity(capacity)
+    };
+
+    for result in results {
+        let SbwtAllDummiesRegionResult { kmer_count, rows, lcs, counts, .. } = result;
+        if rows.is_empty() {
+            continue;
+        }
+        total_kmer_count += kmer_count;
+        for (row_index, row) in rows.into_iter().enumerate() {
+            rows_parts[row_index].push(row);
+        }
+        if build_lcs {
+            lcs_parts.push(lcs);
+        }
+        if build_counts {
+            counts_parts.push(counts);
+        }
+    }
+
+    log::info!("[par_build_with_all_dummies] agglomerating results");
+    let rows = Arc::new(Mutex::new(Vec::<(usize, BitVec<u64>)>::new()));
+    let mut lcs = None;
+    let mut counts = None;
+    rayon::scope(|s| {
+        let rows   = &rows;
+        let lcs    = &mut lcs;
+        let counts = &mut counts;
+
+        for (row_index, row_parts) in rows_parts.into_iter().enumerate() {
+            s.spawn(move |_| {
+                let local_row = crate::util::parallel_bitvec_concat(row_parts);
+                rows.lock().unwrap().push((row_index, local_row));
+            });
+        }
+
+        if build_lcs {
+            s.spawn(move |_| {
+                let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+                let bit_width = bit_width as usize;
+
+                let bitvec_lcs_parts = lcs_parts.into_iter().map(Option::unwrap).collect::<Vec<_>>();
+                let value = par_concatenate_lcs(bit_width, bitvec_lcs_parts);
+                *lcs = Some(value);
+            });
+        }
+
+        if build_counts {
+            s.spawn(move |_| {
+                let raw_data = counts_parts.into_iter().map(Option::unwrap).collect::<Vec<_>>();
+                let mut total_individual_counts = 0;
+                let mut total_large_counts = 0;
+                for part in &raw_data {
+                    total_individual_counts += part.0.len();
+                    total_large_counts      += part.1.len();
+                }
+                let mut individual_counts = vec![0_u8; total_individual_counts];
+                let mut large_counts = vec![0_u64; total_large_counts];
+                let sample_distance = Counts::DEFAULT_SAMPLE_DISTANCE;
+                let mut sample_information_op = None;
+
+                rayon::scope(|s| {
+                    let mut individual_counts_slice: &mut [u8]  = &mut individual_counts;
+                    let mut large_counts_slice     : &mut [u64] = &mut large_counts;
+                    for (part_individual_counts, part_large_counts) in &raw_data {
+                        let (current_slice, residual) = individual_counts_slice.split_at_mut(
+                            part_individual_counts.len()
+                        );
+                        individual_counts_slice = residual;
+                        s.spawn(|_| current_slice.copy_from_slice(part_individual_counts));
+
+                        let (current_slice, residual) = large_counts_slice.split_at_mut(
+                            part_large_counts.len()
+                        );
+                        large_counts_slice = residual;
+                        s.spawn(|_| current_slice.copy_from_slice(part_large_counts))
+                    }
+                    
+                    s.spawn(|_| {
+                        let mut index: usize = 0;
+                        let sample_count = total_individual_counts.div_ceil(sample_distance) + 1;
+                        let mut sample_information = Vec::<Sample>::with_capacity(sample_count);
+                        let mut sample = Sample::default();
+                        let mut large_count_index;
+
+                        for (part_individual_counts, part_large_counts) in &raw_data {
+                            large_count_index = 0;
+                            for &individual_count in part_individual_counts {
+                                if index % sample_distance == 0 {
+                                    sample_information.push(sample);
+                                }
+                                sample.count += individual_count as u64;
+                                if individual_count == u8::MAX {
+                                    sample.count += part_large_counts[large_count_index];
+                                    sample.large_counts_up_to_sample += 1;
+                                    large_count_index += 1;
+                                }
+                                index += 1;
+                            }
+                        }
+                        sample_information.push(sample);
+                        sample_information_op = Some(sample_information);
+                    });
+                });
+
+                let sample_information = sample_information_op.unwrap();
+                *counts = Some(Counts {
+                    individual_counts,
+                    sample_distance,
+                    sample_information,
+                    large_counts,
+                });
+            });
+        }
+    });
+
+    let mut rows_with_index = {
+        let mutex = Arc::try_unwrap(rows).unwrap();
+        mutex.into_inner().unwrap()
+    };
+    rows_with_index.sort_by_key(|(index, _)| *index);
+    let rows = rows_with_index.into_iter().map(|(_, row)| row).collect::<Vec<_>>();
+
+    let result = collect_output(k, rows, lcs, counts, total_kmer_count);
+    log::info!("[par_build_with_all_dummies] done");
+    result
+}
+
+#[derive(Debug)]
+struct SbwtAllDummiesRegionResult {
+    start: usize,
+    kmer_count: usize,
+    rows: Vec<BitVec<u64>>,
+    lcs: Option<BitVec<u64>>,
+    counts: Option<(Vec<u8>, Vec<u64>)>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn _build_sbwt_region_with_all_dummies(
+    k: usize,
+    start: usize,
+    end: usize,
+    is_last_thread: bool,
+    input: &[u8],
+    suffix_array: &[usize],
+    build_lcs: bool,
+    build_counts: bool,
+) -> SbwtAllDummiesRegionResult {
+    let word_count = k.div_ceil(LANES);
+    let length = suffix_array.len();
+
+    let length_lcp_outedge = |index: usize| -> (usize, usize, usize) {
+        let current_suffix_index = suffix_array[index];
+
+        let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
+        let previous_character = input[previous_character_index_in_input];
+        let outedge = CHAR_TO_INDEX[previous_character as usize];
+
+        let first_character = input[current_suffix_index];
+        let first_character_index = CHAR_TO_INDEX[first_character as usize];
+
+        let length_lcp = if first_character_index == 0 {
+            (0, 0)
+        } else {
+            let previous_suffix_index = suffix_array[index - 1];
+            find_length_and_lcp_value(
+                k,
+                input,
+                word_count,
+                current_suffix_index,
+                previous_suffix_index
+            )
+        };
+
+        (length_lcp.0, length_lcp.1, outedge)
+    };
+
+    let mut index = start;
+    let mut start_of_k_range: bool;
+    let mut start_of_k_minus_one_range: bool;
+
+    if index != 1 {
+        while index < end {
+            let (length, lcp_value, _) = length_lcp_outedge(index);
+            start_of_k_range           = lcp_value < length;
+            start_of_k_minus_one_range = start_of_k_range && (length < k || lcp_value < k - 1);
+            if start_of_k_minus_one_range {
+                break;
+            }
+            index += 1;
+        }
+        if index >= end {
+            return SbwtAllDummiesRegionResult {
+                start,
+                kmer_count: 0,
+                rows: vec![],
+                lcs: None,
+                counts: None,
+            }
+        }
+    }
+
+    let capacity = end - start;
+    let mut rows = Vec::<BitVec<u64>>::new();
+    for _ in 0..4 {
+        rows.push(BitVec::with_capacity(capacity));
+    }
+
+    let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
+    let bit_width = bit_width as usize;
+    let mut lcs_count: usize = 0;
+    let mut lcs: Option<BitVec<u64>> = if build_lcs {
+        let value = bitvec::bitvec![u64, bitvec::order::Lsb0; 0; bit_width * capacity];
+        Some(value)
+    } else {
+        None
+    };
+
+    let mut counts = if build_counts {
+        let individual_counts = Vec::<u8>::with_capacity(capacity);
+        let large_counts = Vec::<u64>::with_capacity(capacity);
+        Some((individual_counts, large_counts))
+    } else {
+        None
+    };
+
+    let mut current_set: u8 = 0;
+
+    let mut kmer_count: usize = 0;
+
+    let mut k_range_count    : u64 = 0;
+    let mut individual_count : u64 = 0;
+
+    if start == 1 {
+        lcs_count += 1;
+        k_range_count = 1;
+        if build_counts {
+            counts.as_mut().unwrap().0.push(0);
+        }
+    }
+
+    while index < length {
+        let (length, lcp_value, outedge) = length_lcp_outedge(index);
+        start_of_k_range           = lcp_value < length;
+        start_of_k_minus_one_range = start_of_k_range && (length < k || lcp_value < k - 1);
+
+        if start_of_k_minus_one_range {
+            while k_range_count > 0 {
+                push_set(&mut rows, current_set);
+                current_set = 0;
+                k_range_count -= 1;
+            }
+
+            current_set = 0;
+
+            if index >= end {
+                break;
+            }
+        }
+
+        if start_of_k_range {
+            k_range_count += 1;
+            if length >= k {
+                kmer_count += 1;
+            }
+
+            if build_lcs {
+                let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
+                let (word, _)   = suffix.split_at_mut(bit_width);
+                word.store_le(lcp_value as u64);
+                lcs_count += 1;
+            }
+
+            if build_counts && individual_count > 0 {
+                let counts = counts.as_mut().unwrap();
+                if individual_count >= u8::MAX as u64 {
+                    counts.0.push(u8::MAX);
+                    counts.1.push(individual_count - u8::MAX as u64);
+                } else {
+                    counts.0.push(individual_count as u8);
+                }
+                individual_count = 0;
+            }
+        }
+
+        if build_counts && length > 0 {
+            individual_count += 1;
+        }
+
+        current_set |= (1 << outedge) as u8;
+
+        index += 1;
+    }
+
+    if is_last_thread {
+        while k_range_count > 0 {
+            push_set(&mut rows, current_set);
+            current_set = 0;
+            k_range_count -= 1;
+        }
+    }
+
+    if build_lcs {
+        lcs.as_mut().unwrap().truncate(bit_width * lcs_count);
+    }
+
+    if build_counts && individual_count > 0 {
+        let counts = counts.as_mut().unwrap();
+        if individual_count >= u8::MAX as u64 {
+            counts.0.push(u8::MAX);
+            counts.1.push(individual_count - u8::MAX as u64);
+        } else {
+            counts.0.push(individual_count as u8);
+        }
+    }
+
+    SbwtAllDummiesRegionResult {
+        start,
+        kmer_count,
+        rows,
+        lcs,
+        counts
+    }
 }
 
 #[inline]
@@ -1347,7 +1752,10 @@ mod tests {
                 true,
                 Counts::DEFAULT_SAMPLE_DISTANCE,
                 1, 4, Counts::DEFAULT_BATCH_SIZE_IN_BYTES).unwrap();
-            assert_eq!(vodbg.counts().unwrap(), &counts.unwrap());
+
+            let correct_counts = vodbg.counts().unwrap();
+            let constructed_counts = &counts.unwrap();
+            assert_eq!(correct_counts, constructed_counts);
 
             // With full context suffix array.
             let Output {
@@ -1361,7 +1769,8 @@ mod tests {
 
             assert_eq!(correct_sbwt, constructed_sbwt);
             assert_eq!(constructed_lcs, constructed_lcs);
-            assert_eq!(vodbg.counts().unwrap(), &counts.unwrap());
+            let constructed_counts = &counts.unwrap();
+            assert_eq!(correct_counts, constructed_counts);
         }
     }
 }
