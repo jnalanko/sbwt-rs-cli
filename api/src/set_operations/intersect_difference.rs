@@ -323,7 +323,7 @@ fn reconstruct_source_kmers<SS: SubsetSeq + Send + Sync>(
 /// chains — re-creating exactly the marked ancestors they still need.
 ///
 /// Returns the marked set in `index1`'s colex space.
-fn mark_dead_chains<SS: SubsetSeq>( //todolore can/should this parallelized?
+fn mark_dead_chains<SS: SubsetSeq>(
     index1: &SbwtIndex<SS>,
     dead_ends: &[usize],
     has_incoming: &AtomicBitmap,
