@@ -136,10 +136,12 @@ fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
 
             // Resolves dead-end status for the group's buffered `in_result` members: only
             // the first can have a surviving edge, every later one is unconditionally dead.
+            // Colex position 0 is the root `$^k`, which is never removable, so it is never
+            // reported even when the intersection leaves it without a single outgoing edge.
             let flush_dead_ends = |members: &[(usize, bool)], any_edge: bool, dead_ends: &mut Vec<usize>| {
                 for (idx, &(pos, is_dummy)) in members.iter().enumerate() {
                     let dead = if idx == 0 { is_dummy && !any_edge } else { is_dummy };
-                    if dead { dead_ends.push(pos); }
+                    if dead && pos != 0 { dead_ends.push(pos); }
                 }
             };
 
@@ -304,9 +306,64 @@ fn reconstruct_source_kmers<SS: SubsetSeq + Send + Sync>(
     }).collect()
 }
 
+/// Marks the dead-end dummies and, unconditionally, every ancestor on their dummy chains,
+/// walking up to the root via inverse-LF in `index1`. The predecessor of a dummy is always
+/// itself a dummy, so the walk never leaves the dummy subgraph; chains that merge stop at
+/// the first already-marked node. Colex position 0 (the root) is never marked.
+///
+/// This deliberately over-kills: a marked ancestor may still feed a live sibling subtree.
+/// Any such orphaned child is recognizable purely from `has_incoming`: a shared dummy's
+/// child receives its unique incoming edge from that (now marked) parent, so an unmarked
+/// child with its bit set has just lost its incoming edge. The sweep clears those bits, so
+/// the orphans are collected as source nodes and the auxiliary SBWT rebuilds their padding
+/// chains — re-creating exactly the marked ancestors they still need.
+///
+/// Returns the marked set in `index1`'s colex space.
+fn mark_dead_chains<SS: SubsetSeq>( //todolore can/should this parallelized?
+    index1: &SbwtIndex<SS>,
+    dead_ends: &[usize],
+    has_incoming: &AtomicBitmap,
+    sigma: usize,
+) -> BitVec {
+    let mut redundant = BitVec::new();
+    redundant.resize(index1.n_sets(), false);
+
+    let mut marked: Vec<usize> = Vec::new();
+    for &d in dead_ends {
+        let mut q = d;
+        while !redundant[q] {
+            redundant.set(q, true);
+            marked.push(q);
+            match index1.inverse_lf_step(q) {
+                Some(p) if p != 0 => q = p,
+                _ => break,
+            }
+        }
+    }
+
+    // Orphan sweep (after all marking, so `redundant` is final).
+    let mut n_orphans = 0usize;
+    for &p in &marked {
+        for c in 0..sigma {
+            if index1.sbwt.set_contains(p, c as u8) {
+                let t = index1.lf_step(p, c);
+                if !redundant[t] && has_incoming.get(t) {
+                    has_incoming.set(t, false); //todolore make test that has this scenario
+                    n_orphans += 1;
+                }
+            }
+        }
+    }
+
+    log::info!("[intersect] Dead-chain removal: {} node(s) marked from {} dead end(s); {} orphan(s) re-routed to the auxiliary index",
+        marked.len(), dead_ends.len(), n_orphans);
+    redundant
+}
+
 /// Direct pass 2: builds the intersection SBWT bit-rows when every intersection
 /// position already has an incoming edge and no dummy chain repair is required.
 /// For each group the AND of the two per-index ORs is written at the group's isec leader.
+///
 fn intersect_rows_direct<SS: SubsetSeq + Send + Sync>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -405,11 +462,19 @@ fn intersect_rows_direct<SS: SubsetSeq + Send + Sync>(
 /// are absent. Remedy: reconstruct those source k-mers (in parallel), build a small auxiliary
 /// SBWT from them, then use a single three-way interleaving of (index1, index2, aux) to produce
 /// the complete bit-rows. Edge rule: c is set iff aux has it OR both index1 and index2 have it.
+///
+/// The same pass also leaves out the dead dummy chains: `redundant_s1` (index1 colex space,
+/// precomputed by [`mark_dead_chains`]) marks every node of every chain whose real
+/// k-mer did not survive the intersection. Marked nodes are not emitted as result nodes and
+/// edges whose LF-step target is marked are not written. This is safe even when a marked
+/// node lies on a new source's padding chain: the aux contains the very same node, so the
+/// `s3` term of the predicate re-emits it and `s3_or` supplies both its row and its
+/// incoming edge — dead is dead, and the aux brings back exactly what it needs.
 fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
-    mut index1: SbwtIndex<SS>,
+    index1: SbwtIndex<SS>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
-    dead_end_dummies: Vec<usize>,
+    redundant_s1: Option<&BitVec>,
     sigma: usize,
     k: usize,
     optimize_peak_ram: bool,
@@ -417,8 +482,6 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     thread_pool: &rayon::ThreadPool,
 ) -> Vec<BitVec> {
     log::info!("[intersect] Dummy repair: reconstructing {} source k-mer(s) via inverse-LF (parallel)", source_colexes.len());
-    // Build select before wrapping in Arc so no clone of the SubsetSeq is needed.
-    index1.sbwt.build_select();
     let source_kmers = thread_pool.install(|| reconstruct_source_kmers(&index1, &source_colexes, k));
     drop(source_colexes);
     let index1 = Arc::new(index1);
@@ -443,11 +506,11 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[intersect] Dummy repair: building intersection SBWT bit-rows via three-way pass (parallel)");
     let (tw_ranges, s1_pc, s2_pc, s3_pc) =
         thread_pool.install(|| compute_piece_ranges_three_way(three_way_len, n_threads, &three_way));
-    let result_piece_counts =
-        thread_pool.install(|| count_result_nodes_per_piece(&tw_ranges, &three_way, false));
+    let result_piece_counts = thread_pool.install(||
+        count_result_nodes_per_piece(&tw_ranges, &three_way, false, redundant_s1, &s1_pc));
 
-    // For each (k-1)-suffix group: result node exists iff (s1&&s2)||s3.
-    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && s2_or[c]).
+    // For each (k-1)-suffix group: result node exists iff (s1 && s2 && !dead) || s3.
+    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && s2_or[c] && target not dead).
     thread_pool.install(|| {
         let pieces_vecvec: Vec<Vec<BitVec>> = (0..n_threads).into_par_iter().map(|thread_idx| {
             let colex_range = &tw_ranges[thread_idx];
@@ -467,15 +530,25 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
             let mut s1_read = false;
             let mut s2_read = false;
             let mut s3_read = false;
+            // s1_colex of the first s1 element in the current group (used for lf_step
+            // when filtering edges into dead nodes).
+            let mut s1_first_in_group = 0usize;
             let mut piece_rel_result_leader: Option<usize> = None;
             let mut result_colex_in_piece = 0usize;
 
             for merged_colex in colex_range.clone() {
                 if three_way.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    // Flush: write edge bits at the result leader (if any).
+                    // Flush: write edge bits at the result leader (if any). Edges into the
+                    // dead set can only originate from the root's group or a dead
+                    // (aux-revived) group — every dead node's parent is dead or the root —
+                    // so all other groups skip the per-edge lf_step target check.
                     if let Some(l) = piece_rel_result_leader {
+                        let check_dead_targets = redundant_s1
+                            .filter(|red| s1_first_in_group == 0 || red[s1_first_in_group]);
                         for c in 0..sigma {
-                            if s3_or[c] || (s1_or[c] && s2_or[c]) { piece_rows[c].set(l, true); }
+                            if s3_or[c] || (s1_or[c] && s2_or[c]
+                                && check_dead_targets.map_or(true, |red| !red[index1.lf_step(s1_first_in_group, c)]))
+                            { piece_rows[c].set(l, true); }
                         }
                     }
                     s1_read = false; s2_read = false; s3_read = false;
@@ -485,6 +558,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 
                 if !s1_read && three_way.s1[merged_colex] {
                     for c in 0..sigma { s1_or[c] = index1.sbwt.set_contains(s1_colex, c as u8); }
+                    s1_first_in_group = s1_colex;
                     s1_read = true;
                 }
                 if !s2_read && three_way.s2[merged_colex] {
@@ -496,7 +570,11 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                     s3_read = true;
                 }
 
-                let is_result = (three_way.s1[merged_colex] && three_way.s2[merged_colex])
+                // s1&&s2 implies s1[merged_colex], so s1_colex (not yet incremented this
+                // iteration) is this node's position in index1's colex space; dead nodes
+                // are not result nodes unless the aux re-emits them via s3.
+                let is_result = (three_way.s1[merged_colex] && three_way.s2[merged_colex]
+                        && redundant_s1.map_or(true, |red| !red[s1_colex]))
                     || three_way.s3[merged_colex];
                 if is_result {
                     if piece_rel_result_leader.is_none() {
@@ -510,10 +588,14 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                 s3_colex += three_way.s3[merged_colex] as usize;
             }
 
-            // Flush the last group.
+            // Flush the last group (same dead-target gating as above).
             if let Some(l) = piece_rel_result_leader {
+                let check_dead_targets = redundant_s1
+                    .filter(|red| s1_first_in_group == 0 || red[s1_first_in_group]);
                 for c in 0..sigma {
-                    if s3_or[c] || (s1_or[c] && s2_or[c]) { piece_rows[c].set(l, true); }
+                    if s3_or[c] || (s1_or[c] && s2_or[c]
+                        && check_dead_targets.map_or(true, |red| !red[index1.lf_step(s1_first_in_group, c)]))
+                    { piece_rows[c].set(l, true); }
                 }
             }
 
@@ -547,10 +629,11 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// intersection SBWT). This differs from [merge] where every position writes OR-into-leader directly.
 ///
 /// Only dummy nodes shared by both SBWTs are retained. After pass 1, a parallel count detects
-/// whether any k-mers became source nodes in the intersection. If none did, pass 2 returns
-/// the result directly. Otherwise, an auxiliary SBWT is built from those source
-/// k-mers (with parallel k-mer reconstruction) and merged via a three-way interleaving to repair
-/// the missing dummy chains.
+/// whether any k-mers became source nodes in the intersection, and pass 1 also reports the
+/// dead-end dummies (shared dummies whose chain no longer leads to a surviving k-mer). If there
+/// is neither, pass 2 returns the result directly. Otherwise, an auxiliary SBWT is built from
+/// those source k-mers (with parallel k-mer reconstruction) and merged via a three-way
+/// interleaving that repairs the missing dummy chains and strips the dead-end ones.
 pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -590,7 +673,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
             .sum()
     });
 
-    let new_rows = if (dead_end_dummies.len() == 0) && (n_incoming == isec_length) {
+    let new_rows = if dead_end_dummies.is_empty() && n_incoming == isec_length {
         log::info!("All {} intersection positions have incoming edges; no auxiliary dummy chains needed", isec_length);
         log::info!("[intersect] Pass 2: building intersection SBWT bit-rows (parallel)");
         intersect_rows_direct(
@@ -601,15 +684,27 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     } else {
         log::info!("Intersection SBWT structurally incomplete ({} source(s) missing dummy chains); merging with auxiliary index",
             isec_length - n_incoming);
+        // Unwrap the Arc (refcount is 1 here since nothing else cloned it) and build select
+        // now: both the dead-chain walk and source k-mer reconstruction need it.
+        let mut index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
+        index1.sbwt.build_select();
+
+        // Mark the dead chains (unconditionally, up to the root) and clear the incoming-edge
+        // bits of any orphaned children BEFORE collecting sources: orphans must be collected
+        // so the auxiliary index rebuilds their padding chains. The three-way pass excludes
+        // marked nodes and the edges into them while building the rows.
+        let redundant_s1: Option<BitVec> = if dead_end_dummies.is_empty() { None } else {
+            Some(mark_dead_chains(&index1, &dead_end_dummies, &has_incoming, sigma))
+        };
+        drop(dead_end_dummies);
+
         let source_colexes = collect_result_source_nodes(
             &interleaving, &has_incoming, merged_length, isec_length - n_incoming,
             false, n_threads, &thread_pool,
         );
         drop(interleaving); // No longer needed; free before the aux-index build.
-        // Unwrap the Arc; refcount is 1 here since nothing else cloned it.
-        let index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
         intersect_rows_with_dummy_repair(
-            index1, index2, source_colexes, dead_end_dummies,
+            index1, index2, source_colexes, redundant_s1.as_ref(),
             sigma, k, optimize_peak_ram, n_threads, &thread_pool,
         )
     };
@@ -780,8 +875,8 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[difference] Dummy repair: building difference SBWT bit-rows via three-way pass (parallel)");
     let (tw_ranges, s1_pc, s2_pc, s3_pc) =
         thread_pool.install(|| compute_piece_ranges_three_way(three_way_len, n_threads, &three_way));
-    let result_piece_counts =
-        thread_pool.install(|| count_result_nodes_per_piece(&tw_ranges, &three_way, true));
+    let result_piece_counts = thread_pool.install(||
+        count_result_nodes_per_piece(&tw_ranges, &three_way, true, None, &s1_pc));
 
     // For each (k-1)-suffix group: result node exists iff (s1 && !s2) || s3.
     // Edge-bit c is set iff s3_or[c] || (s1_or[c] && !s2_or[c]).

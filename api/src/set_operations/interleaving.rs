@@ -5,6 +5,7 @@ use std::ops::Range;
 use bitvec::prelude::*;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
 use crate::compact_int_vector::CompactIntVector;
 use crate::subsetseq::*;
@@ -585,22 +586,30 @@ pub(super) fn compute_piece_ranges_three_way(
 // Count result positions per piece. When `difference` is false: `(s1 && s2) || s3`
 // (intersection with auxiliary). When `difference` is true: `(s1 && !s2) || s3`
 // (set-difference with auxiliary).
+//
+// `redundant_s1` (in index1 colex space, tracked via per-piece `s1_pc` popcounts) marks
+// dead dummy-chain nodes: those do not count as result nodes through the s1-side predicate
+// (they can still count through `s3` when the auxiliary index contains the same node).
 pub(super) fn count_result_nodes_per_piece(
     merged_piece_ranges: &[Range<usize>],
     interleaving: &ThreeWayInterleaving,
     difference: bool,
+    redundant_s1: Option<&BitVec>,
+    s1_pc: &[usize],
 ) -> Vec<usize> {
-    merged_piece_ranges.par_iter().map(|colex_range| {
+    merged_piece_ranges.par_iter().enumerate().map(|(piece_idx, colex_range)| {
+        let mut s1_colex: usize = s1_pc[..piece_idx].iter().sum();
         let mut count = 0usize;
         for merged_colex in colex_range.clone() {
-            let is_result = if difference {
-                (interleaving.s1[merged_colex] && !interleaving.s2[merged_colex])
-                    || interleaving.s3[merged_colex]
+            let s1_side = if difference {
+                interleaving.s1[merged_colex] && !interleaving.s2[merged_colex]
             } else {
-                (interleaving.s1[merged_colex] && interleaving.s2[merged_colex])
-                    || interleaving.s3[merged_colex]
+                interleaving.s1[merged_colex] && interleaving.s2[merged_colex]
             };
+            let is_result = (s1_side && redundant_s1.map_or(true, |red| !red[s1_colex]))
+                || interleaving.s3[merged_colex];
             if is_result { count += 1; }
+            s1_colex += interleaving.s1[merged_colex] as usize;
         }
         count
     }).collect()

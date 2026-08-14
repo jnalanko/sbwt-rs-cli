@@ -374,6 +374,91 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
     }
 
     #[test]
+    fn test_intersect_dead_end_dummy_chain() {
+        // k=5.  Both sequences start with "ACCT" and diverge only at the 5th character, so
+        // index1 and index2 share the whole padding chain $$$$A, $$$AC, $$ACC, $ACCT while
+        // the real k-mer it was built for (ACCTT vs ACCTG) is not shared.  In the
+        // intersection $ACCT loses its only outgoing edge, so the entire four-node chain
+        // above it becomes purposeless and must be stripped (a BFS, not a single node).
+        //
+        // The tails share "GGTACGTTTT…", but GGTAC's predecessor differs (GGGTA vs AGGTA),
+        // so GGTAC is also a new source node — dead-end stripping and dummy repair run
+        // together in the same pass.
+        let seq1 = b"ACCTTGGGTACGTTTTTTTTTTTT";
+        let seq2 = b"ACCTGAGGTACGTTTTTTTTTTTT";
+        for n_threads in [1, 2, 4] {
+            check_intersect(seq1, seq2, 5, n_threads);
+        }
+    }
+
+    #[test]
+    fn test_intersect_dead_end_dummy_chain_long() {
+        // Same dead-end chain trigger as test_intersect_dead_end_dummy_chain, but with long
+        // disjoint tails so the indexes are big enough for the multi-threaded piece splitting
+        // in the three-way pass and in the strip pass.  The tails are all-A / all-C rather
+        // than random so they cannot accidentally supply the missing predecessors.
+        let head1 = b"ACCTTGGGTACGTTTTTTTTTTTT" as &[u8];
+        let head2 = b"ACCTGAGGTACGTTTTTTTTTTTT" as &[u8];
+        let seq1: Vec<u8> = head1.iter().chain(vec![b'A'; 2000].iter()).copied().collect();
+        let seq2: Vec<u8> = head2.iter().chain(vec![b'C'; 2000].iter()).copied().collect();
+        for n_threads in [1, 2, 4] {
+            check_intersect(&seq1, &seq2, 5, n_threads);
+        }
+    }
+
+    #[test]
+    fn test_intersect_orphaned_branch_dummy() {
+        // k=4. index1 = {ACAA, ACGT}, index2 = {ACAC, ACGT} (two sequences each, all four
+        // k-mers are sources in their own index). The shared dummy $ACA is a dead end
+        // (continuations A vs C, nothing survives), so its ancestors $$AC and $$$A are
+        // marked dead unconditionally. But $$AC also feeds the live $ACG chain of the
+        // shared k-mer ACGT — killing it orphans $ACG. The orphan's incoming-edge bit is
+        // cleared, it is collected as a source node, and the auxiliary index rebuilds the
+        // chain $$$A, $$AC, $ACG, re-creating exactly the killed ancestors still needed.
+        // Expected result: padded spectrum of {ACGT}.
+        let k = 4;
+        let mut isec_kmers: Vec<Vec<u8>> = vec![b"ACGT".to_vec()];
+        isec_kmers.sort();
+        let (sbwt_true, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .k(k).run_from_vecs(&isec_kmers);
+        let spectrum_true_raw = sbwt_true.reconstruct_padded_spectrum(1);
+        let mut kmers_true: Vec<Vec<u8>> = spectrum_true_raw.chunks(k).map(|c| c.to_vec()).collect();
+        kmers_true.sort();
+
+        let (sbwt1, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .k(k).run_from_slices(&[b"ACAA" as &[u8], b"ACGT"]);
+        let (sbwt2, _) = SbwtIndexBuilder::<BitPackedKmerSortingMem>::new()
+            .k(k).run_from_slices(&[b"ACAC" as &[u8], b"ACGT"]);
+
+        for n_threads in [1, 2] {
+            for optimize_peak_ram in [false, true] {
+                let interleaving = MergeInterleaving::new(&sbwt1, &sbwt2, optimize_peak_ram, n_threads);
+                let sbwt_isec = intersect(
+                    Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()),
+                    Arc::new(interleaving), 0, true, n_threads,
+                );
+                let spectrum_isec_raw = sbwt_isec.reconstruct_padded_spectrum(n_threads);
+                let mut kmers_isec: Vec<Vec<u8>> = spectrum_isec_raw.chunks(k).map(|c| c.to_vec()).collect();
+                kmers_isec.sort();
+                assert_eq!(kmers_true, kmers_isec,
+                    "n_threads={n_threads}, optimize_peak_ram={optimize_peak_ram}: \
+                     orphaned branch dummy not repaired correctly");
+            }
+        }
+    }
+
+    #[test]
+    fn test_intersect_revived_dead_end_dummy() {
+        // k=4. Intersection = {ACGT}, a new source (predecessors TACG / GACG not shared).
+        // Both indexes contain dummy $$AC (via sources ACAA / ACCC) whose edges (A vs C)
+        // AND to nothing -> pass 1 flags it dead. But ACGT's fresh chain $$$A,$$AC,$ACG
+        // passes through $$AC, so the aux index must revive it.
+        let seq1 = b"ACAATACGT";
+        let seq2 = b"ACCCGACGT";
+        check_intersect(seq1, seq2, 4, 1);
+    }
+
+    #[test]
     fn test_difference_single_disjoint_kmers() {
         let seq1 = b"ACCTT";
         let seq2 = b"ATGCG";
