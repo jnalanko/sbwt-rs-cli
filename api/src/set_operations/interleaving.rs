@@ -350,6 +350,11 @@ impl ThreeWayInterleaving {
                 )
             };
 
+            // A tiny aux (down to root-only, when there are no source k-mers) has too few
+            // label positions to split across threads; empty ranges trip asserts inside
+            // push_all_labels_forward. Push its labels single-threaded in that case.
+            let aux_n_threads = if aux.n_sets() < 2 * n_threads { 1 } else { n_threads };
+
             for round in 0..k {
                 log::info!("Three-way interleaving round {}/{}", round + 1, k);
 
@@ -382,7 +387,7 @@ impl ThreeWayInterleaving {
                         std::mem::swap(c1, t1);
                         index2.push_all_labels_forward(c2, t2, n_threads);
                         std::mem::swap(c2, t2);
-                        aux.push_all_labels_forward(c3, t3, n_threads);
+                        aux.push_all_labels_forward(c3, t3, aux_n_threads);
                         std::mem::swap(c3, t3);
                     } else if let (Compact(ref mut c1), Compact(ref mut c2), Compact(ref mut c3), None, None, None)
                         = (&mut chars1, &mut chars2, &mut chars3, &mut temp_char_buf_1, &mut temp_char_buf_2, &mut temp_char_buf_3)
@@ -396,7 +401,7 @@ impl ThreeWayInterleaving {
                         std::mem::swap(c2, &mut t2);
                         drop(t2);
                         let mut t3 = CompactIntVector::<3>::new(c3.len());
-                        aux.push_all_labels_forward_compact(c3, &mut t3, n_threads);
+                        aux.push_all_labels_forward_compact(c3, &mut t3, aux_n_threads);
                         std::mem::swap(c3, &mut t3);
                         drop(t3);
                     } else {

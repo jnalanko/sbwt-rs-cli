@@ -738,6 +738,39 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         }
     }
 
+    #[test]
+    fn test_empty_aux_index_multithreaded() {
+        // Dead-end-only set operations run the dummy-repair pass with no source k-mers,
+        // so the auxiliary index is a root-only SBWT (one row, zero edges). Its label
+        // vector used to be split across threads inside the three-way interleaving,
+        // producing an empty range that tripped an assert in push_all_labels_forward —
+        // reachable at n_threads >= 2 in both intersect and difference. Fingerprints are
+        // compared because an empty result cannot be spectrum-reconstructed in parallel.
+        let k = 5;
+        // Difference: {ACCTT} \ {CACCT, ACCTT} = {} with index1's whole chain dangling.
+        let a = build_from_kmer_set(&kmers_of(b"ACCTT", k), k);
+        let b = build_from_kmer_set(&kmers_of(b"CACCTT", k), k);
+        // Intersection: {ACCTT} and {ATGCG} share only the dummy $$$$A.
+        let c = build_from_kmer_set(&kmers_of(b"ATGCG", k), k);
+        let truth = index_fingerprint(&build_from_kmer_set(&[], k));
+
+        for n_threads in [2, 4] {
+            for opt_ram in [false, true] {
+                let il = MergeInterleaving::new(&a, &b, opt_ram, n_threads);
+                let d = difference(Arc::new(a.clone()), Arc::new(b.clone()),
+                    Arc::new(il), 0, opt_ram, n_threads);
+                assert_eq!(truth, index_fingerprint(&d),
+                    "difference: n_threads={n_threads} opt_ram={opt_ram}");
+
+                let il = MergeInterleaving::new(&a, &c, opt_ram, n_threads);
+                let i = intersect(Arc::new(a.clone()), Arc::new(c.clone()),
+                    Arc::new(il), 0, opt_ram, n_threads);
+                assert_eq!(truth, index_fingerprint(&i),
+                    "intersect: n_threads={n_threads} opt_ram={opt_ram}");
+            }
+        }
+    }
+
     /// All k-mers of `seq`, in the order they first occur.
     fn kmers_of(seq: &[u8], k: usize) -> Vec<Vec<u8>> {
         let mut out: Vec<Vec<u8>> = Vec::new();
