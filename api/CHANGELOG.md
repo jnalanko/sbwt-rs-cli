@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.0
+
+### New features
+
+* A variable-order DBG interface, with optional k-mer counts.
+* Two new construction algorithms: one based on bounded-context suffix sorting, another based on suffix sorting via libsais (behind the feature gate "libsais"). The builder API has been reworked to accommodate these, and it is **not backwards compatible**.
+
+### Bugfixes
+
+* Fixed a bug in the set difference operation which lead to a corrupt index.
+* Fixed a bug where redundant dummy nodes were sometimes left behind by set operations.
+* Fixed a crash when running set operations on very small inputs.
+
+### Performance
+
+* Disk-based construction: better batching, and introduced parallelism for later stages of the construction pipeline.
+
 ## v0.5.0
 
 - Added support for set operations (union, intersection, difference).
