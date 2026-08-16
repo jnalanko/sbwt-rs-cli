@@ -780,6 +780,9 @@ pub fn sort_and_dedup_kmers_into_file<SS: crate::SubsetSeq + Send, IN: SeqStream
     (kmers_file.path.clone(), first_mers_file.map(|f| f.path.clone()))
 }
 
+/// Build the index from the files written by [sort_and_dedup_kmers_into_file]. Pass
+/// `first_mers_file` if and only if that function was called with `add_all_dummy_paths` set.
+/// The input files are not deleted.
 pub fn build_from_kmers_on_disk<SS: crate::SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_dir: &Path, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
     let mut tfm = TempFileManager::new(temp_dir);
     match k {
