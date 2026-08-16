@@ -1,8 +1,6 @@
-use std::io::BufWriter;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use jseqio::reader::DynamicFastXReader;
-use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
 use sbwt::*;
 

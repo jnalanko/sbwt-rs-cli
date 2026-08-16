@@ -9,8 +9,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use bitvec::prelude::*;
 use jseqio::reader::DynamicFastXReader;
-use jseqio::reader::SeqStreamWithRevComp;
-use rand::Rng;
 use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
 use sbwt::*;
@@ -995,11 +993,6 @@ fn check_command(matches: &clap::ArgMatches) {
 
     check::run_check(index_path, cpp_format, invariant_check, original_sequences, add_revcomp);
 }
-pub struct TempFileManager {
-    directory: PathBuf,
-    rng: rand::rngs::StdRng,
-}
-
 #[derive(Debug)]
 pub struct TempFilePath {
     path: PathBuf,
