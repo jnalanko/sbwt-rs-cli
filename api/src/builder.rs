@@ -357,8 +357,9 @@ impl<SS: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<SS> {
 }
 
 /// A construction algorithm based on sorting the k-bounded contexts of the input.
-/// Unlike [BitPackedKmerSortingMem] and [BitPackedKmerSortingDisk], this algorithm holds the
-/// concatenation of the input sequences in memory, and is not limited to k <= 256.
+/// Unlike [BitPackedKmerSortingMem] and [BitPackedKmerSortingDisk], this algorithm holds a
+/// concatenation of the input sequences in memory, and is not limited to k <= 256. Runs in
+/// time O(nk), where n is the length of the input.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BuildByBoundedSuffixSort<SS: SeqStream + Send> {
     input: SS,
@@ -506,7 +507,7 @@ impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
 /// A construction algorithm that uses the `libsais` crate to build a suffix array of the
 /// concatenation of the (reversed) input sequences, which
 /// [crate::alternative_construction::build] then turns into the SBWT. Like
-/// [BuildByBoundedSuffixSort], this algorithm holds the concatenation of the input sequences in
+/// [BuildByBoundedSuffixSort], this algorithm holds a concatenation of the input sequences in
 /// memory, and is not limited to k <= 256.
 ///
 /// Only available when the optional `libsais` feature is enabled, since it pulls in the
