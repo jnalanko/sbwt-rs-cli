@@ -10,6 +10,14 @@ use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::serialize::*;
 use bitvec::prelude::*;
 
+// Import simple_sds_sbwt::ops::BitVec explicitly.
+// It is already imported in the glob import above, but there is a name conflict:
+// bitvec::prelude::* brings the struct bitvec::vec::BitVec. It compiles for now,
+// but future Rust versions will not support this.
+// See https://github.com/rust-lang/rust/issues/147992
+// This import fixes the ambiguity.
+use simple_sds_sbwt::ops::BitVec;
+
 use crate::util::bitvec_to_simple_sds_raw_bitvec;
 
 /// This trait represents a sequence of subsets from alphabet {0, 1, ..., sigma-1}, where sigma is the alphabet size.
@@ -140,7 +148,7 @@ pub trait SubsetSeq {
 /// bit vector rank and select queries on the indicator bit vectors.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct SubsetMatrix {
-    rows: Vec<BitVector>,
+    rows: Vec<simple_sds_sbwt::bit_vector::BitVector>,
 }
 
 impl SubsetSeq for SubsetMatrix {
