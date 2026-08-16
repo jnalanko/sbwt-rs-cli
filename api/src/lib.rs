@@ -13,9 +13,12 @@
 //! taking roughly log(k) bits of space per k-mer. The LCS array also enables the 
 //! computation of [*k-bounded matching statistics*][streaming_index::StreamingIndex::matching_statistics] 
 //! and [*shortest frequency-bounded suffixes*][streaming_index::StreamingIndex::shortest_freq_bound_suffixes]
-//! (both described [here](https://www.biorxiv.org/content/10.1101/2024.02.19.580943v1)). Two SBWTs can be [merged](merge) efficiently.
+//! (both described [here](https://www.biorxiv.org/content/10.1101/2024.02.19.580943v1)).
+//! Two SBWTs can be combined with [set operations](#set-operations): the [union](merge), the
+//! [intersection](intersect) and the [difference](difference).
 //! Finally, the crate provides an [interface][dbg::Dbg] for traversing the node-centric de Bruijn graph
-//! of the k-mers.
+//! of the k-mers, and an interface for traversing the
+//! [variable-order de Bruijn graph](#variable-order-de-bruijn-graphs).
 //! 
 //! # API Quick start 
 //! 
@@ -87,14 +90,41 @@
 //! The graph is not aware of reverse complements, so if you want to traverse the bi-directed de Bruijn
 //! graph that includes edges where one or both of the endpoints are reverse complemented, you need to take care of
 //! that logic yourself. See [Dbg][`dbg::Dbg`] for the API.
-//! 
-//! # Construction algorithms 
-//! 
-//! The crate provides two construction algorithms: a disk-based
-//! [bitpacked k-mer sorting][`builder::BitPackedKmerSortingDisk`] algorithm, and
-//! an [in-memory](`builder::BitPackedKmerSortingMem`) variant that is faster but 
-//! requires more RAM.
-//! 
+//!
+//! # Variable-order de Bruijn graphs
+//!
+//! An SBWT of order k also contains the de Bruijn graphs of all orders k' ≤ k. The
+//! [VoDbg][`vodbg::VoDbg`] struct exposes them as a single *variable-order* de Bruijn graph, where the
+//! order can be changed on the fly during a traversal in addition to the usual node-centric operations.
+//! This requires the [LCS array](LcsArray), [select support](SbwtIndex::build_select), and a
+//! previous/next smaller value structure. See the [vodbg] module for the API.
+//!
+//! # Set operations
+//!
+//! Two indexes of the same order k can be combined into an index of the [union](merge), the
+//! [intersection](intersect) or the [difference](difference) of their k-mer sets, All three 
+//! start from a [MergeInterleaving], which can also be queried for
+//! the sizes of the three sets without materializing the result index.
+//!
+//! # Construction algorithms
+//!
+//! The crate provides four construction algorithms:
+//!
+//! * [BitPackedKmerSortingDisk][`builder::BitPackedKmerSortingDisk`]: sorting of bit-packed k-mers
+//!   using temporary disk space.
+//! * [BitPackedKmerSortingMem][`builder::BitPackedKmerSortingMem`]: the same, but entirely in RAM.
+//!   Faster and scales better with parallelism, but requires more RAM.
+//! * [BuildByBoundedSuffixSort][`builder::BuildByBoundedSuffixSort`]: sorts the k-bounded contexts of
+//!   the input concatenation, bucketing them by a
+//!   [prefix](builder::BuildByBoundedSuffixSort::prefix_length_for_bucket_sort) first.
+//! * [BuildByLibsais][`builder::BuildByLibsais`]: builds a full suffix array and LCP array of the
+//!   input concatenation with the `libsais` library, and derives the SBWT from those. Only available
+//!   when the optional `libsais` feature is enabled.
+//!
+//! The two bit-packed k-mer sorting algorithms stream the input and support k up to 256. The two
+//! suffix-sorting algorithms instead hold the concatenation of the input sequences in memory, and have
+//! no upper bound on k.
+//!
 //! # Details on the space usage of the index
 //! 
 //! The index exploits overlaps between k-mers to encode them in small space.

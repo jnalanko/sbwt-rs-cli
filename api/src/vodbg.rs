@@ -1,7 +1,4 @@
-//! An important observation for some operations on the VoDbg is that any correct range of k-mers
-//! in the SBWT will contain at most one dummy k-mer which is comprised entirely of $ except for
-//! the shared suffix for the given range. Another important note is that this k-mer node will
-//! always be located at the beginning of the range.
+//! Variable-order de Bruijn graph operations using [SbwtIndex]. See [VoDbg].
 
 // Module and submodule contributions by Martin Kostadinov.
 
@@ -31,8 +28,61 @@ pub mod util {
 use count::Counts;
 use simple_sds_sbwt::serialize::Serialize;
 
-// A struct supporting de Bruijng graph operations on the k-mers stored in the SBWT. More notably
-// it supports changing the order i.e. the length of the string corresponding to a given node.
+/// A struct supporting de Bruijn graph operations on the k-mers stored in the SBWT. More notably
+/// it supports changing the order, i.e. the length of the string corresponding to a given node.
+///
+/// An SBWT of order k also contains the de Bruijn graphs of every order k' ≤ k, because the colex
+/// range of a k'-mer is a union of colex ranges of k-mers. `VoDbg` exposes them as a single
+/// *variable-order* de Bruijn graph: a [Node] is a colex range together with the length k' of the
+/// string it spells, and the order can be changed during a traversal. In addition to the usual
+/// node-centric de Bruijn graph operations, it supports changing the order:
+/// [contract_left][VoDbg::contract_left] and [contract_right][VoDbg::contract_right] remove
+/// characters from the left and from the right of the string, lowering the order, and
+/// [extend_left_with_character][VoDbg::extend_left_with_character] and
+/// [extend_left_with_index][VoDbg::extend_left_with_index] add one character to the left of the
+/// string, raising the order by one.
+///
+/// Changing the order is implemented with previous/next smaller value queries on the
+/// [LCS array](crate::LcsArray). These queries need a support structure implementing the
+/// [Pnsv] trait; [PnsvTuned][pnsv::PnsvTuned] is the recommended implementation, which
+/// internally dispatches between several structures depending on the target order. The index must have
+/// the LCS array and [select support](crate::SbwtIndex::build_select) built. Optionally, [k-mer
+/// counts][VoDbg::build_counts] can be built on top of the graph, after which
+/// [get_count][VoDbg::get_count] returns the number of occurrences of the string of a node in the
+/// input.
+///
+/// # Example
+///
+/// ```
+/// use sbwt::*;
+/// use sbwt::vodbg::VoDbg;
+/// use sbwt::vodbg::pnsv::PnsvTuned;
+///
+/// let seqs: Vec<&[u8]> = vec![b"AACTGACTGATCGTCTTGACTCGTTTATCTACGGT"];
+/// let k = 10;
+/// let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, k)
+///     .build_lcs(true) // Required by the Pnsv structures
+///     .build_select_support(true) // Required by VoDbg::new
+///     .run();
+/// let lcs = lcs.unwrap();
+///
+/// let pnsv = PnsvTuned::new_default(&sbwt, &lcs, k);
+/// let vodbg = VoDbg::new(&sbwt, &pnsv);
+///
+/// // A node of the de Bruijn graph of order k
+/// let node = vodbg.get_node(b"AACTGACTGA").unwrap();
+/// assert_eq!(vodbg.get_kmer(node), b"AACTGACTGA".to_vec());
+///
+/// // Remove characters from the left down to order 5: the node now spells the
+/// // length-5 suffix of the k-mer
+/// let short = vodbg.contract_left(node, 5);
+/// assert_eq!(vodbg.get_kmer(short), b"ACTGA".to_vec());
+///
+/// // Add one character to the left, raising the order back to 6
+/// let mut buf = Vec::<u8>::new();
+/// let longer = vodbg.extend_left_with_character(short, b'G', &mut buf).unwrap();
+/// assert_eq!(vodbg.get_kmer(longer), b"GACTGA".to_vec());
+/// ```
 #[derive(Clone, Debug)]
 pub struct VoDbg<'a, SS: SubsetSeq + Send + Sync, P: Pnsv + Send + Sync> {
     pub sbwt: &'a SbwtIndex<SS>,
@@ -147,6 +197,19 @@ where
         self.counts.as_ref()
     }
 
+    /// Counts the occurrences of the k-mers of `sequence_stream`, after which
+    /// [get_count][VoDbg::get_count] returns the number of occurrences of the string of a node.
+    /// Does nothing if the counts have already been built.
+    ///
+    /// Returns Err if the SBWT was not built with
+    /// [all dummy paths](crate::BitPackedKmerSortingMem::add_all_dummy_paths), which the counts
+    /// require. Panics if `thread_count` is less than 2, since one thread reads the input.
+    ///
+    /// `use_hash_map` selects how counts exceeding `u8::MAX` are collected: with a concurrent hash
+    /// map, or with a second pass over the input. `additional_memory_bound_gb` bounds the memory
+    /// reserved for streaming the input, on top of the structures being built. For good defaults for,
+    /// `sample_distance` and `batch_size`, use [Counts::DEFAULT_SAMPLE_DISTANCE] and
+    /// [Counts::DEFAULT_BATCH_SIZE_IN_BYTES].
     #[allow(clippy::result_unit_err)]
     pub fn build_counts<Stream>(
         &mut self,
@@ -248,8 +311,8 @@ where
         ))
     }
 
-    /// Climb to a "lower" level of the graph where the strings in the nodes are shorter by
-    /// removing characters from the left.
+    /// Removes characters from the left of the string of the node until its length is
+    /// `target_length`, giving the node of that lower order.
     pub fn contract_left(&self, node: Node, target_length: usize) -> Node {
         assert!(node.k < self.sbwt.k() || !self.is_dummy(node.start));
         assert!(node.k > target_length);
@@ -257,8 +320,8 @@ where
         new_node(range.start, range.end, target_length)
     }
 
-    /// Climb to a "lower" level of the graph where the strings in the nodes are shorter by
-    /// removing characters from the right.
+    /// Removes characters from the right of the string of the node until its length is
+    /// `target_length`, giving the node of that lower order.
     pub fn contract_right(&self, node: Node, target_length: usize) -> Option<Node> {
         assert!(node.k < self.sbwt.k() || !self.is_dummy(node.start));
         assert!(node.k > target_length);
@@ -275,8 +338,10 @@ where
         Some(node)
     }
 
-    /// Climb to an "upper" level of the graph where the strings in the nodes are one longer. Given
-    /// an index returns the corresponding node in colexicographic order if it exists.
+    /// Adds one character to the left of the string of the node, raising the order by one. The
+    /// character is chosen by `index`: the returned node is the one that comes `index`-th in
+    /// colexicographic order among those obtainable this way, or None if there are at most `index`
+    /// of them.
     pub fn extend_left_with_index(&self, node: Node, index: usize) -> Option<Node> {
         assert!(node.k < self.sbwt.k() || !self.is_dummy(node.start));
 
@@ -302,8 +367,10 @@ where
         None
     }
 
-    /// Climb to an "upper" level of the graph where the strings in the nodes are one longer.
-    /// Returns a node only if it exists.
+    /// Adds `character` to the left of the string of the node, raising the order by one.
+    /// Returns None if the resulting string is not a node of the graph.
+    ///
+    /// WARNING: this is a slow operation, taking time proportional to the order of the node.
     pub fn extend_left_with_character(&self, node: Node, character: u8, kmer_buffer: &mut Vec<u8>) -> Option<Node> {
         assert!(node.k < self.sbwt.k() || !self.is_dummy(node.start));
 
@@ -359,7 +426,11 @@ where
         None
     }
 
-    /// Climb to an "upper" level of the graph where the strings in the nodes are one longer.
+    /// Adds `character` to the right of the string of the node, raising the order by one.
+    /// At the maximum order k of the index the string cannot grow any further: the result is then
+    /// the length-k suffix of the extended string, which is the node reached by following the
+    /// outgoing edge labeled `character`, and the order stays at k.
+    /// Returns None if no node of the graph is obtained.
     pub fn extend_right(&self, node: Node, character: u8) -> Option<Node> {
         let result = self.sbwt.extend_right(node.start..node.end, character);
         let length_increase = if node.k < self.sbwt.k() { 1 } else { 0 };

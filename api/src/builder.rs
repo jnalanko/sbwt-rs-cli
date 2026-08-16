@@ -508,6 +508,9 @@ impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
 /// that [crate::alternative_construction::build_from_input] expects from them. Like
 /// [BuildByBoundedSuffixSort], this algorithm holds the concatenation of the input sequences in
 /// memory, and is not limited to k <= 256.
+///
+/// Only available when the optional `libsais` feature is enabled, since it pulls in the
+/// `libsais` crate as a dependency. The other construction algorithms are always available.
 #[cfg(feature = "libsais")]
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BuildByLibsais<SS: SeqStream + Send> {

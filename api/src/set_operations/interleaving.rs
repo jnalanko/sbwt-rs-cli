@@ -14,15 +14,79 @@ use crate::sbwt::*;
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;
 type BitSlice = bitvec::slice::BitSlice<u64, Lsb0>;
 
-/// An interleaving plan for [merging](merge) two [SbwtIndex] structures.
+/// An interleaving plan for combining two [SbwtIndex] structures with a set operation.
 ///
-/// To merge two `SbwtIndex` structures, follow these steps:
-/// 1. **Compute the interleaving plan.** Create a [MergeInterleaving] instance using [MergeInterleaving::new]. This interleaving serves as a blueprint for how the two SBWTs will be merged. It can also be queried to compute the size of the [intersection](MergeInterleaving::intersection_size) or the [union](MergeInterleaving::union_size) of the k-mer sets in the SBWTs.
-/// 2. **Execute the merge.** Pass the interleaving and the two SBWTs to the [merge] function.
+/// Two indexes of the same order k can be combined into an index of the [union](crate::merge), the
+/// [intersection](crate::intersect) or the [difference](crate::difference) of their k-mer sets, without
+/// going back to the underlying sequences. All three follow the same two steps:
+/// 1. **Compute the interleaving plan.** Create a [MergeInterleaving] with [MergeInterleaving::new].
+///    It records, for every node of the merged colex order, which of the two inputs it came from, and
+///    serves as the blueprint of the operation.
+/// 2. **Execute the operation.** Pass the interleaving and the two indexes to
+///    [merge](crate::merge), [intersect](crate::intersect) or [difference](crate::difference).
 ///
-/// The merge algorithm is an adaptation of the Wheeler graph merge algorithm described in
+/// The interleaving alone already determines the [size of the union](MergeInterleaving::union_size),
+/// the [intersection](MergeInterleaving::intersection_size) and the
+/// [difference](MergeInterleaving::difference_size), so these can be queried without materializing the
+/// result index, which is what a Jaccard index computation needs.
+///
+/// The interleaving algorithm is an adaptation of the Wheeler graph merge algorithm described in
 /// [*"Buffering updates enables efficient dynamic de Bruijn graphs"* (Alanko et al. 2021)](https://doi.org/10.1016/j.csbj.2021.06.047),
 /// tailored specifically for the SBWT.
+///
+/// The intersection and the difference may turn a k-mer into a *source k-mer* (see
+/// [here](crate#details-on-the-space-usage-of-the-index)) whose dummy predecessor chain is present in
+/// neither input, and may leave dummy chains of the inputs leading nowhere. Both are repaired by
+/// building a small auxiliary index of the affected k-mers and interleaving it with the two inputs, so
+/// the result is always structurally identical to an index built from scratch from the result k-mers.
+/// For this, [intersect](crate::intersect) and [difference](crate::difference) require
+/// [select support](SbwtIndex::build_select) on the first input, and return an error if it is missing.
+///
+/// The indexes and the interleaving are passed in as [Arc](std::sync::Arc)s so that the operation can
+/// free them as early as possible when the caller holds no other reference, which lowers the memory
+/// peak. Passing them as Arcs also allows the caller to keep holding on to them, in which case dropping
+/// the Arcs inside the operation does not free the memory.
+///
+/// # Example
+///
+/// ```
+/// use sbwt::*;
+/// use std::sync::Arc;
+///
+/// let seqs1: Vec<&[u8]> = vec![b"AACTGACTGATCGTCTTGACTCGTTTATCTACGGT"];
+/// let seqs2: Vec<&[u8]> = vec![b"ACTGACAGCTCTGCGATGCGACTCGTTTATCTAC"];
+/// let k = 6;
+///
+/// // intersect and difference require select support on the first index
+/// let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&seqs1, k)
+///     .build_select_support(true).run();
+/// let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&seqs2, k).run();
+///
+/// // The interleaving is the shared blueprint of all three set operations
+/// let n_threads = 4;
+/// let optimize_peak_ram = false; // Trades running time for a lower memory peak
+/// let interleaving = MergeInterleaving::new(&sbwt1, &sbwt2, optimize_peak_ram, n_threads);
+///
+/// // Set sizes are available without building the result index
+/// println!("|A ∪ B| = {}", interleaving.union_size());
+/// println!("|A ∩ B| = {}", interleaving.intersection_size());
+/// println!("|A \\ B| = {}", interleaving.difference_size());
+///
+/// let sbwt1 = Arc::new(sbwt1);
+/// let sbwt2 = Arc::new(sbwt2);
+/// let interleaving = Arc::new(interleaving);
+/// let prefix_lookup_table_length = 4; // Of the result index
+///
+/// let union = merge(sbwt1.clone(), sbwt2.clone(), interleaving.clone(),
+///     prefix_lookup_table_length, n_threads);
+/// let isec = intersect(sbwt1.clone(), sbwt2.clone(), interleaving.clone(),
+///     prefix_lookup_table_length, optimize_peak_ram, n_threads).unwrap();
+/// let diff = difference(sbwt1, sbwt2, interleaving,
+///     prefix_lookup_table_length, optimize_peak_ram, n_threads).unwrap();
+///
+/// // The results are ordinary SBWT indexes, ready to be queried or serialized
+/// assert!(union.search(b"GACTCG").is_some());
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeInterleaving {
     // Has one bit per colex position in the merged SBWT

@@ -12,8 +12,49 @@ use bitvec::bitvec;
 /// encoded in an [SbwtIndex]. The graph is **node-centric**, meaning that the nodes
 /// are the distinct k-mers in the index (not including the [dummy k-mers](crate::sbwt::SbwtIndex#sbwt-graph)) and there is an 
 /// edge from x to y iff x[1..k) = y[0..k-1).
-/// Edge (x,y) is labeled with the last character of y. Reverse complements are not modeled. 
+/// Edge (x,y) is labeled with the last character of y. Reverse complements are not modeled.
 /// The struct takes 2n bits of extra space on top of the SBWT, where n is the number of sets in the SBWT.
+///
+/// # Example
+///
+/// ```
+/// use sbwt::*;
+/// use sbwt::dbg::Dbg;
+///
+/// let seqs: Vec<&[u8]> = vec![b"AACTGACTGATCGTCTTGACTCGTTTATCTACGGT"];
+/// let k = 6;
+/// let (sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, k)
+///     .build_lcs(true) // Optional, but speeds up Dbg::new considerably
+///     .build_select_support(true) // Required by Dbg::new
+///     .run();
+///
+/// let n_threads = 4;
+/// let dbg = Dbg::new(&sbwt, lcs.as_ref(), n_threads);
+///
+/// // Look up the node of a k-mer and read its label back
+/// let node = dbg.get_node(b"AACTGA").unwrap();
+/// assert_eq!(dbg.get_kmer(node), b"AACTGA".to_vec());
+///
+/// // Follow the outgoing edge labeled with 'C': AACTGA -> ACTGAC
+/// let next = dbg.follow_outedge(node, b'C').unwrap();
+/// assert_eq!(dbg.get_kmer(next), b"ACTGAC".to_vec());
+///
+/// // Enumerate the out-neighbors of a node, with the label of the edge leading to each
+/// let mut neighbors = Vec::<(dbg::Node, u8)>::new();
+/// dbg.push_out_neighbors(next, &mut neighbors);
+/// assert_eq!(neighbors.len(), dbg.outdegree(next));
+/// for (v, c) in neighbors.iter() {
+///     println!("Edge labeled {} to k-mer {}", *c as char,
+///         String::from_utf8_lossy(&dbg.get_kmer(*v)));
+/// }
+///
+/// // The nodes are the distinct k-mers of the index; the dummy k-mers are not nodes
+/// assert_eq!(dbg.node_iterator().count(), sbwt.n_kmers());
+///
+/// // Write the unitigs of the graph in FASTA format
+/// let mut fasta_out = Vec::<u8>::new();
+/// dbg.parallel_export_unitigs(&mut fasta_out, n_threads);
+/// ```
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Dbg<'a, SS: SubsetSeq + Send + Sync> {
     sbwt: &'a SbwtIndex<SS>,
