@@ -7,7 +7,6 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use bitvec::prelude::*;
 use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
