@@ -348,10 +348,6 @@ fn strip_redundant_from_rows(
 
     // --- Pass 2: propagate up dummy chains via FL (inverse of lf_step) ---
     //
-    // A right-to-left colex scan is NOT sufficient because lf_step(p, c) < p is not
-    // guaranteed — the target of a dummy can have a *larger* colex rank than its source
-    // (e.g. `$ACAT` < `$$CAT` in colex even though `$$CAT` lf-steps to `$ACAT`).
-    //
     // BFS from all directly-redundant positions using FL (inverse lf):
     //   Position q has in-label c iff C[c] <= q < C[c] + count_ones(new_rows[c]).
     //   FL(q) = select(c, q - C[c]).

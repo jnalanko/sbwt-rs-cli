@@ -58,28 +58,47 @@ fn compute_result_counts(interleaving: &MergeInterleaving, difference: bool) -> 
         .reduce(|| (0, 0), |(i0, d0), (i1, d1)| (i0 + i1, d0 + d1))
 }
 
-/// Pass 1: for each (k-1)-suffix group that contributes a node to the intersection,
-/// marks every LF-step target in `index1` colex space as having an incoming edge.
-/// Each thread processes its own piece; the AtomicBitmap is shared for lock-free writes.
-fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
+/// Shared implementation for pass 1 of both intersection and set-difference.
+///
+/// For each (k-1)-suffix group that contributes a result node, marks every LF-step
+/// target in `index1` colex space as having an incoming edge via a lock-free
+/// [AtomicBitmap].  Each Rayon thread processes its own `piece_ranges` slice independently.
+///
+/// When `difference` is `false` (intersection), a group contributes iff it contains a
+/// position where both `s1` and `s2` are set, and edge-bit `c` is kept when
+/// `s1_or[c] && s2_or[c]`.  When `difference` is `true` (set difference), the predicate
+/// becomes `s1 && !s2` and the edge condition becomes `s1_or[c] && !s2_or[c]`.
+///
+/// The intersection variant additionally pre-sets bit 0 (the shared root) so that the
+/// root is always counted as covered, matching how `isec_length` is computed.
+///
+/// Also returns **dead-end dummies**: dummy result nodes with no surviving outgoing
+/// edge, detected as a byproduct of the same `flush_group` scan (no extra pass, no
+/// atomics needed since a group's successor status is thread-local). A (k-1)-suffix
+/// group can have more than one `in_result` member (e.g. at a shared branch point), but
+/// by the SBWT pruning invariant only the first one in colex order can retain a
+/// non-empty row — every later member is unconditionally all-empty, hence a dead end
+/// whenever it's a dummy. So each group buffers its `in_result` members (≤ `sigma`) and
+/// resolves them at flush time.
+fn pass1_has_incoming_impl<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
     interleaving: &MergeInterleaving,
-    isec_length: usize,
+    result_length: usize,
     sigma: usize,
     piece_ranges: &[Range<usize>],
     s1_pops: &[usize],
     s2_pops: &[usize],
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
-) -> AtomicBitmap {
-    // Bit p = 1 iff s1 colex p receives at least one incoming edge in the intersection.
-    // Bit 0 (root/dollar) is pre-set: it is structural and never needs an incoming edge.
+    difference: bool,
+) -> (AtomicBitmap, Vec<usize>) {
     let has_incoming = AtomicBitmap::new(index1.n_sets());
-    if isec_length > 0 { has_incoming.set(0, true); }
+    // Intersection: pre-set bit 0 (shared root); difference: omit to avoid inflating n_incoming.
+    if !difference && result_length > 0 { has_incoming.set(0, true); }
 
-    thread_pool.install(|| {
-        (0..n_threads).into_par_iter().for_each(|thread_idx| {
+    let dead_end_dummies_per_piece: Vec<Vec<usize>> = thread_pool.install(|| {
+        (0..n_threads).into_par_iter().map(|thread_idx| {
             let colex_range = &piece_ranges[thread_idx];
             let mut s1_colex: usize = s1_pops[..thread_idx].iter().sum();
             let mut s2_colex: usize = s2_pops[..thread_idx].iter().sum();
@@ -92,24 +111,53 @@ fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
             let mut s2_group_read = false;
             // s1_colex of the first s1 element in the current group (used for lf_step).
             let mut s1_first_in_group = 0usize;
-            // True iff the current group contains at least one shared (s1 && s2) position.
-            let mut group_has_shared = false;
+            // (s1_colex, is_dummy) of each `in_result` member seen so far in this group,
+            // in colex order (bounded by `sigma`, see doc comment above).
+            let mut group_result_members: Vec<(usize, bool)> = Vec::with_capacity(sigma);
+            let mut local_dead_ends: Vec<usize> = Vec::new();
+
+            // Marks LF-step targets for each surviving edge in the current group.
+            // Returns whether at least one outgoing edge survived.
+            let flush_group = |s1_or: &[bool], s2_or: &[bool], s1_first: usize| -> bool {
+                let mut any_edge = false;
+                for c in 0..sigma {
+                    let edge = if difference {
+                        s1_or[c] && !s2_or[c]
+                    } else {
+                        s1_or[c] && s2_or[c]
+                    };
+                    if edge {
+                        any_edge = true;
+                        has_incoming.set(index1.lf_step(s1_first, c), true);
+                    }
+                }
+                any_edge
+            };
+
+            // Resolves dead-end status for the group's buffered `in_result` members: only
+            // the first can have a surviving edge, every later one is unconditionally dead.
+            // Colex position 0 is the root `$^k`, which is never removable, so it is never
+            // reported even when the intersection leaves it without a single outgoing edge.
+            let flush_dead_ends = |members: &[(usize, bool)], any_edge: bool, dead_ends: &mut Vec<usize>| {
+                for (idx, &(pos, is_dummy)) in members.iter().enumerate() {
+                    let dead = if idx == 0 { is_dummy && !any_edge } else { is_dummy };
+                    if dead && pos != 0 { dead_ends.push(pos); }
+                }
+            };
 
             for merged_colex in colex_range.clone() {
                 if interleaving.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    // Flush: if any shared position exists, mark LF-step targets.
-                    if group_has_shared {
-                        for c in 0..sigma {
-                            if s1_group_or[c] && s2_group_or[c] {
-                                has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                            }
-                        }
+                    // Flush: if any result position exists, mark LF-step targets and
+                    // resolve dead-end status for every buffered member.
+                    if !group_result_members.is_empty() {
+                        let any_edge = flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
+                        flush_dead_ends(&group_result_members, any_edge, &mut local_dead_ends);
                     }
                     s1_group_read = false;
                     s2_group_read = false;
                     s1_group_or.fill(false);
                     s2_group_or.fill(false);
-                    group_has_shared = false;
+                    group_result_members.clear();
                 }
 
                 if !s1_group_read && interleaving.s1[merged_colex] {
@@ -121,8 +169,15 @@ fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
                     for c in 0..sigma { s2_group_or[c] = index2.sbwt.set_contains(s2_colex, c as u8); }
                     s2_group_read = true;
                 }
-                if interleaving.s1[merged_colex] && interleaving.s2[merged_colex] {
-                    group_has_shared = true;
+                let in_result = if difference {
+                    interleaving.s1[merged_colex] && !interleaving.s2[merged_colex]
+                } else {
+                    interleaving.s1[merged_colex] && interleaving.s2[merged_colex]
+                };
+                // `in_result` implies s1[merged_colex], so s1_colex (not yet incremented
+                // this iteration) is this member's identifying position.
+                if in_result {
+                    group_result_members.push((s1_colex, interleaving.is_dummy[merged_colex]));
                 }
 
                 s1_colex += interleaving.s1[merged_colex] as usize;
@@ -130,27 +185,53 @@ fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
             }
 
             // Flush the last group in this piece.
-            if group_has_shared {
-                for c in 0..sigma {
-                    if s1_group_or[c] && s2_group_or[c] {
-                        has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                    }
-                }
+            if !group_result_members.is_empty() {
+                let any_edge = flush_group(&s1_group_or, &s2_group_or, s1_first_in_group);
+                flush_dead_ends(&group_result_members, any_edge, &mut local_dead_ends);
             }
-        });
+
+            local_dead_ends
+        }).collect()
     });
 
-    has_incoming
+    // Pieces were scanned in increasing colex-range order and s1_colex is monotonically
+    // increasing within and across pieces, so this concatenation is already sorted.
+    let dead_end_dummies: Vec<usize> = dead_end_dummies_per_piece.into_iter().flatten().collect();
+
+    (has_incoming, dead_end_dummies)
 }
 
-/// Collects s1-colex positions of real result k-mers that have no incoming edge and therefore
+/// Pass 1 for intersection: delegates to [`pass1_has_incoming_impl`] with `difference = false`.
+/// Returns the incoming-edge bitmap together with the `s1_colex` positions of dead-end
+/// dummies (dummy result nodes with no surviving outgoing edge); see
+/// [`pass1_has_incoming_impl`] for details.
+fn pass1_has_incoming<SS: SubsetSeq + Send + Sync>(
+    index1: &SbwtIndex<SS>,
+    index2: &SbwtIndex<SS>,
+    interleaving: &MergeInterleaving,
+    isec_length: usize,
+    sigma: usize,
+    piece_ranges: &[Range<usize>],
+    s1_pops: &[usize],
+    s2_pops: &[usize],
+    n_threads: usize,
+    thread_pool: &rayon::ThreadPool,
+) -> (AtomicBitmap, Vec<usize>) {
+    pass1_has_incoming_impl(index1, index2, interleaving, isec_length, sigma,
+        piece_ranges, s1_pops, s2_pops, n_threads, thread_pool, false)
+}
+
+/// Collects s1-colex positions of result nodes that have no incoming edge and therefore
 /// need auxiliary dummy chains.  When `difference` is false the result predicate is `s1 & s2`
 /// (intersection); when true it is `s1 & !s2` (set difference).
+/// Positions marked in `redundant_s1` (dead dummy-chain nodes) are excluded: they are
+/// dropped from the result, so rebuilding their chains would just resurrect them.
 /// The scan is split into `n_threads` pieces; each piece derives its starting s1_colex
 /// via a prefix popcount on `interleaving.s1`, so all pieces run fully in parallel.
 fn collect_result_source_nodes(
     interleaving: &MergeInterleaving,
     has_incoming: &AtomicBitmap,
+    redundant_s1: Option<&BitVec>,
     merged_length: usize,
     expected_count: usize,
     difference: bool,
@@ -183,6 +264,7 @@ fn collect_result_source_nodes(
                                         else          {  interleaving.s2[merged_colex] };
                         if in_result
                             && !has_incoming.get(s1_colex)
+                            && redundant_s1.map_or(true, |red| !red[s1_colex])
                         {
                             local.push(s1_colex);
                         }
@@ -228,9 +310,64 @@ fn reconstruct_source_kmers<SS: SubsetSeq + Send + Sync>(
     }).collect()
 }
 
+/// Marks the dead-end dummies and, unconditionally, every ancestor on their dummy chains,
+/// walking up to the root via inverse-LF in `index1`. The predecessor of a dummy is always
+/// itself a dummy, so the walk never leaves the dummy subgraph; chains that merge stop at
+/// the first already-marked node. Colex position 0 (the root) is never marked.
+///
+/// This deliberately over-kills: a marked ancestor may still feed a live sibling subtree.
+/// Any such orphaned child is recognizable purely from `has_incoming`: a shared dummy's
+/// child receives its unique incoming edge from that (now marked) parent, so an unmarked
+/// child with its bit set has just lost its incoming edge. The sweep clears those bits, so
+/// the orphans are collected as source nodes and the auxiliary SBWT rebuilds their padding
+/// chains — re-creating exactly the marked ancestors they still need.
+///
+/// Returns the marked set in `index1`'s colex space.
+fn mark_dead_chains<SS: SubsetSeq>(
+    index1: &SbwtIndex<SS>,
+    dead_ends: &[usize],
+    has_incoming: &AtomicBitmap,
+    sigma: usize,
+) -> BitVec {
+    let mut redundant = BitVec::new();
+    redundant.resize(index1.n_sets(), false);
+
+    let mut marked: Vec<usize> = Vec::new();
+    for &d in dead_ends {
+        let mut q = d;
+        while !redundant[q] {
+            redundant.set(q, true);
+            marked.push(q);
+            match index1.inverse_lf_step(q) {
+                Some(p) if p != 0 => q = p,
+                _ => break,
+            }
+        }
+    }
+
+    // Orphan sweep (after all marking, so `redundant` is final).
+    let mut n_orphans = 0usize;
+    for &p in &marked {
+        for c in 0..sigma {
+            if index1.sbwt.set_contains(p, c as u8) {
+                let t = index1.lf_step(p, c);
+                if !redundant[t] && has_incoming.get(t) {
+                    has_incoming.set(t, false);
+                    n_orphans += 1;
+                }
+            }
+        }
+    }
+
+    log::info!("Dead-chain removal: {} node(s) marked from {} dead end(s); {} orphan(s) re-routed to the auxiliary index",
+        marked.len(), dead_ends.len(), n_orphans);
+    redundant
+}
+
 /// Direct pass 2: builds the intersection SBWT bit-rows when every intersection
 /// position already has an incoming edge and no dummy chain repair is required.
 /// For each group the AND of the two per-index ORs is written at the group's isec leader.
+///
 fn intersect_rows_direct<SS: SubsetSeq + Send + Sync>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -329,10 +466,19 @@ fn intersect_rows_direct<SS: SubsetSeq + Send + Sync>(
 /// are absent. Remedy: reconstruct those source k-mers (in parallel), build a small auxiliary
 /// SBWT from them, then use a single three-way interleaving of (index1, index2, aux) to produce
 /// the complete bit-rows. Edge rule: c is set iff aux has it OR both index1 and index2 have it.
+///
+/// The same pass also leaves out the dead dummy chains: `redundant_s1` (index1 colex space,
+/// precomputed by [`mark_dead_chains`]) marks every node of every chain whose real
+/// k-mer did not survive the intersection. Marked nodes are not emitted as result nodes and
+/// edges whose LF-step target is marked are not written. This is safe even when a marked
+/// node lies on a new source's padding chain: the aux contains the very same node, so the
+/// `s3` term of the predicate re-emits it and `s3_or` supplies both its row and its
+/// incoming edge — dead is dead, and the aux brings back exactly what it needs.
 fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
-    mut index1: SbwtIndex<SS>,
+    index1: SbwtIndex<SS>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
+    redundant_s1: Option<&BitVec>,
     sigma: usize,
     k: usize,
     optimize_peak_ram: bool,
@@ -340,8 +486,6 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     thread_pool: &rayon::ThreadPool,
 ) -> Vec<BitVec> {
     log::info!("[intersect] Dummy repair: reconstructing {} source k-mer(s) via inverse-LF (parallel)", source_colexes.len());
-    // Build select before wrapping in Arc so no clone of the SubsetSeq is needed.
-    index1.sbwt.build_select();
     let source_kmers = thread_pool.install(|| reconstruct_source_kmers(&index1, &source_colexes, k));
     drop(source_colexes);
     let index1 = Arc::new(index1);
@@ -365,11 +509,11 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[intersect] Dummy repair: building intersection SBWT bit-rows via three-way pass (parallel)");
     let (tw_ranges, s1_pc, s2_pc, s3_pc) =
         thread_pool.install(|| compute_piece_ranges_three_way(three_way_len, n_threads, &three_way));
-    let result_piece_counts =
-        thread_pool.install(|| count_result_nodes_per_piece(&tw_ranges, &three_way, false));
+    let result_piece_counts = thread_pool.install(||
+        count_result_nodes_per_piece(&tw_ranges, &three_way, false, redundant_s1, &s1_pc));
 
-    // For each (k-1)-suffix group: result node exists iff (s1&&s2)||s3.
-    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && s2_or[c]).
+    // For each (k-1)-suffix group: result node exists iff (s1 && s2 && !dead) || s3.
+    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && s2_or[c] && target not dead).
     thread_pool.install(|| {
         let pieces_vecvec: Vec<Vec<BitVec>> = (0..n_threads).into_par_iter().map(|thread_idx| {
             let colex_range = &tw_ranges[thread_idx];
@@ -389,15 +533,25 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
             let mut s1_read = false;
             let mut s2_read = false;
             let mut s3_read = false;
+            // s1_colex of the first s1 element in the current group (used for lf_step
+            // when filtering edges into dead nodes).
+            let mut s1_first_in_group = 0usize;
             let mut piece_rel_result_leader: Option<usize> = None;
             let mut result_colex_in_piece = 0usize;
 
             for merged_colex in colex_range.clone() {
                 if three_way.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    // Flush: write edge bits at the result leader (if any).
+                    // Flush: write edge bits at the result leader (if any). Edges into the
+                    // dead set can only originate from the root's group or a dead
+                    // (aux-revived) group — every dead node's parent is dead or the root —
+                    // so all other groups skip the per-edge lf_step target check.
                     if let Some(l) = piece_rel_result_leader {
+                        let check_dead_targets = redundant_s1
+                            .filter(|red| s1_first_in_group == 0 || red[s1_first_in_group]);
                         for c in 0..sigma {
-                            if s3_or[c] || (s1_or[c] && s2_or[c]) { piece_rows[c].set(l, true); }
+                            if s3_or[c] || (s1_or[c] && s2_or[c]
+                                && check_dead_targets.map_or(true, |red| !red[index1.lf_step(s1_first_in_group, c)]))
+                            { piece_rows[c].set(l, true); }
                         }
                     }
                     s1_read = false; s2_read = false; s3_read = false;
@@ -407,6 +561,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 
                 if !s1_read && three_way.s1[merged_colex] {
                     for c in 0..sigma { s1_or[c] = index1.sbwt.set_contains(s1_colex, c as u8); }
+                    s1_first_in_group = s1_colex;
                     s1_read = true;
                 }
                 if !s2_read && three_way.s2[merged_colex] {
@@ -418,7 +573,11 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                     s3_read = true;
                 }
 
-                let is_result = (three_way.s1[merged_colex] && three_way.s2[merged_colex])
+                // s1&&s2 implies s1[merged_colex], so s1_colex (not yet incremented this
+                // iteration) is this node's position in index1's colex space; dead nodes
+                // are not result nodes unless the aux re-emits them via s3.
+                let is_result = (three_way.s1[merged_colex] && three_way.s2[merged_colex]
+                        && redundant_s1.map_or(true, |red| !red[s1_colex]))
                     || three_way.s3[merged_colex];
                 if is_result {
                     if piece_rel_result_leader.is_none() {
@@ -432,10 +591,14 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                 s3_colex += three_way.s3[merged_colex] as usize;
             }
 
-            // Flush the last group.
+            // Flush the last group (same dead-target gating as above).
             if let Some(l) = piece_rel_result_leader {
+                let check_dead_targets = redundant_s1
+                    .filter(|red| s1_first_in_group == 0 || red[s1_first_in_group]);
                 for c in 0..sigma {
-                    if s3_or[c] || (s1_or[c] && s2_or[c]) { piece_rows[c].set(l, true); }
+                    if s3_or[c] || (s1_or[c] && s2_or[c]
+                        && check_dead_targets.map_or(true, |red| !red[index1.lf_step(s1_first_in_group, c)]))
+                    { piece_rows[c].set(l, true); }
                 }
             }
 
@@ -469,10 +632,11 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// intersection SBWT). This differs from [merge] where every position writes OR-into-leader directly.
 ///
 /// Only dummy nodes shared by both SBWTs are retained. After pass 1, a parallel count detects
-/// whether any k-mers became source nodes in the intersection. If none did, pass 2 returns
-/// the result directly. Otherwise, an auxiliary SBWT is built from those source
-/// k-mers (with parallel k-mer reconstruction) and merged via a three-way interleaving to repair
-/// the missing dummy chains.
+/// whether any k-mers became source nodes in the intersection, and pass 1 also reports the
+/// dead-end dummies (shared dummies whose chain no longer leads to a surviving k-mer). If there
+/// is neither, pass 2 returns the result directly. Otherwise, an auxiliary SBWT is built from
+/// those source k-mers (with parallel k-mer reconstruction) and merged via a three-way
+/// interleaving that repairs the missing dummy chains and strips the dead-end ones.
 pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -498,11 +662,12 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
         thread_pool.install(|| compute_piece_ranges(merged_length, n_threads, &interleaving));
 
     log::info!("[intersect] Pass 1: computing incoming-edge coverage (parallel)");
-    let has_incoming = pass1_has_incoming(
+    let (has_incoming, dead_end_dummies) = pass1_has_incoming(
         &index1, &index2, &interleaving,
         isec_length, sigma, &piece_ranges, &s1_pops, &s2_pops,
         n_threads, &thread_pool,
     );
+    log::info!("[intersect] Dead-end dummies (no surviving outgoing edge): {}", dead_end_dummies.len());
 
     // Count covered positions in parallel; bit 0 is pre-set (root), so complete == isec_length.
     let n_incoming: usize = thread_pool.install(|| {
@@ -511,7 +676,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
             .sum()
     });
 
-    let new_rows = if n_incoming == isec_length {
+    let new_rows = if dead_end_dummies.is_empty() && n_incoming == isec_length {
         log::info!("All {} intersection positions have incoming edges; no auxiliary dummy chains needed", isec_length);
         log::info!("[intersect] Pass 2: building intersection SBWT bit-rows (parallel)");
         intersect_rows_direct(
@@ -522,15 +687,28 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     } else {
         log::info!("Intersection SBWT structurally incomplete ({} source(s) missing dummy chains); merging with auxiliary index",
             isec_length - n_incoming);
+        // Unwrap the Arc (refcount is 1 here since nothing else cloned it) and build select
+        // now: both the dead-chain walk and source k-mer reconstruction need it.
+        let mut index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
+        index1.sbwt.build_select();
+
+        // Mark the dead chains (unconditionally, up to the root) and clear the incoming-edge
+        // bits of any orphaned children BEFORE collecting sources: orphans must be collected
+        // so the auxiliary index rebuilds their padding chains. The three-way pass excludes
+        // marked nodes and the edges into them while building the rows.
+        let redundant_s1: Option<BitVec> = if dead_end_dummies.is_empty() { None } else {
+            Some(mark_dead_chains(&index1, &dead_end_dummies, &has_incoming, sigma))
+        };
+        drop(dead_end_dummies);
+
         let source_colexes = collect_result_source_nodes(
-            &interleaving, &has_incoming, merged_length, isec_length - n_incoming,
+            &interleaving, &has_incoming, redundant_s1.as_ref(),
+            merged_length, isec_length - n_incoming,
             false, n_threads, &thread_pool,
         );
         drop(interleaving); // No longer needed; free before the aux-index build.
-        // Unwrap the Arc; refcount is 1 here since nothing else cloned it.
-        let index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
         intersect_rows_with_dummy_repair(
-            index1, index2, source_colexes,
+            index1, index2, source_colexes, redundant_s1.as_ref(),
             sigma, k, optimize_peak_ram, n_threads, &thread_pool,
         )
     };
@@ -541,6 +719,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
 
 // ── difference helpers ──────────────────────────────────────────────────────
 
+/// Pass 1 for set difference: delegates to [`pass1_has_incoming_impl`] with `difference = true`.
 fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     index1: &SbwtIndex<SS>,
     index2: &SbwtIndex<SS>,
@@ -552,77 +731,9 @@ fn pass1_has_incoming_diff<SS: SubsetSeq + Send + Sync>(
     s2_pops: &[usize],
     n_threads: usize,
     thread_pool: &rayon::ThreadPool,
-) -> AtomicBitmap {
-    let has_incoming = AtomicBitmap::new(index1.n_sets());
-    // Do NOT pre-set position 0: the shared root ($$...$) is never a difference node
-    // and pre-setting it would inflate n_incoming, corrupting the dummy-repair check.
-    // (Contrast with pass1_has_incoming for intersection, where the root IS always an
-    // intersection node and IS counted in isec_length.)
-    let _ = diff_length; // parameter kept for a symmetric API; used by caller only
-
-    thread_pool.install(|| {
-        (0..n_threads).into_par_iter().for_each(|thread_idx| {
-            let colex_range = &piece_ranges[thread_idx];
-            let mut s1_colex: usize = s1_pops[..thread_idx].iter().sum();
-            let mut s2_colex: usize = s2_pops[..thread_idx].iter().sum();
-
-            assert!(interleaving.is_leader[colex_range.start]);
-
-            let mut s1_group_or = vec![false; sigma];
-            let mut s2_group_or = vec![false; sigma];
-            let mut s1_group_read = false;
-            let mut s2_group_read = false;
-            let mut s1_first_in_group = 0usize;
-            // True iff the current group contains at least one difference (s1 && !s2) position.
-            let mut group_has_diff = false;
-
-            for merged_colex in colex_range.clone() {
-                if interleaving.is_leader[merged_colex] && merged_colex > colex_range.start {
-                    if group_has_diff {
-                        for c in 0..sigma {
-                            // Edge exists iff successor is in s1 but not s2
-                            if s1_group_or[c] && !s2_group_or[c] {
-                                has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                            }
-                        }
-                    }
-                    s1_group_read = false;
-                    s2_group_read = false;
-                    s1_group_or.fill(false);
-                    s2_group_or.fill(false);
-                    group_has_diff = false;
-                }
-
-                if !s1_group_read && interleaving.s1[merged_colex] {
-                    for c in 0..sigma { s1_group_or[c] = index1.sbwt.set_contains(s1_colex, c as u8); }
-                    s1_first_in_group = s1_colex;
-                    s1_group_read = true;
-                }
-                if !s2_group_read && interleaving.s2[merged_colex] {
-                    for c in 0..sigma { s2_group_or[c] = index2.sbwt.set_contains(s2_colex, c as u8); }
-                    s2_group_read = true;
-                }
-                // A position contributes to difference iff s1 && !s2
-                if interleaving.s1[merged_colex] && !interleaving.s2[merged_colex] {
-                    group_has_diff = true;
-                }
-
-                s1_colex += interleaving.s1[merged_colex] as usize;
-                s2_colex += interleaving.s2[merged_colex] as usize;
-            }
-
-            // Flush the last group in this piece.
-            if group_has_diff {
-                for c in 0..sigma {
-                    if s1_group_or[c] && !s2_group_or[c] {
-                        has_incoming.set(index1.lf_step(s1_first_in_group, c), true);
-                    }
-                }
-            }
-        });
-    });
-
-    has_incoming
+) -> (AtomicBitmap, Vec<usize>) {
+    pass1_has_incoming_impl(index1, index2, interleaving, diff_length, sigma,
+        piece_ranges, s1_pops, s2_pops, n_threads, thread_pool, true)
 }
 
 fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
@@ -734,9 +845,10 @@ fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
 }
 
 fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
-    mut index1: SbwtIndex<SS>,
+    index1: SbwtIndex<SS>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
+    redundant_s1: Option<&BitVec>,
     sigma: usize,
     k: usize,
     optimize_peak_ram: bool,
@@ -744,8 +856,6 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     thread_pool: &rayon::ThreadPool,
 ) -> Vec<BitVec> {
     log::info!("[difference] Dummy repair: reconstructing {} source k-mer(s) via inverse-LF (parallel)", source_colexes.len());
-    // Build select before wrapping in Arc so no clone of the SubsetSeq is needed.
-    index1.sbwt.build_select();
     let source_kmers = thread_pool.install(|| reconstruct_source_kmers(&index1, &source_colexes, k));
     drop(source_colexes);
     let index1 = Arc::new(index1);
@@ -767,11 +877,11 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[difference] Dummy repair: building difference SBWT bit-rows via three-way pass (parallel)");
     let (tw_ranges, s1_pc, s2_pc, s3_pc) =
         thread_pool.install(|| compute_piece_ranges_three_way(three_way_len, n_threads, &three_way));
-    let result_piece_counts =
-        thread_pool.install(|| count_result_nodes_per_piece(&tw_ranges, &three_way, true));
+    let result_piece_counts = thread_pool.install(||
+        count_result_nodes_per_piece(&tw_ranges, &three_way, true, redundant_s1, &s1_pc));
 
-    // For each (k-1)-suffix group: result node exists iff (s1 && !s2) || s3.
-    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && !s2_or[c]).
+    // For each (k-1)-suffix group: result node exists iff (s1 && !s2 && !dead) || s3.
+    // Edge-bit c is set iff s3_or[c] || (s1_or[c] && !s2_or[c] && target not dead).
     thread_pool.install(|| {
         let pieces_vecvec: Vec<Vec<BitVec>> = (0..n_threads).into_par_iter().map(|thread_idx| {
             let colex_range = &tw_ranges[thread_idx];
@@ -789,14 +899,23 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
             let mut s1_read = false;
             let mut s2_read = false;
             let mut s3_read = false;
+            // s1_colex of the first s1 element in the current group (used for lf_step
+            // when filtering edges into dead nodes).
+            let mut s1_first_in_group = 0usize;
             let mut piece_rel_result_leader: Option<usize> = None;
             let mut result_colex_in_piece = 0usize;
 
             for merged_colex in colex_range.clone() {
                 if three_way.is_leader[merged_colex] && merged_colex > colex_range.start {
+                    // Flush: write edge bits at the result leader (if any); see the
+                    // intersection variant for the dead-target gating rationale.
                     if let Some(l) = piece_rel_result_leader {
+                        let check_dead_targets = redundant_s1
+                            .filter(|red| s1_first_in_group == 0 || red[s1_first_in_group]);
                         for c in 0..sigma {
-                            if s3_or[c] || (s1_or[c] && !s2_or[c]) { piece_rows[c].set(l, true); }
+                            if s3_or[c] || (s1_or[c] && !s2_or[c]
+                                && check_dead_targets.map_or(true, |red| !red[index1.lf_step(s1_first_in_group, c)]))
+                            { piece_rows[c].set(l, true); }
                         }
                     }
                     s1_read = false; s2_read = false; s3_read = false;
@@ -806,6 +925,7 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 
                 if !s1_read && three_way.s1[merged_colex] {
                     for c in 0..sigma { s1_or[c] = index1.sbwt.set_contains(s1_colex, c as u8); }
+                    s1_first_in_group = s1_colex;
                     s1_read = true;
                 }
                 if !s2_read && three_way.s2[merged_colex] {
@@ -817,7 +937,10 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                     s3_read = true;
                 }
 
-                let is_result = (three_way.s1[merged_colex] && !three_way.s2[merged_colex])
+                // Dead nodes are not result nodes unless the aux re-emits them via s3;
+                // s1_colex (not yet incremented) is this node's index1 colex position.
+                let is_result = (three_way.s1[merged_colex] && !three_way.s2[merged_colex]
+                        && redundant_s1.map_or(true, |red| !red[s1_colex]))
                     || three_way.s3[merged_colex];
                 if is_result {
                     if piece_rel_result_leader.is_none() {
@@ -831,10 +954,14 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
                 s3_colex += three_way.s3[merged_colex] as usize;
             }
 
-            // Flush the last group.
+            // Flush the last group (same dead-target gating as above).
             if let Some(l) = piece_rel_result_leader {
+                let check_dead_targets = redundant_s1
+                    .filter(|red| s1_first_in_group == 0 || red[s1_first_in_group]);
                 for c in 0..sigma {
-                    if s3_or[c] || (s1_or[c] && !s2_or[c]) { piece_rows[c].set(l, true); }
+                    if s3_or[c] || (s1_or[c] && !s2_or[c]
+                        && check_dead_targets.map_or(true, |red| !red[index1.lf_step(s1_first_in_group, c)]))
+                    { piece_rows[c].set(l, true); }
                 }
             }
 
@@ -864,10 +991,11 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// is kept iff the successor k-mer (first character `c` followed by the current (k-1)-suffix)
 /// is in `index1` but not in `index2`.
 ///
-/// Like [`intersect`], a direct pass is taken when no difference k-mer becomes a source node.
-/// If source nodes are detected, an auxiliary SBWT is built from their reconstructed k-mers and
-/// a three-way interleaving with edge rule `s3_or[c] || (s1_or[c] && !s2_or[c])` is used to
-/// repair the missing dummy chains.
+/// Like [`intersect`], a direct pass is taken when no difference k-mer becomes a source node
+/// and no dummy became a dead end. Otherwise, an auxiliary SBWT is built from the reconstructed
+/// source k-mers and a three-way interleaving with edge rule `s3_or[c] || (s1_or[c] && !s2_or[c])`
+/// is used to repair the missing dummy chains, while dead dummy chains (marked by
+/// [`mark_dead_chains`]) are excluded from the result exactly as in the intersection.
 pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -893,19 +1021,23 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
         thread_pool.install(|| compute_piece_ranges(merged_length, n_threads, &interleaving));
 
     log::info!("[difference] Pass 1: computing incoming-edge coverage (parallel)");
-    let has_incoming = pass1_has_incoming_diff(
+    let (has_incoming, dead_end_dummies) = pass1_has_incoming_diff(
         &index1, &index2, &interleaving,
         diff_length, sigma, &piece_ranges, &s1_pops, &s2_pops,
         n_threads, &thread_pool,
     );
+    log::info!("[difference] Dead-end dummies (no surviving outgoing edge): {}", dead_end_dummies.len());
 
-    let source_colexes = collect_result_source_nodes(
-        &interleaving, &has_incoming, merged_length,
-        n_kmers, // upper-bound capacity hint
-        true, n_threads, &thread_pool,
-    );
+    // Count covered positions in parallel. Every covered position is a difference result
+    // node (a surviving edge's target is never in index2), so full coverage
+    // (n_incoming == diff_length) means no result k-mer became a source node.
+    let n_incoming: usize = thread_pool.install(|| {
+        has_incoming.data.par_iter()
+            .map(|w| w.load(std::sync::atomic::Ordering::Acquire).count_ones() as usize)
+            .sum()
+    });
 
-    let new_rows = if source_colexes.is_empty() {
+    let new_rows = if dead_end_dummies.is_empty() && n_incoming == diff_length {
         log::info!("[difference] All real difference k-mers have incoming edges; no auxiliary dummy chains needed");
         log::info!("[difference] Pass 2: building difference SBWT bit-rows (parallel)");
         difference_rows_direct(
@@ -914,13 +1046,31 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
             n_threads, &thread_pool,
         )
     } else {
-        log::info!("[difference] {} real source k-mer(s) need fresh dummy chains; merging with auxiliary index",
-            source_colexes.len());
+        log::info!("[difference] {} source(s) missing dummy chains; merging with auxiliary index",
+            diff_length - n_incoming);
+        // Unwrap the Arc (refcount is 1 here since nothing else cloned it) and build select
+        // now: both the dead-chain walk and source k-mer reconstruction need it.
+        let mut index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
+        index1.sbwt.build_select();
+
+        // Mark the dead chains and clear the incoming-edge bits of any orphaned children
+        // BEFORE collecting sources, exactly as in [intersect]. The empty-source case is
+        // sound: an aux built from zero k-mers is a root-only SBWT, and the difference
+        // result receives its root via the s3 term (the root is never s1 && !s2).
+        let redundant_s1: Option<BitVec> = if dead_end_dummies.is_empty() { None } else {
+            Some(mark_dead_chains(&index1, &dead_end_dummies, &has_incoming, sigma))
+        };
+        drop(dead_end_dummies);
+
+        let source_colexes = collect_result_source_nodes(
+            &interleaving, &has_incoming, redundant_s1.as_ref(),
+            merged_length,
+            n_kmers, // upper-bound capacity hint
+            true, n_threads, &thread_pool,
+        );
         drop(interleaving);
-        // Unwrap the Arc; refcount is 1 here since nothing else cloned it.
-        let index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
         difference_rows_with_dummy_repair(
-            index1, index2, source_colexes,
+            index1, index2, source_colexes, redundant_s1.as_ref(),
             sigma, k, optimize_peak_ram, n_threads, &thread_pool,
         )
     };
