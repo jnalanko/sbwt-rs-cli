@@ -15,7 +15,8 @@
 //! and [*shortest frequency-bounded suffixes*][streaming_index::StreamingIndex::shortest_freq_bound_suffixes]
 //! (both described [here](https://www.biorxiv.org/content/10.1101/2024.02.19.580943v1)).
 //! Two SBWTs can be combined with [set operations](#set-operations): the [union](merge), the
-//! [intersection](intersect) and the [difference](difference).
+//! [intersection](intersect) and the [difference](difference)
+//! (described [here](https://www.biorxiv.org/content/10.64898/2026.05.24.727514v1)).
 //! Finally, the crate provides an [interface][dbg::Dbg] for traversing the node-centric de Bruijn graph
 //! of the k-mers, and an interface for traversing the
 //! [variable-order de Bruijn graph](#variable-order-de-bruijn-graphs).
@@ -102,9 +103,11 @@
 //! # Set operations
 //!
 //! Two indexes of the same order k can be combined into an index of the [union](merge), the
-//! [intersection](intersect) or the [difference](difference) of their k-mer sets, All three 
+//! [intersection](intersect) or the [difference](difference) of their k-mer sets, All three
 //! start from a [MergeInterleaving], which can also be queried for
 //! the sizes of the three sets without materializing the result index.
+//! These operations are described in
+//! [Fast Set Operations for Compact k-mer Sets](https://www.biorxiv.org/content/10.64898/2026.05.24.727514v1).
 //!
 //! # Construction algorithms
 //!
@@ -143,8 +146,22 @@
 //! should originate from a longer underlying sequence so that sbwt is able to exploit the
 //! overlaps for better compression. For non-overlapping k-mer sets, a simple hash table is likely
 //! a better choice.
-//! 
-//! 
+//!
+//! # Citation
+//!
+//! If you use the SBWT in your research, please cite as follows:
+//!
+//! ```text
+//! @inproceedings{alanko2023small,
+//!   title={Small searchable k-spectra via subset rank queries on the spectral Burrows-Wheeler transform},
+//!   author={Alanko, Jarno N and Puglisi, Simon J and Vuohtoniemi, Jaakko},
+//!   booktitle={SIAM Conference on Applied and Computational Discrete Algorithms (ACDA23)},
+//!   pages={225--236},
+//!   year={2023},
+//!   organization={SIAM}
+//! }
+//! ```
+//!
 
 // We're using standard upper-case names in string data structures, like SA and BWT
 #![allow(non_snake_case)]

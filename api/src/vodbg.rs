@@ -1,4 +1,4 @@
-//! Variable-order de Bruijn graph operations using [SbwtIndex]. See [VoDbg].
+//! Variable-order de Bruijn graph operations using [SbwtIndex].
 
 // Module and submodule contributions by Martin Kostadinov.
 

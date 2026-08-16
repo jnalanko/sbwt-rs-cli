@@ -99,6 +99,7 @@ pub fn reverse_complement_in_place(seq: &mut [u8]){
     jseqio::reverse_complement_in_place(seq);
 }
 
+/// A [crate::SeqStream] over the sequences of a FASTA or FASTQ file.
 #[allow(dead_code)]
 pub struct FastXReader{
     pub(crate) inner: jseqio::reader::DynamicFastXReader
@@ -649,6 +650,7 @@ pub fn for_each_run_with_key<T: Eq, KeyType: Eq, F1: Fn(&T) -> KeyType, F2: FnMu
 }
 
 
+/// Wraps a [crate::SeqStream] so that, if enabled, every sequence is followed by its reverse complement.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct SeqStreamWithPossiblyRevComp<SS: crate::SeqStream + Send>{
     inner: SS, 

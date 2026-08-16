@@ -1,3 +1,5 @@
+//! Construction algorithms for an [SbwtIndex] via suffix sorting. Good for large k.
+
 // Code by Martin Kostadinov.
 
 pub mod preprocessing;
