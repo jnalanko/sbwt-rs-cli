@@ -1,4 +1,4 @@
-//! A wrapper for [SbwtIndex<SS>] that can hold an index with any [SubsetSeq] implementation that is defined in the crate. 
+//! A wrapper for [`SbwtIndex<SS>`] that can hold an index with any [SubsetSeq] implementation that is defined in the crate.
 
 use std::io::Write;
 

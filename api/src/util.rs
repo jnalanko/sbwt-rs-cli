@@ -48,6 +48,7 @@ const IS_DNA: [bool; 256] = {
     table
 };
 
+/// Returns whether the given ASCII character is one of A,C,G,T,a,c,g,t.
 pub fn is_dna(c: u8) -> bool {
     IS_DNA[c as usize]
 }
