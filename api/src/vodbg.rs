@@ -197,19 +197,25 @@ where
         self.counts.as_ref()
     }
 
-    /// Counts the occurrences of the k-mers of `sequence_stream`, after which
+    /// Counts the occurrences of the k-mers of the input, after which
     /// [get_count][VoDbg::get_count] returns the number of occurrences of the string of a node.
-    /// Does nothing if the counts have already been built.
+    /// IMPORTANT: the SBWT must have been built with
+    /// [all dummy paths](crate::BitPackedKmerSortingMem::add_all_dummy_paths) (returns an error otherwise).
+    /// The parameters are:
     ///
-    /// Returns Err if the SBWT was not built with
-    /// [all dummy paths](crate::BitPackedKmerSortingMem::add_all_dummy_paths), which the counts
-    /// require. Panics if `thread_count` is less than 2, since one thread reads the input.
-    ///
-    /// `use_hash_map` selects how counts exceeding `u8::MAX` are collected: with a concurrent hash
-    /// map, or with a second pass over the input. `additional_memory_bound_gb` bounds the memory
-    /// reserved for streaming the input, on top of the structures being built. For good defaults for,
-    /// `sample_distance` and `batch_size`, use [Counts::DEFAULT_SAMPLE_DISTANCE] and
-    /// [Counts::DEFAULT_BATCH_SIZE_IN_BYTES].
+    /// * `sequence_stream`: the sequences whose k-mers are counted.
+    /// * `use_hash_map`: how counts exceeding `u8::MAX` are collected. If true, with a concurrent
+    ///   hash map; if false, with a second pass over the input.
+    /// * `sample_distance`: the distance between sampled cumulative counts. For a good default,
+    ///   use [Counts::DEFAULT_SAMPLE_DISTANCE].
+    /// * `additional_memory_bound_gb`: a bound in gigabytes on the memory reserved for streaming
+    ///   the input, on top of the structures being built.
+    /// * `n_threads`: the number of counting threads. One more thread reads the input, so the
+    ///   total number of threads is `n_threads` + 1. Panics if 0.
+    /// * `batch_size`: the size in bytes of the input batches handed to the counting threads. For
+    ///   a good default, use [Counts::DEFAULT_BATCH_SIZE_IN_BYTES].
+    /// 
+    /// Does nothing if the counts have already been built. 
     #[allow(clippy::result_unit_err)]
     pub fn build_counts<Stream>(
         &mut self,
@@ -217,12 +223,17 @@ where
         use_hash_map: bool,
         sample_distance: usize,
         additional_memory_bound_gb: usize,
-        thread_count: usize,
+        n_threads: usize,
         batch_size: usize,
     ) -> Result<(), ()>
     where
         Stream: crate::SeqStream + Send + Clone,
     {
+        assert!(n_threads > 0);
+
+        // The Counts constructors count the input-reading thread as part of their thread_count.
+        let thread_count = n_threads + 1;
+
         if self.counts.is_some() {
             return Ok(());
         }

@@ -503,9 +503,9 @@ impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
     }
 }
 
-/// A construction algorithm that uses the `libsais` crate to build a suffix array and an LCP
-/// array of the concatenation of the (reversed) input sequences, and derives the BWT and LCP
-/// that [crate::alternative_construction::build_from_input] expects from them. Like
+/// A construction algorithm that uses the `libsais` crate to build a suffix array of the
+/// concatenation of the (reversed) input sequences, which
+/// [crate::alternative_construction::build] then turns into the SBWT. Like
 /// [BuildByBoundedSuffixSort], this algorithm holds the concatenation of the input sequences in
 /// memory, and is not limited to k <= 256.
 ///
@@ -585,9 +585,8 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
     /// the LCS array if [build_lcs](BuildByLibsais::build_lcs) was set, otherwise `None`.
     ///
     /// The input sequences are first read into a single concatenation in memory, separated by
-    /// the `$` character and preceded by the sentinel `#`. A suffix array and an LCP array of the
-    /// concatenation are then built with `libsais`, from which the BWT and LCP that
-    /// [crate::alternative_construction::build_from_input] expects are derived.
+    /// the `$` character and preceded by the sentinel `#`. A suffix array of the concatenation is
+    /// then built with `libsais` and passed to [crate::alternative_construction::build].
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };

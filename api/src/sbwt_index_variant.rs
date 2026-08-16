@@ -116,8 +116,8 @@ impl SbwtIndexVariant {
         }
     }
 
-    /// Loads an index that is wrapped in an enum describing the used subset rank structure type.
-    /// The format includes a type identifier so the correct variant can later be loaded with [load_sbwt_index_variant].
+    /// Serializes an index that is wrapped in an enum describing the used subset rank structure type.
+    /// The format includes a type identifier so the correct variant can later be loaded with [SbwtIndexVariant::load].
     pub fn serialize(&self, out: &mut impl std::io::Write) -> std::io::Result<usize> {
         match self {
             SbwtIndexVariant::SubsetMatrix(sbwt) => {
@@ -135,7 +135,7 @@ impl SbwtIndexVariant {
         }
     }
 
-    /// Loads an index that was stored with [write_sbwt_index_variant]. This includes a type identifier
+    /// Loads an index that was stored with [SbwtIndexVariant::serialize]. This includes a type identifier
     /// to load the correct subset rank variant.
     pub fn load(input: &mut impl std::io::Read) -> Result<Self, Box<dyn std::error::Error>> {
         let type_id_len = byteorder::ReadBytesExt::read_u64::<byteorder::LittleEndian>(input).unwrap();

@@ -624,7 +624,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 // ── public API ─────────────────────────────────────────────────────────────────
 
 /// Computes the intersection of two [SbwtIndex] structures. The intersection k-mers are those
-/// present in **both** `index1` and `index2`. This mirrors [merge] in structure but uses AND
+/// present in **both** `index1` and `index2`. This mirrors [merge](crate::merge) in structure but uses AND
 /// logic for incoming edges instead of OR, and restricts output positions to those shared by
 /// both SBWTs.
 /// 
@@ -633,7 +633,7 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// For each (k-1)-suffix group in the merged SBWT, incoming-edge bits are OR-ed separately for
 /// each index across all positions in the group, and the two resulting ORs are then AND-ed. The
 /// result is stored at the first shared position of the group (the group's leader in the
-/// intersection SBWT). This differs from [merge] where every position writes OR-into-leader directly.
+/// intersection SBWT). This differs from [merge](crate::merge) where every position writes OR-into-leader directly.
 ///
 /// Only dummy nodes shared by both SBWTs are retained. After pass 1, a parallel count detects
 /// whether any k-mers became source nodes in the intersection, and pass 1 also reports the
@@ -1000,8 +1000,8 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// Like [`intersect`], a direct pass is taken when no difference k-mer becomes a source node
 /// and no dummy became a dead end. Otherwise, an auxiliary SBWT is built from the reconstructed
 /// source k-mers and a three-way interleaving with edge rule `s3_or[c] || (s1_or[c] && !s2_or[c])`
-/// is used to repair the missing dummy chains, while dead dummy chains (marked by
-/// [`mark_dead_chains`]) are excluded from the result exactly as in the intersection.
+/// is used to repair the missing dummy chains, while dead dummy chains are excluded from the
+/// result exactly as in the intersection.
 pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
