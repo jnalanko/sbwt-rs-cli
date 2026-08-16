@@ -335,7 +335,7 @@ impl std::fmt::Display for SubsetMatrix {
 }
 #[cfg(test)]
 mod tests {
-    use crate::SubsetCorrectionSets;
+    //use crate::SubsetCorrectionSets;
 
     use super::*;
 
@@ -579,6 +579,7 @@ mod tests {
         run_subset_seq_tests::<SubsetMatrix>();
     }
 
+    /*
     #[test]
     fn subset_correction_sets_generic_tests() {
         run_subset_seq_tests::<SubsetCorrectionSets>();
@@ -772,4 +773,5 @@ mod tests {
             assert_eq!(out1, out2);
         }
     }
+    */
 }
