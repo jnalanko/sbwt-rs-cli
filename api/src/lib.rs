@@ -155,7 +155,7 @@
 // Construction algorithms
 mod bitpacked_kmer_sorting;
 mod bitpacked_kmer_sorting_mem;
-pub mod alternative_construction;
+pub mod build_by_suffix_sorting;
 
 mod tempfile;
 mod util;

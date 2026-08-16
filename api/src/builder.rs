@@ -350,7 +350,7 @@ impl<SS: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<SS> {
         let seq = self.inner.stream_next()?;
         self.buf.clear();
         self.buf.extend(seq);
-        crate::alternative_construction::preprocessing::sanitise(&mut self.buf);
+        crate::build_by_suffix_sorting::preprocessing::sanitise(&mut self.buf);
         self.buf.reverse();
         Some(&self.buf)
     }
@@ -446,10 +446,10 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
         let mut concatenation = Vec::<u8>::new();
-        crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
+        crate::build_by_suffix_sorting::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
-        let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
-            crate::alternative_construction::build_with_bounded_suffix_array::<SubsetMatrix>(
+        let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
+            crate::build_by_suffix_sorting::build_with_bounded_suffix_array::<SubsetMatrix>(
                 self.n_threads,
                 concatenation,
                 self.k,
@@ -506,7 +506,7 @@ impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
 
 /// A construction algorithm that uses the `libsais` crate to build a suffix array of the
 /// concatenation of the (reversed) input sequences, which
-/// [crate::alternative_construction::build] then turns into the SBWT. Like
+/// [crate::build_by_suffix_sorting::build] then turns into the SBWT. Like
 /// [BuildByBoundedSuffixSort], this algorithm holds a concatenation of the input sequences in
 /// memory, and is not limited to k <= 256.
 ///
@@ -587,19 +587,19 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
     ///
     /// The input sequences are first read into a single concatenation in memory, separated by
     /// the `$` character and preceded by the sentinel `#`. A suffix array of the concatenation is
-    /// then built with `libsais` and passed to [crate::alternative_construction::build].
+    /// then built with `libsais` and passed to [crate::build_by_suffix_sorting::build].
     pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
         let mut concatenation = Vec::<u8>::new();
-        crate::alternative_construction::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
+        crate::build_by_suffix_sorting::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
         // let (bwt_bytes, lcp_bytes) = libsais_bwt_and_lcp(&concatenation, self.n_threads);
         let suffix_array = libsais_suffix_array(&concatenation, self.n_threads);
 
-        let crate::alternative_construction::Output{mut sbwt, lcs, counts: _} =
-            crate::alternative_construction::build::<SubsetMatrix>(
+        let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
+            crate::build_by_suffix_sorting::build::<SubsetMatrix>(
                 self.n_threads,
                 concatenation,
                 suffix_array,
@@ -663,12 +663,12 @@ impl BuildByLibsais<crate::util::FastXReader> {
 /// Builds a suffix array of `concatenation` using `libsais`.
 ///
 /// This relies on `'#'`, the sentinel character that
-/// [crate::alternative_construction::preprocessing::concatenate_sequences] places at the start
+/// [crate::build_by_suffix_sorting::preprocessing::concatenate_sequences] places at the start
 /// of the concatenation, being byte-value-smaller than every other character used
 /// (`'#' < '$' < A,C,G,T` in ASCII) and occurring exactly once: `libsais`'s suffix array of
 /// `concatenation` (which behaves as if an even smaller, implicit sentinel were appended and
 /// then omitted from the output) then coincides exactly, position by position, with the plain
-/// byte-value suffix sort that [crate::alternative_construction] is built around, and the BWT can
+/// byte-value suffix sort that [crate::build_by_suffix_sorting] is built around, and the BWT can
 /// be derived from it with the ordinary `bwt[i] = concatenation[(sa[i] + n - 1) % n]` formula.
 #[cfg(feature = "libsais")]
 fn libsais_suffix_array(concatenation: &[u8], n_threads: usize) -> Vec<usize> {

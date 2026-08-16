@@ -1,7 +1,8 @@
+//! A wrapper for [SbwtIndex<SS>] that can hold an index with any [SubsetSeq] implementation that is defined in the crate. 
+
 use std::io::Write;
 
 use crate::{LcsArray, PrefixLookupTable, SbwtIndex, StreamingIndex, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector, dbg::Dbg};
-
 
 /// An enum listing SbwtIndex types built on different subset rank implementations provided in this crate. 
 pub enum SbwtIndexVariant {
