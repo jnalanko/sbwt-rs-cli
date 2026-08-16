@@ -241,6 +241,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // Build the two individual SBWTs.
         let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], k)
             .n_threads(n_threads)
+            .build_select_support(true)
             .run();
         let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[seq2], k)
             .n_threads(n_threads)
@@ -264,7 +265,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
                 /* optimize_peak_ram */
                 true,
                 n_threads,
-            );
+            ).unwrap();
 
             let spectrum_isec_raw = sbwt_isec.reconstruct_padded_spectrum(n_threads);
             let mut kmers_isec: Vec<Vec<u8>> = spectrum_isec_raw
@@ -421,7 +422,9 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         let mut kmers_true: Vec<Vec<u8>> = spectrum_true_raw.chunks(k).map(|c| c.to_vec()).collect();
         kmers_true.sort();
 
-        let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[b"ACAA" as &[u8], b"ACGT"], k).run();
+        let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[b"ACAA" as &[u8], b"ACGT"], k)
+            .build_select_support(true)
+            .run();
         let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[b"ACAC" as &[u8], b"ACGT"], k).run();
 
         for n_threads in [1, 2] {
@@ -430,7 +433,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
                 let sbwt_isec = intersect(
                     Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()),
                     Arc::new(interleaving), 0, true, n_threads,
-                );
+                ).unwrap();
                 let spectrum_isec_raw = sbwt_isec.reconstruct_padded_spectrum(n_threads);
                 let mut kmers_isec: Vec<Vec<u8>> = spectrum_isec_raw.chunks(k).map(|c| c.to_vec()).collect();
                 kmers_isec.sort();
@@ -473,6 +476,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
             .run();
 
         let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], k)
+            .build_select_support(true)
             .n_threads(n_threads)
             .run();
         let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[seq2], k)
@@ -499,7 +503,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
                 0,
                 true,
                 n_threads,
-            );
+            ).unwrap();
 
             assert_eq!(sbwt_diff.n_kmers(), diff_kmers.len(),
                 "n_kmers mismatch: k={k}, n_threads={n_threads}, optimize_peak_ram={optimize_peak_ram}");
@@ -538,6 +542,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         let n_threads = 1;
 
         let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], 5)
+            .build_select_support(true)
             .n_threads(n_threads)
             .run();
         let (sbwt2, _) = BitPackedKmerSortingMem::new_from_slices(&[seq2], 5)
@@ -553,7 +558,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
                 0,
                 true,
                 n_threads,
-            );
+            ).unwrap();
 
             assert_eq!(sbwt_diff.n_kmers(), 0,
                 "optimize_peak_ram={optimize_peak_ram}");
@@ -649,6 +654,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
             let shared: Vec<u8> = a[..1000].iter().chain(b.iter()).copied().collect();
             for (x, y) in [(&a, &b), (&a, &shared), (&shared, &a)] {
                 let (s1, _) = BitPackedKmerSortingMem::new_from_slices(&[x.as_slice()], k)
+                    .build_select_support(true)
                     .n_threads(1).run();
                 let (s2, _) = BitPackedKmerSortingMem::new_from_slices(&[y.as_slice()], k)
                     .n_threads(1).run();
@@ -657,7 +663,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
                     for opt_ram in [false, true] {
                         let il = MergeInterleaving::new(&s1, &s2, opt_ram, n_threads);
                         let d = difference(Arc::new(s1.clone()), Arc::new(s2.clone()),
-                            Arc::new(il), 0, opt_ram, n_threads);
+                            Arc::new(il), 0, opt_ram, n_threads).unwrap();
                         let rows: Vec<Vec<bool>> = (0..d.n_sets()).map(|i| {
                             (0..4).map(|c| d.sbwt().set_contains(i, c)).collect()
                         }).collect();
@@ -681,10 +687,11 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
     // awkward or impossible to reach by picking input sequences, which is where the difference's
     // dummy handling has been wrong.
 
-    fn build_from_kmer_set(kmers: &[Vec<u8>], k: usize) -> SbwtIndex<SubsetMatrix> {
+    fn build_from_kmer_set(kmers: &[Vec<u8>], k: usize, with_select: bool) -> SbwtIndex<SubsetMatrix> {
         let mut sorted = kmers.to_vec();
         sorted.sort();
         BitPackedKmerSortingMem::new_from_vecs(&sorted, k)
+            .build_select_support(with_select)
             .n_threads(1).run().0
     }
 
@@ -712,15 +719,15 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         let kmers2 = &dedup(kmers2);
         let expected: Vec<Vec<u8>> =
             kmers1.iter().filter(|x| !kmers2.contains(x)).cloned().collect();
-        let truth = index_fingerprint(&build_from_kmer_set(&expected, k));
+        let truth = index_fingerprint(&build_from_kmer_set(&expected, k, true));
 
         for optimize_peak_ram in [false, true] {
-            let a = build_from_kmer_set(kmers1, k);
-            let b = build_from_kmer_set(kmers2, k);
+            let a = build_from_kmer_set(kmers1, k, true);
+            let b = build_from_kmer_set(kmers2, k, false);
             let il = MergeInterleaving::new(&a, &b, optimize_peak_ram, 1);
             assert_eq!(il.difference_size(), expected.len(),
                 "{case}: difference_size() mismatch (k={k}, optimize_peak_ram={optimize_peak_ram})");
-            let d = difference(Arc::new(a), Arc::new(b), Arc::new(il), 0, optimize_peak_ram, 1);
+            let d = difference(Arc::new(a), Arc::new(b), Arc::new(il), 0, optimize_peak_ram, 1).unwrap();
             assert_eq!(truth, index_fingerprint(&d),
                 "{case}: differs from ground truth (k={k}, optimize_peak_ram={optimize_peak_ram})\n\
                  index1 = {kmers1:?}\nindex2 = {kmers2:?}\nexpected k-mers = {expected:?}");
@@ -737,23 +744,23 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // compared because an empty result cannot be spectrum-reconstructed in parallel.
         let k = 5;
         // Difference: {ACCTT} \ {CACCT, ACCTT} = {} with index1's whole chain dangling.
-        let a = build_from_kmer_set(&kmers_of(b"ACCTT", k), k);
-        let b = build_from_kmer_set(&kmers_of(b"CACCTT", k), k);
+        let a = build_from_kmer_set(&kmers_of(b"ACCTT", k), k, true);
+        let b = build_from_kmer_set(&kmers_of(b"CACCTT", k), k, true);
         // Intersection: {ACCTT} and {ATGCG} share only the dummy $$$$A.
-        let c = build_from_kmer_set(&kmers_of(b"ATGCG", k), k);
-        let truth = index_fingerprint(&build_from_kmer_set(&[], k));
+        let c = build_from_kmer_set(&kmers_of(b"ATGCG", k), k, true);
+        let truth = index_fingerprint(&build_from_kmer_set(&[], k, true));
 
         for n_threads in [2, 4] {
             for opt_ram in [false, true] {
                 let il = MergeInterleaving::new(&a, &b, opt_ram, n_threads);
                 let d = difference(Arc::new(a.clone()), Arc::new(b.clone()),
-                    Arc::new(il), 0, opt_ram, n_threads);
+                    Arc::new(il), 0, opt_ram, n_threads).unwrap();
                 assert_eq!(truth, index_fingerprint(&d),
                     "difference: n_threads={n_threads} opt_ram={opt_ram}");
 
                 let il = MergeInterleaving::new(&a, &c, opt_ram, n_threads);
                 let i = intersect(Arc::new(a.clone()), Arc::new(c.clone()),
-                    Arc::new(il), 0, opt_ram, n_threads);
+                    Arc::new(il), 0, opt_ram, n_threads).unwrap();
                 assert_eq!(truth, index_fingerprint(&i),
                     "intersect: n_threads={n_threads} opt_ram={opt_ram}");
             }

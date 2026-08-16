@@ -847,6 +847,7 @@ fn run_intersect<SS: SubsetSeq + Send + Sync + Clone>(index1: SbwtIndex<SS>, ind
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the intersection");
     intersect(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, low_ram, n_threads)
+        .unwrap_or_else(|e| panic!("{e:?}"))
 }
 
 fn intersect_command(matches: &clap::ArgMatches) {
@@ -862,7 +863,8 @@ fn intersect_command(matches: &clap::ArgMatches) {
     let mut out = BufWriter::new(File::create(sbwt_outfile).unwrap());
 
     // Read both indexes
-    let index1 = load_index(sbwt1_path, cpp_format);
+    let mut index1 = load_index(sbwt1_path, cpp_format);
+    index1.build_select();
     let index2 = load_index(sbwt2_path, cpp_format);
 
     // To avoid variants^2 match arms, we require that both indices have the same SubsetSeq implementation.
@@ -892,6 +894,7 @@ fn run_difference<SS: SubsetSeq + Send + Sync + Clone>(index1: SbwtIndex<SS>, in
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the difference (index1 \\ index2)");
     difference(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, low_ram, n_threads)
+        .unwrap_or_else(|e| panic!("{e:?}"))
 }
 
 fn difference_command(matches: &clap::ArgMatches) {
@@ -905,7 +908,8 @@ fn difference_command(matches: &clap::ArgMatches) {
 
     let mut out = BufWriter::new(File::create(sbwt_outfile).unwrap());
 
-    let index1 = load_index(sbwt1_path, cpp_format);
+    let mut index1 = load_index(sbwt1_path, cpp_format);
+    index1.build_select(); // Required for difference
     let index2 = load_index(sbwt2_path, cpp_format);
 
     // To avoid variants^2 match arms, we require that both indices have the same SubsetSeq implementation.

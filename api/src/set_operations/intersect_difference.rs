@@ -17,6 +17,9 @@ use super::common::{allocate_rows, transpose_and_concat_pieces, build_index,
 
 type BitVec = bitvec::vec::BitVec<u64, Lsb0>;
 
+#[derive(Debug, Clone)]
+pub struct MissingSelectSupport; // An error type
+
 fn convert_index<SS: SubsetSeq>(idx: SbwtIndex<SubsetMatrix>, n_threads: usize, precalc_length: usize) -> SbwtIndex<SS> {
     let n_sets = idx.n_sets();
     let n_kmers = idx.n_kmers();
@@ -475,7 +478,7 @@ fn intersect_rows_direct<SS: SubsetSeq + Send + Sync>(
 /// `s3` term of the predicate re-emits it and `s3_or` supplies both its row and its
 /// incoming edge — dead is dead, and the aux brings back exactly what it needs.
 fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
-    index1: SbwtIndex<SS>,
+    index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
     redundant_s1: Option<&BitVec>,
@@ -488,7 +491,6 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[intersect] Dummy repair: reconstructing {} source k-mer(s) via inverse-LF (parallel)", source_colexes.len());
     let source_kmers = thread_pool.install(|| reconstruct_source_kmers(&index1, &source_colexes, k));
     drop(source_colexes);
-    let index1 = Arc::new(index1);
 
     log::info!("[intersect] Dummy repair: building auxiliary SBWT from source k-mers");
     let (aux_submatrix, _) = BitPackedKmerSortingMem::new_from_vecs(&source_kmers, k)
@@ -625,6 +627,8 @@ fn intersect_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 /// present in **both** `index1` and `index2`. This mirrors [merge] in structure but uses AND
 /// logic for incoming edges instead of OR, and restricts output positions to those shared by
 /// both SBWTs.
+/// 
+/// IMPORTANT: index1 must have select support, otherwise returns an error.
 ///
 /// For each (k-1)-suffix group in the merged SBWT, incoming-edge bits are OR-ed separately for
 /// each index across all positions in the group, and the two resulting ORs are then AND-ed. The
@@ -644,7 +648,12 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     new_prefix_lookup_table_length: usize,
     optimize_peak_ram: bool,
     n_threads: usize,
-) -> SbwtIndex<SS> {
+) -> Result<SbwtIndex<SS>, MissingSelectSupport> {
+
+    if !index1.sbwt().has_select_support() {
+        return Err(MissingSelectSupport)
+    }
+
     let sigma = crate::util::DNA_ALPHABET.len();
 
     assert!(index1.k() == index2.k());
@@ -687,10 +696,6 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     } else {
         log::info!("Intersection SBWT structurally incomplete ({} source(s) missing dummy chains); merging with auxiliary index",
             isec_length - n_incoming);
-        // Unwrap the Arc (refcount is 1 here since nothing else cloned it) and build select
-        // now: both the dead-chain walk and source k-mer reconstruction need it.
-        let mut index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
-        index1.sbwt.build_select();
 
         // Mark the dead chains (unconditionally, up to the root) and clear the incoming-edge
         // bits of any orphaned children BEFORE collecting sources: orphans must be collected
@@ -714,7 +719,7 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     };
 
     log::info!("[intersect] Building subset rank structure");
-    build_index(new_rows, n_kmers, k, n_threads, new_prefix_lookup_table_length)
+    Ok(build_index(new_rows, n_kmers, k, n_threads, new_prefix_lookup_table_length))
 }
 
 // ── difference helpers ──────────────────────────────────────────────────────
@@ -845,7 +850,7 @@ fn difference_rows_direct<SS: SubsetSeq + Send + Sync>(
 }
 
 fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
-    index1: SbwtIndex<SS>,
+    index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
     source_colexes: Vec<usize>,
     redundant_s1: Option<&BitVec>,
@@ -858,7 +863,6 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
     log::info!("[difference] Dummy repair: reconstructing {} source k-mer(s) via inverse-LF (parallel)", source_colexes.len());
     let source_kmers = thread_pool.install(|| reconstruct_source_kmers(&index1, &source_colexes, k));
     drop(source_colexes);
-    let index1 = Arc::new(index1);
 
     log::info!("[difference] Dummy repair: building auxiliary SBWT from source k-mers");
     let (aux_submatrix, _) = BitPackedKmerSortingMem::new_from_vecs(&source_kmers, k)
@@ -984,6 +988,8 @@ fn difference_rows_with_dummy_repair<SS: SubsetSeq + Send + Sync + Clone>(
 
 /// Computes the set difference `index1 \ index2`: the [SbwtIndex] containing exactly the k-mers
 /// that are present in `index1` but **not** in `index2`.
+/// 
+/// IMPORTANT: index1 must have select support, otherwise returns an error.
 ///
 /// The algorithm mirrors [`intersect`] but uses the complement predicate: a position in the
 /// merged SBWT is a result node iff `s1[i] && !s2[i]`. Incoming-edge bits follow the same
@@ -1003,7 +1009,12 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     new_prefix_lookup_table_length: usize,
     optimize_peak_ram: bool,
     n_threads: usize,
-) -> SbwtIndex<SS> {
+) -> Result<SbwtIndex<SS>, MissingSelectSupport> {
+
+    if !index1.sbwt().has_select_support() {
+        return Err(MissingSelectSupport)
+    }
+
     let sigma = crate::util::DNA_ALPHABET.len();
 
     assert!(index1.k() == index2.k());
@@ -1048,10 +1059,6 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     } else {
         log::info!("[difference] {} source(s) missing dummy chains; merging with auxiliary index",
             diff_length - n_incoming);
-        // Unwrap the Arc (refcount is 1 here since nothing else cloned it) and build select
-        // now: both the dead-chain walk and source k-mer reconstruction need it.
-        let mut index1 = Arc::try_unwrap(index1).unwrap_or_else(|_| panic!("index1 Arc must be uniquely owned at this point"));
-        index1.sbwt.build_select();
 
         // Mark the dead chains and clear the incoming-edge bits of any orphaned children
         // BEFORE collecting sources, exactly as in [intersect]. The empty-source case is
@@ -1076,6 +1083,6 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     };
 
     log::info!("[difference] Building subset rank structure");
-    build_index(new_rows, n_kmers, k, n_threads, new_prefix_lookup_table_length)
+    Ok(build_index(new_rows, n_kmers, k, n_threads, new_prefix_lookup_table_length))
 }
 
