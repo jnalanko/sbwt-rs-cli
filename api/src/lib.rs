@@ -111,15 +111,12 @@
 //! The crate provides four construction algorithms:
 //!
 //! * [BitPackedKmerSortingDisk][`builder::BitPackedKmerSortingDisk`]: sorting of bit-packed k-mers
-//!   using temporary disk space.
-//! * [BitPackedKmerSortingMem][`builder::BitPackedKmerSortingMem`]: the same, but entirely in RAM.
-//!   Faster and scales better with parallelism, but requires more RAM.
-//! * [BuildByBoundedSuffixSort][`builder::BuildByBoundedSuffixSort`]: sorts the k-bounded contexts of
-//!   the input concatenation, bucketing them by a
-//!   [prefix](builder::BuildByBoundedSuffixSort::prefix_length_for_bucket_sort) first.
-//! * [BuildByLibsais][`builder::BuildByLibsais`]: builds a full suffix array and LCP array of the
-//!   input concatenation with the `libsais` library, and derives the SBWT from those. Only available
-//!   when the optional `libsais` feature is enabled.
+//!   using lots of temporary disk space. This is the lowest RAM option, but can be slow.
+//! * [BitPackedKmerSortingMem][`builder::BitPackedKmerSortingMem`]: Sort all k-mers in memory.
+//!   This is the fastest algorithm, but uses a lot of RAM.
+//! * [BuildByBoundedSuffixSort][`builder::BuildByBoundedSuffixSort`]: Runs a k-bounded suffix sort with SIMD suffix comparison. Good for short and medium values of k (k < 1000).
+//! * [BuildByLibsais][`builder::BuildByLibsais`]: builds from a suffix array of a concatenation of the input strings, computed with the libsais C-library. Only available
+//!   when the optional `libsais` feature is enabled. Good for very large values of k (k > 1000).
 //!
 //! The two bit-packed k-mer sorting algorithms stream the input and support k up to 256. The two
 //! suffix-sorting algorithms instead hold the concatenation of the input sequences in memory, and have
