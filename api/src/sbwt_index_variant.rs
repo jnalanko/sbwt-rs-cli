@@ -2,14 +2,12 @@
 
 use std::io::Write;
 
-use crate::{LcsArray, PrefixLookupTable, SbwtIndex, StreamingIndex, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector, dbg::Dbg};
+use crate::{LcsArray, PrefixLookupTable, SbwtIndex, StreamingIndex, SubsetCorrectionSets, SubsetMatrix, SubsetSeq, compact_int_vector::CompactIntVector, dbg::Dbg};
 
 /// An enum listing SbwtIndex types built on different subset rank implementations provided in this crate. 
 pub enum SbwtIndexVariant {
     SubsetMatrix(SbwtIndex<SubsetMatrix>),
-
-    // This is work on progress
-    //SubsetCorrectionSets(SbwtIndex<SubsetCorrectionSets>),
+    SubsetCorrectionSets(SbwtIndex<SubsetCorrectionSets>),
 }
 
 /// Calls `sbwt.$method$args` on the [SbwtIndex] wrapped inside whichever variant `$self` is.
@@ -19,7 +17,7 @@ macro_rules! forward {
     ($self:expr, $method:ident $args:tt) => {
         match $self {
             SbwtIndexVariant::SubsetMatrix(sbwt) => sbwt.$method $args,
-            //SbwtIndexVariant::SubsetCorrectionSets(sbwt) => sbwt.$method $args,
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => sbwt.$method $args,
         }
     };
 }
@@ -83,7 +81,7 @@ impl SbwtIndexVariant {
     pub fn rank(&self, c: u8, i: usize) -> usize {
         match self {
             SbwtIndexVariant::SubsetMatrix(sbwt) => sbwt.sbwt().rank(c, i),
-//            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => sbwt.sbwt().rank(c, i),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => sbwt.sbwt().rank(c, i),
         }
     }
 
@@ -106,14 +104,14 @@ impl SbwtIndexVariant {
     pub fn build_lcs(&self, n_threads: usize, optimize_peak_ram: bool) -> LcsArray {
         match self {
             SbwtIndexVariant::SubsetMatrix(sbwt) => LcsArray::from_sbwt(sbwt, n_threads, optimize_peak_ram),
-//            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => LcsArray::from_sbwt(sbwt, n_threads, optimize_peak_ram),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => LcsArray::from_sbwt(sbwt, n_threads, optimize_peak_ram),
         }
     }
 
     pub fn build_lookup_table(&self, prefix_len: usize) -> PrefixLookupTable {
         match self {
             SbwtIndexVariant::SubsetMatrix(sbwt_index) => PrefixLookupTable::new(sbwt_index, prefix_len),
-//            SbwtIndexVariant::SubsetCorrectionSets(sbwt_index) => PrefixLookupTable::new(sbwt_index, prefix_len),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt_index) => PrefixLookupTable::new(sbwt_index, prefix_len),
         }
     }
 
@@ -126,13 +124,11 @@ impl SbwtIndexVariant {
                 out.write_all(b"SubsetMatrix")?;
                 sbwt.serialize(out)
             },
-            /*
             SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
                 out.write_all(&(b"SubsetCorrectionSets".len() as u64).to_le_bytes())?;
                 out.write_all(b"SubsetCorrectionSets")?;
                 sbwt.serialize(out)
             }
-            */
         }
     }
 
@@ -145,9 +141,9 @@ impl SbwtIndexVariant {
 
         if type_id == b"SubsetMatrix" {
             Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::<SubsetMatrix>::load(input)?))
-        } /*else if type_id == b"SubsetCorrectionSets" {
+        } else if type_id == b"SubsetCorrectionSets" {
             Ok(SbwtIndexVariant::SubsetCorrectionSets(SbwtIndex::<SubsetCorrectionSets>::load(input)?))
-        } */ else {
+        } else {
             Err("Unknown SBWT index type".into())
         }
     }
@@ -163,10 +159,10 @@ impl SbwtIndexVariant {
                 sbwt.build_select();
                 Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(out, n_threads);
             }
-            /*SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
                 sbwt.build_select();
                 Dbg::new(sbwt, lcs, n_threads).parallel_export_unitigs(out, n_threads);
-            }*/
+            }
         }
     }
 }
@@ -180,5 +176,3 @@ impl crate::streaming_index::ExtendRight for SbwtIndexVariant {
         forward!(&self, extend_right(I, c)) // The match statement happens here
     }
 }
-
-//pub fn set_lookup_table(&mut self, prefix_lookup_table: PrefixLookupTable) { forward!(self, set_lookup_table(prefix_lookup_table)) }

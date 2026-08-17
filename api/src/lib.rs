@@ -199,11 +199,11 @@ mod subsetseq;
 pub use subsetseq::*;
 
 // These have bugs as of 16.8. 2026
-//pub mod pred8_vs1;
-//pub mod pino;
-//pub mod quad_rank;
-//mod subset_correction_sets;
-//pub use subset_correction_sets::*;
+pub mod pred8_vs1;
+pub mod pino;
+pub mod quad_rank;
+mod subset_correction_sets;
+pub use subset_correction_sets::*;
 
 mod set_operations;
 pub use set_operations::{MergeInterleaving, merge, intersect, difference};

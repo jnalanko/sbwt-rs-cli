@@ -7,6 +7,8 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use bitvec::order::Lsb0;
+use bitvec::vec::BitVec;
 use jseqio::reader::DynamicFastXReader;
 use sbwt::dbg::Dbg;
 use sbwt::sbwt_index_variant::SbwtIndexVariant;
@@ -572,7 +574,7 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     // We upwrap the enum here already to avoid having to do this every time in a tight inner loop during lookup.
     match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
-        //SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
     }
 }
 
@@ -686,9 +688,9 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
             matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()))
         },
-        /*SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
             matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()))
-        }*/
+        }
     };
 
 }
@@ -730,9 +732,9 @@ fn benchmark_command(matches: &clap::ArgMatches) {
         SbwtIndexVariant::SubsetMatrix(sbwt) => {
             benchmark(sbwt, lcs, json_out.as_mut());
         },
-        /*SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
             benchmark(sbwt, lcs, json_out.as_mut());
-        }*/
+        }
     };
 }
 
@@ -771,10 +773,9 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
         SbwtIndexVariant::SubsetMatrix(mut sbwt) => {
             dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
         },
-        /*
         SbwtIndexVariant::SubsetCorrectionSets(mut sbwt) => {
             dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
-        }*/
+        }
     };
 
 }
@@ -828,7 +829,7 @@ fn merge_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetMatrix(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
-/*        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
             SbwtIndexVariant::SubsetCorrectionSets(merged).serialize(&mut out).unwrap();
@@ -837,7 +838,6 @@ fn merge_command(matches: &clap::ArgMatches) {
         _ => {
             panic!("SBWT merge requires that both indices have the same SubsetSeq implementation")
         }
-        */
     };
 }
 
@@ -876,7 +876,7 @@ fn intersect_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetMatrix(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
-        /*(SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             let result = run_intersect(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
             SbwtIndexVariant::SubsetCorrectionSets(result).serialize(&mut out).unwrap();
@@ -884,7 +884,7 @@ fn intersect_command(matches: &clap::ArgMatches) {
         },
         _ => {
             panic!("SBWT intersection requires that both indices have the same SubsetSeq implementation")
-        }*/
+        }
     };
 }
 
@@ -921,7 +921,7 @@ fn difference_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetMatrix(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
-        /*(SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             let result = run_difference(sbwt1, sbwt2, low_ram, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
             SbwtIndexVariant::SubsetCorrectionSets(result).serialize(&mut out).unwrap();
@@ -929,7 +929,7 @@ fn difference_command(matches: &clap::ArgMatches) {
         },
         _ => {
             panic!("SBWT difference requires that both indices have the same SubsetSeq implementation")
-        }*/
+        }
     };
 }
 
@@ -961,12 +961,12 @@ fn jaccard_command(matches: &clap::ArgMatches) {
         (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
             run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
         },
-        /*(SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
             run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
         },
         _ => {
             panic!("SBWT jaccard requires that both indices have the same SubsetSeq implementation")
-        }*/
+        }
     };
 }
 
@@ -1121,9 +1121,6 @@ fn check_set_operation_command(matches: &clap::ArgMatches) {
         &mut result_index)
 }
 
-// This is dead code now because the correction sets subsetseq structure has been commented out
-// -> do not #[allow(dead_code)] to make the dead code warning go away. There should be a warning
-// so that we remember to re-enable this subcommand later.
 fn transform_index_command(matches: &clap::ArgMatches) {
     let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
     let outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
@@ -1141,7 +1138,6 @@ fn transform_index_command(matches: &clap::ArgMatches) {
             log::warn!("The index is already a bit matrix index");
             SbwtIndexVariant::SubsetMatrix(sbwt)
         },
-        /*
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "correction_sets") => {
             log::warn!("The index is already a correction sets index");
             SbwtIndexVariant::SubsetCorrectionSets(sbwt)
@@ -1164,7 +1160,6 @@ fn transform_index_command(matches: &clap::ArgMatches) {
             let index_new = SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p);
             SbwtIndexVariant::SubsetCorrectionSets(index_new)
         },
-        */
         (_, t) => unreachable!("Unknown target index type {}", t),
     };
 
@@ -1608,7 +1603,7 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
-        /*.subcommand(clap::Command::new("transform-index")
+        .subcommand(clap::Command::new("transform-index")
             .about("Transform an SBWT index into a different subset sequence representation")
             .arg_required_else_help(true)
             .arg(clap::Arg::new("index")
@@ -1637,7 +1632,6 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
-        */
         .subcommand(clap::Command::new("stats")
             .about("Print statistics about the index")
             .arg_required_else_help(true)
@@ -1917,7 +1911,7 @@ fn main() {
         Some(("dump-kmers", sub_matches)) => dump_kmers_command(sub_matches),
         Some(("dump-unitigs", sub_matches)) => dump_unitigs_command(sub_matches),
         Some(("stats", sub_matches)) => stats_command(sub_matches),
-//        Some(("transform-index", sub_matches)) => transform_index_command(sub_matches),
+        Some(("transform-index", sub_matches)) => transform_index_command(sub_matches),
         Some(("kmer-at-colex", sub_matches)) => kmer_at_rank_command(sub_matches),
         Some(("check", sub_matches)) => check_command(sub_matches),
         Some(("check-set-operation", sub_matches)) => check_set_operation_command(sub_matches),

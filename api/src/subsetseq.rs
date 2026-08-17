@@ -337,7 +337,9 @@ impl std::fmt::Display for SubsetMatrix {
 mod tests {
     //use crate::SubsetCorrectionSets;
 
-    use super::*;
+    use crate::SubsetCorrectionSets;
+
+use super::*;
 
     #[test]
     fn serialize_and_load() {
@@ -579,7 +581,6 @@ mod tests {
         run_subset_seq_tests::<SubsetMatrix>();
     }
 
-    /*
     #[test]
     fn subset_correction_sets_generic_tests() {
         run_subset_seq_tests::<SubsetCorrectionSets>();
@@ -773,5 +774,4 @@ mod tests {
             assert_eq!(out1, out2);
         }
     }
-    */
 }
