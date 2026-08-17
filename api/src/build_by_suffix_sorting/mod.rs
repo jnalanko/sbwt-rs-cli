@@ -658,7 +658,9 @@ fn par_build_full_auxiliary_data(
 
     let length = suffix_array.len();
     pad_input(&mut input, k, length);
-    let word_count = k.div_ceil(LANES);
+
+    let lcp = par_build_lcp(threads, &input, &suffix_array, k);
+    let lengths = par_build_lengths(threads, &input, &suffix_array, k);
 
     let bwt_vectors = [
         AtomicBitmap::new(length), // $
@@ -668,15 +670,6 @@ fn par_build_full_auxiliary_data(
         AtomicBitmap::new(length), // T
     ];
     bwt_vectors[0].set(0, true);
-
-    let mut lcp_result_data = Vec::with_capacity(threads);
-    for _ in 0..threads {
-        lcp_result_data.push(None);
-    }
-    let lcp_width = byte_width(k);
-    let lcp_result: Arc<Mutex<Vec<Option<Lcp>>>> = Arc::new(Mutex::new(
-        lcp_result_data
-    ));
 
     let kmer_count = AtomicUsize::new(0);
     let shorter_than_k     = AtomicBitmap::new(length);
@@ -689,8 +682,9 @@ fn par_build_full_auxiliary_data(
     rayon::scope(|s| {
         let input              = &input;
         let suffix_array       = &suffix_array;
+        let lcp                = &lcp;
+        let lengths            = &lengths;
         let bwt_vectors        = &bwt_vectors;
-        let lcp_result         = &lcp_result;
         let kmer_count         = &kmer_count;
         let shorter_than_k     = &shorter_than_k;
         let equal_to_k_minus_one_or_k         = &equal_to_k_minus_one_or_k;
@@ -701,23 +695,9 @@ fn par_build_full_auxiliary_data(
             s.spawn(move |_| {
                 let start = 1 + thread_index * region_size;
                 let end = (start + region_size).min(length);
-                let local_region_length = end - start;
 
-                let mut local_lcp = {
-                    let mut capacity = local_region_length * lcp_width;
-                    if thread_index == 0 {
-                        capacity += 1;
-                    }
-                    let data = Vec::<u8>::with_capacity(capacity);
-                    Lcp::new_with_width(data, lcp_width)
-                };
-
-                if thread_index == 0 {
-                    local_lcp.push(0);
-                }
-
-                for rank in start..end {
-                    let current_suffix_index = suffix_array[rank];
+                for index in start..end {
+                    let current_suffix_index = suffix_array[index];
 
                     // Set the bit in the bitvector corresponding to the previous character in the input
                     // for the (bounded) BWT.
@@ -725,41 +705,31 @@ fn par_build_full_auxiliary_data(
                     let previous_character = input[previous_character_index_in_input];
                     let previous_character_index = CHAR_TO_INDEX[previous_character as usize];
                     if previous_character_index < bwt_vectors.len() {
-                        bwt_vectors[previous_character_index].set(rank, true);
+                        bwt_vectors[previous_character_index].set(index, true);
                     }
 
-                    let previous_suffix_index = suffix_array[rank - 1];
-                    let (length, lcp_value) = find_length_and_lcp_value(
-                        k,
-                        input,
-                        word_count,
-                        current_suffix_index,
-                        previous_suffix_index
-                    );
-                    local_lcp.push(lcp_value.min(length).min(k));
+                    let length = lengths.get(index);
+                    let lcp_value = lcp.get(index);
 
                     if length < k {
-                        shorter_than_k.set(rank, true);
+                        shorter_than_k.set(index, true);
                         if length == k - 1 {
-                            equal_to_k_minus_one_or_k.set(rank, true);
+                            equal_to_k_minus_one_or_k.set(index, true);
                         }
                     } else if length == k {
-                        equal_to_k_minus_one_or_k.set(rank, true);
+                        equal_to_k_minus_one_or_k.set(index, true);
                     }
 
                     if lcp_value < length.min(k) {
-                        k_ranges.set(rank, true);
+                        k_ranges.set(index, true);
                         if length >= k {
                             kmer_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                         }
                         if length < k || lcp_value < k - 1 {
-                            k_minus_one_ranges.set(rank, true);
+                            k_minus_one_ranges.set(index, true);
                         }
                     }
                 }
-
-                let mut lcp_ref = lcp_result.lock().unwrap();
-                lcp_ref[thread_index] = Some(local_lcp);
             });
         }
     });
@@ -772,7 +742,6 @@ fn par_build_full_auxiliary_data(
     }
 
     let mut bwt_op = None;
-    let mut lcp_op = None;
     let mut shorter_than_k_op            = None;
     let mut equal_to_k_minus_one_or_k_op = None;
     let mut k_minus_one_ranges_op        = None;
@@ -790,22 +759,6 @@ fn par_build_full_auxiliary_data(
             let bwt = Bwt::new(bwt_bit_vectors);
             bwt_op = Some(bwt);
             log::info!("[par_build_full_auxiliary_data] bwt done");
-        });
-
-        s.spawn(|_| {
-            let lcp_result = {
-                let mutex = Arc::try_unwrap(lcp_result).unwrap();
-                mutex.into_inner().unwrap()
-            };
-            let sections = lcp_result.into_iter().map(Option::unwrap);
-            let mut data = vec![0_u8; length * lcp_width];
-            par_concatenate_bytes(
-                "par_build_full_auxiliary_data, lcp",
-                &mut data,
-                sections
-            );
-            let result = Lcp::new_with_width(data, lcp_width);
-            lcp_op = Some(result);
         });
 
         s.spawn(|_| {
@@ -837,7 +790,7 @@ fn par_build_full_auxiliary_data(
     FullAuxiliaryData {
         kmer_count: kmer_count.load(std::sync::atomic::Ordering::Relaxed),
         bwt: bwt_op.unwrap(),
-        lcp: lcp_op.unwrap(),
+        lcp,
         shorter_than_k            : shorter_than_k_op.unwrap(),
         equal_to_k_minus_one_or_k : equal_to_k_minus_one_or_k_op.unwrap(),
         k_minus_one_ranges        : k_minus_one_ranges_op.unwrap(),
@@ -848,9 +801,9 @@ fn par_build_full_auxiliary_data(
 #[allow(unused)]
 fn par_build_lcp(
     threads: usize,
-    k: usize,
     input: &[u8],
-    suffix_array: &[usize]
+    suffix_array: &[usize],
+    k: usize,
 ) -> Lcp {
     log::info!("[par_build_lcp] begin");
     use std::sync::atomic::Ordering;
@@ -872,7 +825,6 @@ fn par_build_lcp(
             let end = (start + thread_region_length).min(length);
             s.spawn(move |_| {
                 if start == 0 {
-                    phi[0].store(1, Ordering::Release);
                     start += 1;
                 }
                 for j in start..end {
@@ -898,7 +850,7 @@ fn par_build_lcp(
         let phi = &phi;
 
         for thread_index in 0..threads {
-            let start = thread_index * thread_region_length;
+            let mut start = thread_index * thread_region_length;
             let end = (start + thread_region_length).min(length);
             s.spawn(move |_| {
                 let local_region_length = end - start;
@@ -908,15 +860,27 @@ fn par_build_lcp(
                     Lcp::new_with_width(data, lcp_width)
                 };
 
+                if start == 0 {
+                    local_lcp.push(0);
+                    start += 1;
+                }
+
                 let mut previous_lcp_value: usize = 0;
                 for i in start..end {
-                    let lcp_value = find_lcp_value(
-                        input,
-                        word_count,
-                        previous_lcp_value.saturating_sub(1),
-                        i,
-                        phi[i]
-                    );
+
+                    let lcp_value = if phi[i] == 0 {
+                        0
+                    } else {
+                        find_lcp_value(
+                            k,
+                            input,
+                            word_count,
+                            previous_lcp_value.saturating_sub(1),
+                            i,
+                            phi[i]
+                        ).min(k)
+                    };
+
                     local_lcp.push(lcp_value);
                     previous_lcp_value = lcp_value;
                 }
@@ -944,9 +908,9 @@ fn par_build_lcp(
 #[allow(unused)]
 fn par_build_lengths(
     threads: usize,
-    k: usize,
     input: &[u8],
-    suffix_array: &[usize]
+    suffix_array: &[usize],
+    k: usize,
 ) -> Lcp {
     log::info!("[par_build_lengths] begin");
     #[derive(Debug)]
@@ -972,6 +936,7 @@ fn par_build_lengths(
                 while skip_end > start && current_length < k + 1 {
                     skip_end -= 1;
                     if !crate::util::is_dna(input[skip_end]) {
+                        current_length = 0;
                         break;
                     } else {
                         current_length += 1;
@@ -1026,6 +991,7 @@ fn par_build_lengths(
         }
         border_value = part.values.get(0);
     }
+
     log::info!("[par_build_lengths] reorder:");
     let parts = parts.into_iter().map(|region| region.values).collect::<Vec<_>>();
     let lengths = par_reorder_parts(threads, suffix_array, lengths_width, parts);
@@ -1045,7 +1011,7 @@ fn par_reorder_parts(threads: usize, suffix_array: &[usize], width: usize, parts
     );
     let permuted = Lcp::new_with_width(buffer, width);
 
-    log::info!("[par_build_lcp] copying lcp parts");
+    log::info!("[par_reorder_parts] copying permuted parts");
     let reordered_parts = Arc::new(Mutex::new(Vec::<(usize, Lcp)>::with_capacity(threads)));
     rayon::scope(|s| {
         let permuted = &permuted;
@@ -1080,7 +1046,7 @@ fn par_reorder_parts(threads: usize, suffix_array: &[usize], width: usize, parts
     let result = Lcp::new_with_width(result_buffer, width);
     drop(reordered_parts);
 
-    log::info!("[par_build_lcp] done");
+    log::info!("[par_reorder_parts] done");
     result
 }
 
@@ -1111,67 +1077,8 @@ where S: Iterator<Item = I> + Send, I: AsRef<[u8]> + Send,
 }
 
 #[inline]
-fn find_length_and_lcp_value(
-    k: usize,
-    input: &[u8],
-    mut word_count: usize,
-    mut current_suffix_index: usize,
-    mut previous_suffix_index: usize
-) -> (usize, usize) {
-    if word_count * LANES == k {
-        word_count += 1;
-    }
-
-    let k = k as u32;
-
-    let mut length = 0;
-    let mut stop_accumulating_length = false;
-
-    let mut lcp_value = 0;
-    let mut found_lcp = false;
-    for _ in 0..word_count {
-        let slice_for_current = &input[current_suffix_index..current_suffix_index + LANES];
-        current_suffix_index += LANES;
-        let simd_word_current = Word::new(slice_for_current.try_into().unwrap());
-
-        let slice_for_previous = &input[previous_suffix_index..previous_suffix_index + LANES];
-        previous_suffix_index += LANES;
-        let simd_word_previous = Word::new(slice_for_previous.try_into().unwrap());
-
-        if !stop_accumulating_length {
-            let bitmask = simd_word_current.simd_eq(b'$').to_bitmask() as Bitmask;
-            length += bitmask.trailing_zeros();
-            // stop_accumulating_length |= length >= k || bitmask != 0;
-            if length >= k {
-                stop_accumulating_length = true;
-            }
-            if bitmask != 0 {
-                stop_accumulating_length = true;
-            }
-        }
-
-        if !found_lcp {
-            let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask() as Bitmask;
-            lcp_value += bitmask.trailing_ones();
-            // if stop_accumulating_length && lcp_value >= length {
-            //     found_lcp = true;
-            //     lcp_value = length;
-            // }
-            if bitmask != Bitmask::MAX {
-                found_lcp = true;
-            }
-        }
-
-        if found_lcp && stop_accumulating_length {
-            break;
-        }
-    }
-
-    (length as usize, lcp_value as usize)
-}
-
-#[inline]
 fn find_lcp_value(
+    k: usize,
     input: &[u8],
     mut word_count: usize,
     start_lcp_value: usize,
@@ -1182,7 +1089,10 @@ fn find_lcp_value(
     current_index += start_lcp_value;
     previous_index += start_lcp_value;
 
+    let k = k as u32;
     let mut lcp_value = start_lcp_value as u32;
+    let mut length    = lcp_value;
+    let mut stop_accumulating_length = false;
     for _ in 0..word_count {
         let slice_for_current = &input[current_index..current_index + LANES];
         current_index += LANES;
@@ -1192,6 +1102,12 @@ fn find_lcp_value(
         previous_index += LANES;
         let simd_word_previous = Word::new(slice_for_previous.try_into().unwrap());
 
+        if !stop_accumulating_length {
+            let bitmask = simd_word_current.simd_eq(b'$').to_bitmask() as Bitmask;
+            length += bitmask.trailing_zeros();
+            stop_accumulating_length |= length >= k || bitmask != 0;
+        }
+
         let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask() as Bitmask;
         lcp_value += bitmask.trailing_ones();
         if bitmask != Bitmask::MAX {
@@ -1199,7 +1115,7 @@ fn find_lcp_value(
         }
     }
 
-    lcp_value as usize
+    lcp_value.min(length) as usize
 }
 
 struct DummyMarks {
@@ -1340,6 +1256,9 @@ pub fn par_build_with_all_dummies<SS: SubsetSeq + Send>(
     let length = suffix_array.len();
     pad_input(&mut input, k, length);
 
+    let lcp = par_build_lcp(threads, &input, &suffix_array, k);
+    let lengths = par_build_lengths(threads, &input, &suffix_array, k);
+
     let length = suffix_array.len();
     let results = Arc::new(Mutex::new(Vec::<SbwtAllDummiesRegionResult>::with_capacity(threads)));
     let threads_total_length = length - 1;
@@ -1349,6 +1268,8 @@ pub fn par_build_with_all_dummies<SS: SubsetSeq + Send>(
     rayon::scope(|s| {
         let input         = &input;
         let suffix_array  = &suffix_array;
+        let lcp           = &lcp;
+        let lengths       = &lengths;
         let results       = &results;
 
         for thread_index in 0..threads {
@@ -1363,6 +1284,8 @@ pub fn par_build_with_all_dummies<SS: SubsetSeq + Send>(
                     is_last_thread,
                     input,
                     suffix_array,
+                    lcp,
+                    lengths,
                     build_lcs,
                     build_counts
                 );
@@ -1545,36 +1468,19 @@ fn _build_sbwt_region_with_all_dummies(
     is_last_thread: bool,
     input: &[u8],
     suffix_array: &[usize],
+    lcp: &Lcp,
+    lengths: &Lcp,
     build_lcs: bool,
     build_counts: bool,
 ) -> SbwtAllDummiesRegionResult {
-    let word_count = k.div_ceil(LANES);
     let length = suffix_array.len();
 
     let length_lcp_outedge = |index: usize| -> (usize, usize, usize) {
         let current_suffix_index = suffix_array[index];
-
         let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
         let previous_character = input[previous_character_index_in_input];
         let outedge = CHAR_TO_INDEX[previous_character as usize];
-
-        let first_character = input[current_suffix_index];
-        let first_character_index = CHAR_TO_INDEX[first_character as usize];
-
-        let length_lcp = if first_character_index == 0 {
-            (0, 0)
-        } else {
-            let previous_suffix_index = suffix_array[index - 1];
-            find_length_and_lcp_value(
-                k,
-                input,
-                word_count,
-                current_suffix_index,
-                previous_suffix_index
-            )
-        };
-
-        (length_lcp.0.min(k), length_lcp.1, outedge)
+        (lengths.get(index).min(k), lcp.get(index), outedge)
     };
 
     let mut index = start;
@@ -1800,14 +1706,112 @@ mod tests {
         suffix_array
     }
 
-    #[test]
-    fn build_lcp() {
-        // todo!()
+    #[inline]
+    fn find_length_and_lcp_value(
+        k: usize,
+        input: &[u8],
+        mut word_count: usize,
+        mut current_suffix_index: usize,
+        mut previous_suffix_index: usize
+    ) -> (usize, usize) {
+        if word_count * LANES == k {
+            word_count += 1;
+        }
+
+        let k = k as u32;
+
+        let mut length = 0;
+        let mut stop_accumulating_length = false;
+
+        let mut lcp_value = 0;
+        let mut found_lcp = false;
+        for _ in 0..word_count {
+            let slice_for_current = &input[current_suffix_index..current_suffix_index + LANES];
+            current_suffix_index += LANES;
+            let simd_word_current = Word::new(slice_for_current.try_into().unwrap());
+
+            let slice_for_previous = &input[previous_suffix_index..previous_suffix_index + LANES];
+            previous_suffix_index += LANES;
+            let simd_word_previous = Word::new(slice_for_previous.try_into().unwrap());
+
+            if !stop_accumulating_length {
+                let bitmask = simd_word_current.simd_eq(b'$').to_bitmask() as Bitmask;
+                length += bitmask.trailing_zeros();
+                stop_accumulating_length |= length >= k || bitmask != 0;
+            }
+
+            if !found_lcp {
+                let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask() as Bitmask;
+                lcp_value += bitmask.trailing_ones();
+                if stop_accumulating_length && lcp_value >= length {
+                    found_lcp = true;
+                    lcp_value = length;
+                }
+                if bitmask != Bitmask::MAX {
+                    found_lcp = true;
+                }
+            }
+
+            if found_lcp && stop_accumulating_length {
+                break;
+            }
+        }
+
+        (length as usize, lcp_value as usize)
     }
 
     #[test]
-    fn build_lengths() {
-        // todo!()
+    fn build_lcp_and_lengths() {
+        let threads = 3;
+        let k = 17;
+
+        let seqs = seqs![
+            b"ACGACGACCACCGACACACAAACCCAAACGTGAACGTTAA",
+            b"ACCCAAAAGTGTGTGAGAGTGTGAGCAGTGCATGATGCAA",
+            b"GTGAGAGAGTGATGGACCAAAAAAAAAAAAAAAACCCGTA",
+            b"GAAAAAAAAAAAAAACCAMTGAGGAGAGAGAGGGGTTTTT",
+            b"ACMACMAGAMCAMMAGMAMCAMTGMAMMGATATGAGACMM",
+            b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            b"MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
+        ];
+
+        let mut concatenation = make_concatenation(&seqs);
+        let suffix_array = make_suffix_array(&concatenation);
+        let length = suffix_array.len();
+        pad_input(&mut concatenation, k, length);
+
+        let mut lcp_op = None;
+        let mut lengths_op = None;
+
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        thread_pool.scope(|s| {
+            s.spawn(|_| {
+                lcp_op = Some(par_build_lcp(threads, &concatenation, &suffix_array, k));
+            });
+        });
+        thread_pool.scope(|s| {
+            s.spawn(|_| {
+                lengths_op = Some(par_build_lengths(threads, &concatenation, &suffix_array, k));
+            });
+        });
+
+        let lcp = lcp_op.unwrap();
+        let lengths = lengths_op.unwrap();
+
+        let word_count = k.div_ceil(LANES);
+        for i in 1..length {
+            let current_suffix = suffix_array[i];
+            let previous_suffix = suffix_array[i - 1];
+            let (length, lcp_value) = find_length_and_lcp_value(
+                k,
+                &concatenation,
+                word_count,
+                current_suffix,
+                previous_suffix
+            );
+            assert_eq!(length.min(k + 1), lengths.get(i), "lengths: {}", i);
+            assert_eq!(lcp_value.min(k), lcp.get(i), "lcp: {}", i);
+        }
     }
 
     #[test]

@@ -170,7 +170,7 @@ impl Lcp {
     pub fn set(&mut self, index: usize, value: usize) {
         let start = index * self.width;
         let end = start + self.width;
-        if end >= self.data.len() {
+        if end > self.data.len() {
             return;
         }
         let bytes = &value.to_le_bytes()[0..self.width];
