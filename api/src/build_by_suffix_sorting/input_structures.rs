@@ -193,6 +193,12 @@ impl Lcp {
     }
 
     #[inline]
+    pub fn clear(&mut self) {
+        self.reset();
+        self.len = 0;
+    }
+
+    #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
@@ -224,3 +230,10 @@ impl From<Lcp> for Vec<u8> {
         value.data
     }
 }
+
+impl AsRef<[u8]> for Lcp {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+

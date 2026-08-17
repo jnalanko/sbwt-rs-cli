@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 use bitvec::vec::BitVec;
 use bitvec::field::BitField;
 use simple_sds_sbwt::{bit_vector::BitVector, int_vector::IntVector};
-use simple_sds_sbwt::ops::{BitVec as BitVecTrait, Push, Rank, Select};
+use simple_sds_sbwt::ops::{BitVec as BitVecTrait, Rank, Select};
 use simple_sds_sbwt::raw_vector::{AccessRaw, RawVector};
 use simple_sds_sbwt::serialize::Serialize;
 
@@ -92,7 +92,6 @@ pub fn par_build<SS: SubsetSeq + Send>(
     let output = if !add_all_dummies {
         par_build_without_redundant_dummies(threads, input, suffix_array, k, build_lcs)
     } else {
-        // build_with_all_dummies(input, suffix_array, k, build_lcs, build_counts)
         par_build_with_all_dummies(threads, input, suffix_array, k, build_lcs, build_counts)
     };
     log::info!("[par_build] done");
@@ -483,7 +482,7 @@ fn pad_input(input: &mut Vec<u8>, k: usize, length: usize) {
     if input.len() > length {
         return;
     }
-    for _ in 1..(word_count * LANES) {
+    for _ in 1..(3 * word_count * LANES) {
         input.push(b'$');
     }
 }
@@ -636,7 +635,7 @@ pub(crate) struct FullAuxiliaryData {
     pub(crate) k_ranges: RawVector,
 }
 
-pub(crate) fn par_build_full_auxiliary_data(
+fn par_build_full_auxiliary_data(
     threads: usize,
     mut input: Vec<u8>,
     suffix_array: Vec<usize>,
@@ -674,15 +673,14 @@ pub(crate) fn par_build_full_auxiliary_data(
     for _ in 0..threads {
         lcp_result_data.push(None);
     }
-    let k_bit_width = usize::BITS - k.leading_zeros();
-    let lcp_width = (k_bit_width.div_ceil(u8::BITS) as usize).next_power_of_two();
+    let lcp_width = byte_width(k);
     let lcp_result: Arc<Mutex<Vec<Option<Lcp>>>> = Arc::new(Mutex::new(
         lcp_result_data
     ));
 
     let kmer_count = AtomicUsize::new(0);
     let shorter_than_k     = AtomicBitmap::new(length);
-    let equal_to_k         = AtomicBitmap::new(length);
+    let equal_to_k_minus_one_or_k         = AtomicBitmap::new(length);
     let k_minus_one_ranges = AtomicBitmap::new(length);
     let k_ranges           = AtomicBitmap::new(length);
 
@@ -695,13 +693,12 @@ pub(crate) fn par_build_full_auxiliary_data(
         let lcp_result         = &lcp_result;
         let kmer_count         = &kmer_count;
         let shorter_than_k     = &shorter_than_k;
-        let equal_to_k         = &equal_to_k;
+        let equal_to_k_minus_one_or_k         = &equal_to_k_minus_one_or_k;
         let k_minus_one_ranges = &k_minus_one_ranges;
         let k_ranges           = &k_ranges;
 
         for thread_index in 0..threads {
             s.spawn(move |_| {
-
                 let start = 1 + thread_index * region_size;
                 let end = (start + region_size).min(length);
                 let local_region_length = end - start;
@@ -739,18 +736,18 @@ pub(crate) fn par_build_full_auxiliary_data(
                         current_suffix_index,
                         previous_suffix_index
                     );
-                    local_lcp.push(lcp_value);
+                    local_lcp.push(lcp_value.min(length).min(k));
 
                     if length < k {
                         shorter_than_k.set(rank, true);
                         if length == k - 1 {
-                            equal_to_k.set(rank, true);
+                            equal_to_k_minus_one_or_k.set(rank, true);
                         }
                     } else if length == k {
-                        equal_to_k.set(rank, true);
+                        equal_to_k_minus_one_or_k.set(rank, true);
                     }
 
-                    if lcp_value < length {
+                    if lcp_value < length.min(k) {
                         k_ranges.set(rank, true);
                         if length >= k {
                             kmer_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -776,10 +773,10 @@ pub(crate) fn par_build_full_auxiliary_data(
 
     let mut bwt_op = None;
     let mut lcp_op = None;
-    let mut shorter_than_k_op     = None;
-    let mut equal_to_k_op         = None;
-    let mut k_minus_one_ranges_op = None;
-    let mut k_ranges_op           = None;
+    let mut shorter_than_k_op            = None;
+    let mut equal_to_k_minus_one_or_k_op = None;
+    let mut k_minus_one_ranges_op        = None;
+    let mut k_ranges_op                  = None;
 
     rayon::scope(|s| {
         s.spawn(|_| {
@@ -796,26 +793,19 @@ pub(crate) fn par_build_full_auxiliary_data(
         });
 
         s.spawn(|_| {
-            log::info!("[par_build_full_auxiliary_data] lcp begin");
-            let mut collected_lcp_data = vec![0_u8; length * lcp_width];
-            let mut slice: &mut [u8] = &mut collected_lcp_data;
-            rayon::scope(|s| {
-                let lcp_result = {
-                    let mutex = Arc::try_unwrap(lcp_result).unwrap();
-                    mutex.into_inner().unwrap()
-                };
-                for lcp in lcp_result.into_iter() {
-                    let bytes: Vec<u8> = lcp.unwrap().into();
-                    let (destination_slice, the_rest) = slice.split_at_mut(bytes.len());
-                    slice = the_rest;
-                    s.spawn(move |_| {
-                        destination_slice.copy_from_slice(&bytes);
-                    });
-                }
-            });
-            let lcp = Lcp::new_with_width(collected_lcp_data, lcp_width);
-            lcp_op = Some(lcp);
-            log::info!("[par_build_full_auxiliary_data] lcp done");
+            let lcp_result = {
+                let mutex = Arc::try_unwrap(lcp_result).unwrap();
+                mutex.into_inner().unwrap()
+            };
+            let sections = lcp_result.into_iter().map(Option::unwrap);
+            let mut data = vec![0_u8; length * lcp_width];
+            par_concatenate_bytes(
+                "par_build_full_auxiliary_data, lcp",
+                &mut data,
+                sections
+            );
+            let result = Lcp::new_with_width(data, lcp_width);
+            lcp_op = Some(result);
         });
 
         s.spawn(|_| {
@@ -824,8 +814,8 @@ pub(crate) fn par_build_full_auxiliary_data(
         });
 
         s.spawn(|_| {
-            let equal_to_k = convert_atomic_bitmap(equal_to_k);
-            equal_to_k_op = Some(equal_to_k);
+            let equal_to_k_minus_one_or_k = convert_atomic_bitmap(equal_to_k_minus_one_or_k);
+            equal_to_k_minus_one_or_k_op = Some(equal_to_k_minus_one_or_k);
         });
 
         s.spawn(|_| {
@@ -849,20 +839,289 @@ pub(crate) fn par_build_full_auxiliary_data(
         bwt: bwt_op.unwrap(),
         lcp: lcp_op.unwrap(),
         shorter_than_k            : shorter_than_k_op.unwrap(),
-        equal_to_k_minus_one_or_k : equal_to_k_op.unwrap(),
+        equal_to_k_minus_one_or_k : equal_to_k_minus_one_or_k_op.unwrap(),
         k_minus_one_ranges        : k_minus_one_ranges_op.unwrap(),
         k_ranges                  : k_ranges_op.unwrap(),
     }
+}
+
+#[allow(unused)]
+fn par_build_lcp(
+    threads: usize,
+    k: usize,
+    input: &[u8],
+    suffix_array: &[usize]
+) -> Lcp {
+    log::info!("[par_build_lcp] begin");
+    use std::sync::atomic::Ordering;
+
+    let length = suffix_array.len();
+    let phi: Vec<AtomicUsize> = vec![0_usize; length]
+        .into_iter()
+        .map(AtomicUsize::new)
+        .collect();
+
+    let thread_region_length = length.div_ceil(threads);
+
+    log::info!("[par_build_lcp] building phi array");
+    rayon::scope(|s| {
+        let phi = &phi;
+
+        for thread_index in 0..threads {
+            let mut start = thread_index * thread_region_length;
+            let end = (start + thread_region_length).min(length);
+            s.spawn(move |_| {
+                if start == 0 {
+                    phi[0].store(1, Ordering::Release);
+                    start += 1;
+                }
+                for j in start..end {
+                    let phi_index = suffix_array[j];
+                    let value = suffix_array[j - 1];
+                    phi[phi_index].store(value, Ordering::Release);
+                }
+            });
+        }
+    });
+
+    let phi: Vec<usize> = phi
+        .into_iter()
+        .map(|value| value.load(Ordering::Relaxed))
+        .collect();
+
+    log::info!("[par_build_lcp] building plcp parts");
+    let word_count = k.div_ceil(LANES);
+    let lcp_width = byte_width(k);
+    let plcp_parts = Arc::new(Mutex::new(Vec::<(usize, Lcp)>::with_capacity(threads)));
+    rayon::scope(|s| {
+        let lcp_result = &plcp_parts;
+        let phi = &phi;
+
+        for thread_index in 0..threads {
+            let start = thread_index * thread_region_length;
+            let end = (start + thread_region_length).min(length);
+            s.spawn(move |_| {
+                let local_region_length = end - start;
+                let mut local_lcp = {
+                    let mut capacity = local_region_length * lcp_width;
+                    let data = Vec::<u8>::with_capacity(capacity);
+                    Lcp::new_with_width(data, lcp_width)
+                };
+
+                let mut previous_lcp_value: usize = 0;
+                for i in start..end {
+                    let lcp_value = find_lcp_value(
+                        input,
+                        word_count,
+                        previous_lcp_value.saturating_sub(1),
+                        i,
+                        phi[i]
+                    );
+                    local_lcp.push(lcp_value);
+                    previous_lcp_value = lcp_value;
+                }
+
+                lcp_result.lock().unwrap().push((thread_index, local_lcp));
+            });
+        }
+    });
+
+    drop(phi);
+
+    log::info!("[par_build_lcp] reorder:");
+    let plcp_parts = {
+        let mutex = Arc::try_unwrap(plcp_parts).unwrap();
+        let mut unordered_plcp_parts = mutex.into_inner().unwrap();
+        unordered_plcp_parts.sort_by_key(|(index, _)| *index);
+        unordered_plcp_parts.into_iter().map(|(_, part)| part).collect::<Vec<_>>()
+    };
+    let lcp = par_reorder_parts(threads, suffix_array, lcp_width, plcp_parts);
+
+    log::info!("[par_build_lcp] done");
+    lcp
+}
+
+#[allow(unused)]
+fn par_build_lengths(
+    threads: usize,
+    k: usize,
+    input: &[u8],
+    suffix_array: &[usize]
+) -> Lcp {
+    log::info!("[par_build_lengths] begin");
+    #[derive(Debug)]
+    struct LengthPart {
+        start: usize,
+        skipped_entries: usize,
+        values: Lcp,
+    }
+
+    let lengths_width = byte_width(k + 1);
+    let length = suffix_array.len();
+    let thread_region_length = length.div_ceil(threads);
+    let parts = Arc::new(Mutex::new(Vec::<LengthPart>::with_capacity(threads)));
+    rayon::scope(|s| {
+        let parts = &parts;
+        for thread_index in 0..threads {
+            let start = thread_index * thread_region_length;
+            let end = (start + thread_region_length).min(length);
+
+            s.spawn(move |_| {
+                let mut skip_end = end;
+                let mut current_length = 0;
+                while skip_end > start && current_length < k + 1 {
+                    skip_end -= 1;
+                    if !crate::util::is_dna(input[skip_end]) {
+                        break;
+                    } else {
+                        current_length += 1;
+                    }
+                }
+                let skipped_entries = end - skip_end - 1;
+                let local_buffer_length = end - start;
+                let data = vec![0_u8; local_buffer_length];
+                let mut local_lengths = Lcp::new_with_width(data, lengths_width);
+                local_lengths.set(skip_end - start, current_length);
+                for i in (start..skip_end).rev() {
+                    if crate::util::is_dna(input[i]) {
+                        current_length += 1;
+                        current_length = current_length.min(k + 1);
+                    } else {
+                        current_length = 0;
+                    }
+                    local_lengths.set(i - start, current_length);
+                }
+
+                parts.lock().unwrap().push(LengthPart {
+                    start,
+                    skipped_entries,
+                    values: local_lengths,
+                });
+            });
+        }
+    });
+
+    log::info!("[par_build_lengths] fixing border values");
+    let mut parts = {
+        let mutex = Arc::try_unwrap(parts).unwrap();
+        let mut unordered_parts = mutex.into_inner().unwrap();
+        unordered_parts.sort_by_key(|part| part.start);
+        unordered_parts
+    };
+
+    let mut border_value = 0;
+    for part in parts.iter_mut().rev() {
+        let start = part.start;
+        let end = start + part.values.len();
+        let skipped_entries_start = end - part.skipped_entries;
+        let mut current_length = border_value;
+        for i in (skipped_entries_start..end).rev() {
+            if crate::util::is_dna(input[i]) {
+                current_length += 1;
+                current_length = current_length.min(k + 1);
+            } else {
+                current_length = 0;
+            }
+            part.values.set(i - start, current_length);
+        }
+        border_value = part.values.get(0);
+    }
+    log::info!("[par_build_lengths] reorder:");
+    let parts = parts.into_iter().map(|region| region.values).collect::<Vec<_>>();
+    let lengths = par_reorder_parts(threads, suffix_array, lengths_width, parts);
+
+    log::info!("[par_build_lengths] done");
+    lengths
+}
+
+fn par_reorder_parts(threads: usize, suffix_array: &[usize], width: usize, parts: Vec<Lcp>) -> Lcp {
+    let length = suffix_array.len();
+    let thread_region_length = length.div_ceil(threads);
+    let mut buffer = vec![0_u8; length * width];
+    par_concatenate_bytes(
+        "par_reorder_parts: permuted to buffer",
+        &mut buffer,
+        parts.iter()
+    );
+    let permuted = Lcp::new_with_width(buffer, width);
+
+    log::info!("[par_build_lcp] copying lcp parts");
+    let reordered_parts = Arc::new(Mutex::new(Vec::<(usize, Lcp)>::with_capacity(threads)));
+    rayon::scope(|s| {
+        let permuted = &permuted;
+        let reordered_parts = &reordered_parts;
+
+        for (thread_index, mut part) in parts.into_iter().enumerate() {
+            let start = thread_index * thread_region_length;
+            let end = (start + thread_region_length).min(length);
+            s.spawn(move |_| {
+                for i in start..end {
+                    let value = permuted.get(suffix_array[i]);
+                    part.set(i - start, value);
+                }
+
+                reordered_parts.lock().unwrap().push((thread_index, part));
+            })
+        }
+    });
+
+    let reordered_parts = {
+        let mutex = Arc::try_unwrap(reordered_parts).unwrap();
+        let mut sorted_reordered_parts = mutex.into_inner().unwrap();
+        sorted_reordered_parts.sort_by_key(|(index, _)| *index);
+        sorted_reordered_parts.into_iter().map(|(_, part)| part).collect::<Vec<_>>()
+    };
+    let mut result_buffer: Vec<u8> = permuted.into();
+    par_concatenate_bytes(
+        "par_reorder_parts: reordered to buffer",
+        &mut result_buffer,
+        reordered_parts.iter()
+    );
+    let result = Lcp::new_with_width(result_buffer, width);
+    drop(reordered_parts);
+
+    log::info!("[par_build_lcp] done");
+    result
+}
+
+
+#[inline]
+fn byte_width(value: usize) -> usize {
+    let bit_width = usize::BITS - value.leading_zeros();
+    (bit_width.div_ceil(u8::BITS) as usize).next_power_of_two()
+}
+
+fn par_concatenate_bytes<S, I>(context: &str, buffer: &mut [u8], sections: S)
+where S: Iterator<Item = I> + Send, I: AsRef<[u8]> + Send,
+{
+    log::info!("[{}] concatenation begin", context);
+    let mut slice = buffer;
+    rayon::scope(|s| {
+        for section in sections {
+            let len = section.as_ref().len();
+            let (destination_slice, the_rest) = slice.split_at_mut(len);
+            slice = the_rest;
+            s.spawn(move |_| {
+                let section = section.as_ref();
+                destination_slice.copy_from_slice(section);
+            });
+        }
+    });
+    log::info!("[{}] concatenation done", context);
 }
 
 #[inline]
 fn find_length_and_lcp_value(
     k: usize,
     input: &[u8],
-    word_count: usize,
+    mut word_count: usize,
     mut current_suffix_index: usize,
     mut previous_suffix_index: usize
 ) -> (usize, usize) {
+    if word_count * LANES == k {
+        word_count += 1;
+    }
+
     let k = k as u32;
 
     let mut length = 0;
@@ -882,9 +1141,9 @@ fn find_length_and_lcp_value(
         if !stop_accumulating_length {
             let bitmask = simd_word_current.simd_eq(b'$').to_bitmask() as Bitmask;
             length += bitmask.trailing_zeros();
+            // stop_accumulating_length |= length >= k || bitmask != 0;
             if length >= k {
                 stop_accumulating_length = true;
-                length = k;
             }
             if bitmask != 0 {
                 stop_accumulating_length = true;
@@ -894,10 +1153,10 @@ fn find_length_and_lcp_value(
         if !found_lcp {
             let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask() as Bitmask;
             lcp_value += bitmask.trailing_ones();
-            if stop_accumulating_length && lcp_value >= length {
-                found_lcp = true;
-                lcp_value = length;
-            }
+            // if stop_accumulating_length && lcp_value >= length {
+            //     found_lcp = true;
+            //     lcp_value = length;
+            // }
             if bitmask != Bitmask::MAX {
                 found_lcp = true;
             }
@@ -909,6 +1168,38 @@ fn find_length_and_lcp_value(
     }
 
     (length as usize, lcp_value as usize)
+}
+
+#[inline]
+fn find_lcp_value(
+    input: &[u8],
+    mut word_count: usize,
+    start_lcp_value: usize,
+    mut current_index: usize,
+    mut previous_index: usize
+) -> usize {
+    word_count = (word_count * LANES - start_lcp_value).div_ceil(LANES);
+    current_index += start_lcp_value;
+    previous_index += start_lcp_value;
+
+    let mut lcp_value = start_lcp_value as u32;
+    for _ in 0..word_count {
+        let slice_for_current = &input[current_index..current_index + LANES];
+        current_index += LANES;
+        let simd_word_current = Word::new(slice_for_current.try_into().unwrap());
+
+        let slice_for_previous = &input[previous_index..previous_index + LANES];
+        previous_index += LANES;
+        let simd_word_previous = Word::new(slice_for_previous.try_into().unwrap());
+
+        let bitmask = simd_word_current.simd_eq(simd_word_previous).to_bitmask() as Bitmask;
+        lcp_value += bitmask.trailing_ones();
+        if bitmask != Bitmask::MAX {
+            break;
+        }
+    }
+
+    lcp_value as usize
 }
 
 struct DummyMarks {
@@ -1035,158 +1326,6 @@ fn keep_predecessors_atomic(
         predecessor = next;
         k -= 1;
     }
-}
-
-pub fn build_with_all_dummies<SS: SubsetSeq + Send>(
-    mut input: Vec<u8>, suffix_array: Vec<usize>, k: usize, build_lcs: bool, build_counts: bool
-) -> Output<SS> {
-    log::info!("[build_with_all_dummies] begin");
-    let word_count = k.div_ceil(LANES);
-    let length = suffix_array.len();
-    pad_input(&mut input, k, length);
-
-    let mut rows = Vec::<BitVec<u64>>::new();
-    for _ in 0..4 {
-        rows.push(BitVec::with_capacity(length));
-    }
-
-    let mut lcs: Option<IntVector> = if build_lcs {
-        let bit_width = usize::BITS - (k.overflowing_sub(1).0).leading_zeros();
-        let bit_width = bit_width as usize;
-        let mut value = IntVector::with_capacity(length, bit_width).unwrap();
-        value.push(0); // '$...$' dummy k-mer
-        Some(value)
-    } else {
-        None
-    };
-
-    let mut counts: Option<Counts> = if build_counts {
-        let sample_capacity = length / Counts::DEFAULT_SAMPLE_DISTANCE;
-        let mut value = Counts {
-            individual_counts: Vec::with_capacity(length),
-            sample_distance: Counts::DEFAULT_SAMPLE_DISTANCE,
-            sample_information: Vec::with_capacity(sample_capacity + 2),
-            large_counts: Vec::with_capacity(sample_capacity),
-        };
-        value.sample_information.push(Sample { count: 0, large_counts_up_to_sample: 0 });
-        Some(value)
-    } else {
-        None
-    };
-
-    let mut current_set: u8 = 0;
-
-    let mut kmer_count: usize = 0;
-    let mut sets_count: usize = 1;
-
-    let mut k_range_count   : u64 = 1; // Always output the $ set.
-    let mut count           : u64 = 0;
-    let mut individual_count: u64 = 0;
-    let mut large_counts_up_to_sample: usize = 0;
-
-    let mut start_of_k_range;
-    let mut start_of_k_minus_one_range;
-
-    for rank in 1..length {
-        let current_suffix_index = suffix_array[rank];
-
-        let previous_character_index_in_input = (current_suffix_index + length - 1) % length;
-        let previous_character = input[previous_character_index_in_input];
-        let outedge = CHAR_TO_INDEX[previous_character as usize];
-
-        let first_character = input[current_suffix_index];
-        let first_character_index = CHAR_TO_INDEX[first_character as usize];
-
-        let (length, lcp_value) = if first_character_index == 0 {
-            (0, 0)
-        } else {
-            let previous_suffix_index = suffix_array[rank - 1];
-            find_length_and_lcp_value(
-                k,
-                &input,
-                word_count,
-                current_suffix_index,
-                previous_suffix_index
-            )
-        };
-
-        start_of_k_range           = lcp_value < length;
-        start_of_k_minus_one_range = start_of_k_range && (length < k || lcp_value < k - 1);
-
-        if start_of_k_minus_one_range {
-            while k_range_count > 0 {
-                push_set(&mut rows, current_set);
-                current_set = 0;
-                k_range_count -= 1;
-            }
-
-            current_set = 0;
-        }
-
-        if start_of_k_range {
-            k_range_count += 1;
-            if length >= k {
-                kmer_count += 1;
-            }
-
-            if build_lcs {
-                lcs.as_mut().unwrap().push(lcp_value as u64);
-            }
-
-            if build_counts {
-                let counts = counts.as_mut().unwrap();
-                if sets_count % Counts::DEFAULT_SAMPLE_DISTANCE == 0 {
-                    counts.sample_information.push(Sample {
-                        count,
-                        large_counts_up_to_sample,
-                    });
-                }
-                if individual_count >= u8::MAX as u64 {
-                    counts.individual_counts.push(u8::MAX);
-                    counts.large_counts.push(individual_count - u8::MAX as u64);
-                } else {
-                    counts.individual_counts.push(individual_count as u8);
-                }
-                individual_count = 0;
-            }
-
-            sets_count += 1;
-        }
-
-        if build_counts && length > 0 {
-            count += 1;
-            individual_count += 1;
-            if  individual_count == u8::MAX as u64 {
-                large_counts_up_to_sample += 1;
-            }
-        }
-
-        current_set |= (1 << outedge) as u8;
-    }
-
-    while k_range_count > 0 {
-        push_set(&mut rows, current_set);
-        current_set = 0;
-        k_range_count -= 1;
-    }
-
-    if build_counts {
-        let counts = counts.as_mut().unwrap();
-        counts.sample_information.push(Sample {
-            count,
-            large_counts_up_to_sample,
-        });
-        if individual_count >= u8::MAX as u64 {
-            counts.individual_counts.push(u8::MAX);
-            counts.large_counts.push(individual_count - u8::MAX as u64);
-        } else {
-            counts.individual_counts.push(individual_count as u8);
-        }
-    }
-
-    let result = collect_output(k, rows, lcs, counts, kmer_count);
-    log::info!("[build_with_all_dummies] done");
-    result
 }
 
 pub fn par_build_with_all_dummies<SS: SubsetSeq + Send>(
@@ -1435,7 +1574,7 @@ fn _build_sbwt_region_with_all_dummies(
             )
         };
 
-        (length_lcp.0, length_lcp.1, outedge)
+        (length_lcp.0.min(k), length_lcp.1, outedge)
     };
 
     let mut index = start;
@@ -1659,6 +1798,16 @@ mod tests {
         let mut suffix_array = (0..concatenation.len()).collect::<Vec<_>>();
         suffix_array.sort_by_key(|index| &concatenation[*index..]);
         suffix_array
+    }
+
+    #[test]
+    fn build_lcp() {
+        // todo!()
+    }
+
+    #[test]
+    fn build_lengths() {
+        // todo!()
     }
 
     #[test]
