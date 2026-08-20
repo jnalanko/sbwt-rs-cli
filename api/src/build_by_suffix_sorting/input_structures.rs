@@ -1,3 +1,4 @@
+// Code by Martin Kostadinov.
 
 use simple_sds_sbwt::bit_vector::BitVector;
 use simple_sds_sbwt::ops::{BitVec, Rank, Select};
