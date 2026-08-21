@@ -2,6 +2,123 @@
 
 // Module and submodule contributions by Martin Kostadinov.
 
+//
+// # Construction without redundant dummies
+//
+// There are a three steps to this version of the algorithm. Firstly some auxiliary arrays and
+// bitvectors are constructed which are then used in the second step in which dummy k-mers found
+// necessary are marked. The final step is the population of the sets in the SBWT index.
+//
+// ## Auxiliary data
+//
+// To describe the auxiliary data, here are a few definitions:
+// 1. The "true prefix" of a given suffix is the prefix up to the first $. The "true length" of
+//    the suffix is the length of the true prefix.
+// 2. The "k-view prefix" (k-VP) of a given suffix is the true prefix of the suffix truncated from
+//    the right to a length of k, if the true length is greater than k, or padded to the right
+//    with $ if the true length is smaller than k. The k-length of a suffix is equal to the number
+//    of non $ characters in the k-VP.
+// 3. A dummy suffix is a suffix with true length less than k. A non-dummy suffix is a suffix with
+//    true length greater than or equal to k.
+// 4. A k-range is a sequence of suffixes in the order of the suffix array which share the same
+//    k-VP. A (k-1)-range contains one or more k-ranges.
+// 5. Given a k-mer A and B, if A[1..k] == B[0..k-1] then A is a predecessor to B and B is a
+//    successor to A. Given the k-VP of two suffixes A and B, if A[0..k-1] == B[1..k], then the
+//    suffix of A is a predecessor to the suffix of B and the suffix of B is a successor to the
+//    suffix of A. This is because, the input sequences are reversed in the input concatenation.
+//    The (k-1)-range which contains the predecoessor suffixes of another given suffix will be
+//    referred to as the (k-1)-predecessor range.
+//
+// Auxiliary data structures:
+// 1. The BWT is a string of characters. It gives the character before the start of each suffix.
+//    Since the suffixes are sorted lexicographically and the k-mers in the SBWT index are sorted
+//    colexicographically, the concatenation of the input sequences has them reversed. This means
+//    that the character before a given suffix is one of the outedges in the SBWT graph of the
+//    first k-mer in the SBWT index with a given (k-1) suffix. In order to support standard FM
+//    index operations it is represented by 5 bitvectors - one for each of the characters in the
+//    set {$, A, C, G, T}.
+// 2. The LCP array gives the longest common prefix between two consecutive suffixes in the order
+//    of the suffix array.
+// 3. The Lengths array gives the (k+1)-lengths of all suffixes. This is in order to mark only
+//    suffixes which have a true length which is exactly equal to k.
+// 4. The [FullAuxiliaryData::shorter_than_k] bitvector marks suffixes with true length shorter
+//    than k. Used in the step of marking which dummy suffixes and their corresponding dummy
+//    k-mers are necessary.
+// 5. The [FullAuxiliaryData::equal_to_k_minus_one_or_k] bitvector marks suffixes with true length
+//    equal to (k-1) or k. Together with the previous bitvector it can be used to disambiguate
+//    whether the true length of a suffix is (k-1) or k. If a suffix's true length is equal to k,
+//    then the algorithm must check whether this suffix has a non-dummy suffix in the
+//    (k-1)-predecessor range of the k-mer which the suffix represents.
+// 6. The [FullAuxiliaryData::k_minus_one_ranges] and the [FullAuxiliaryData::k_ranges] bitvectors
+//    mark the start of all (k-1)-ranges and k-ranges respectively. The former supports rank and
+//    select operations in order to find the end of a (k-1)-range. A start of a k-range can be
+//    identified if the k-length of a suffix is greater than its LCP value. This means that the
+//    k-VP of this suffix is different from the k-VP of the previous suffix. For a suffix to be
+//    the start of a (k-1)-range it must be the start of a k-range and its LCP value must be less
+//    than (k-1). If its LCP value is greater than or equal to (k-1), then that means that it
+//    shares a (k-1)-VP with the previous suffix and thus it is not the start of a (k-1)-range.
+//
+// ## Marking dummy k-mers
+//
+// If a suffix has a true length exactly equal to k, this means that it is the beginning k-mer in
+// an input sequence. Such suffixes will be referred to as "start suffixes". That is, if for a
+// given start suffix there doesn't exist a non-dummy predecessor suffix, we need to mark dummy
+// suffixes such that when we populate the sets of the SBWT index we create a set for the dummy
+// predecessors of this suffix's k-mer.
+//
+// For any given k-range we need to confirm whether a non-dummy predecessor suffix exists only
+// once since all suffixes in this range will correspond to only one k-mer in the final SBWT. 
+//
+// A dummy k-mer is not needed if the k-range contains a suffix with true length greater than k.
+// To show this is true, let's assume that the index of the starting character of the suffix with
+// true length greater than k is I. Then the suffix starting at index I+1 has a true length equal
+// to k, which makes it a non-dummy predecessor to the suffix I (no matter where it is located in
+// the suffix array).
+//
+// A dummy k-mer is also not needed if the (k-1)-predecessor range of a given suffix contains a
+// non-dummy k-mer. Here are a few prerequisites before describing the operation that can check
+// this. It can be proven that an "inverse LF step" from the index in the suffix array of a given
+// suffix on a k-BWT will return an index in its (k-1)-predecessor range. Given any (k-1)-range,
+// if there are non-dummy suffixes in it, they will be at the end of the range due to the
+// lexicographic sorting of the suffixes. Thus, given a start suffix, an inverse LF step is
+// performed to find its (k-1)-predecessor range. Then, using standard bitvector operations on
+// [FullAuxiliaryData::k_minus_one_ranges] the end of that range is found. Then if that range
+// contains at least one non-dummy suffix, the last bit of the (k-1)-range in the
+// [FullAuxiliaryData::shorter_than_k] bitvector will not be set.
+//
+// Otherwise, the direct dummy suffix predecessor and all of its predecessors need to be marked as
+// well. This is done by performing inverse LF steps until the k-range of the root dummy node
+// ($$..$). Since the inverse LF step returns the index of a predecessor suffix, this means that
+// the character in the BWT at the index of the predecessor is equal to the first character in the
+// successor suffix.
+//
+// ## Populating the sets of the SBWT index.
+//
+// By definition of the SBWT index, a set contains characters if the corresponding k-mer is the
+// first k-mer with a given (k-1)-suffix. As such, the characters for a set are collected by
+// iterating an entire (k-1)-range. For each (k-1)-range a number of sets are emitted equal to the
+// number of k-ranges it contains. The first set contains the encountered characters, the rest are
+// empty. That number corresponds to different k-mers which will potentially end up in the SBWT. A
+// k-range that corresponds to non-dummy suffixes is always counted. A k-range that corresponds to
+// dummy suffixes is counted only if there are marked suffixes. Suffixes with true length shorter
+// than k-1 contribute their letter to a set only if they are marked to be kept. All other
+// suffixes contribute their letter to the first emitted set.
+//
+// ## Generating the LCS array
+//
+// The LCS array can be induced from the LCP array. Each entry in it is equal to the range minimum
+// from the previous kept entry. The beginning of each k-range is kept if it corresponds to dummy
+// suffixes at least one of which needs to be kept or if it corresponds to non-dummy suffixes.
+//
+// # Construction with all dummies included
+//
+// This version of the algorithm is simpler. After calculating the Lengths and the LCP arrays it
+// can directly populate the sets of the SBWT index. This step is the same as the other version of
+// the algorithm escept that all k-ranges that correspond to dummy suffixes are kept.
+//
+// The Counts data structure can be created easily by counting the number of suffixes in a k-range.
+//
+
 pub mod preprocessing;
 pub mod input_structures;
 
@@ -30,68 +147,6 @@ const FULL_SET: u8 = 0b00011110;
 /// either be constructed using traditional algorithms such as SA-IS or the suffixes can be sorted
 /// by a bounded prefix i.e. up to the first k-characters since that is what is strictly necessary
 /// for the SBWT.
-///
-/// Whether all dummies should be included dictates which version of the construction algorithm
-/// should be used.
-///
-/// # Construction without redundant dummies
-///
-/// There are a three steps to this version of the algorithm. Firstly some auxiliary arrays and
-/// bitvectors are constructed which are then used in the second step in which dummy k-mers found
-/// necessary are marked. The final step is the population of the sets in the SBWT index.
-///
-/// ## Auxiliary data
-///
-/// To describe the auxiliary data, here are a few definitions:
-/// 1. The "true prefix" of a given suffix is the prefix up to the first $. The "true length" of
-///    the suffix is the length of the true prefix.
-/// 2. The "k-view prefix" (k-VP) of a given suffix is the true prefix of the suffix truncated from
-///    the right to a length of k, if the true length is greater than k, or padded to the right
-///    with $ if the true length is smaller than k. The k-length of a suffix is equal to the number
-///    of non $ characters in the k-VP.
-/// 3. A dummy suffix is a suffix with true length less than k. A non-dummy suffix is a suffix with
-///    true length greater than or equal to k.
-/// 4. A k-range is a sequence of suffixes in the order of the suffix array which share the same
-///    k-VP. A (k-1)-range contains one or more k-ranges.
-/// 5. A (k-1)-predecessor range in the suffix array corresponds to the (k-1)-prefix of a k-mer in
-///    the SBWT.
-///
-/// Auxiliary data structures:
-/// 1. The BWT is a string of characters. It gives the character before the start of each suffix.
-///    Since the suffixes are sorted lexicographically and the k-mers in the SBWT index are sorted
-///    colexicographically, the concatenation of the input sequences has them reversed. This means
-///    that the character before a given suffix is one of the outedges in the SBWT graph of the
-///    first k-mer in the SBWT index with a given (k-1) suffix. In order to support standard FM
-///    index operations it is represented by 5 bitvectors - one for each of the characters in the
-///    set {$, A, C, G, T}.
-/// 2. The LCP array gives the longest common prefix between two consecutive suffixes in the order
-///    of the suffix array.
-/// 3. The Lengths array gives the (k+1)-lengths of all suffixes. This is in order to mark only
-///    suffixes which have a true length which is exactly equal to k.
-/// 4. The [FullAuxiliaryData::shorter_than_k] bitvector marks suffixes with true length shorter
-///    than k. Used in the step of marking which dummy suffixes and their corresponding dummy
-///    k-mers are necessary.
-/// 5. The [FullAuxiliaryData::equal_to_k_minus_one_or_k] bitvector marks suffixes with true length
-///    equal to (k-1) or k. Together with the previous bitvector it can be used to disambiguate
-///    whether the true length of a suffix is (k-1) or k. If a suffix's true length is equal to k,
-///    then the algorithm must check whether this suffix has a non-dummy suffix in the
-///    (k-1)-predecessor range of the k-mer which the suffix represents.
-/// 6. The [FullAuxiliaryData::k_minus_one_ranges] and the [FullAuxiliaryData::k_ranges] bitvectors
-///    mark the start of all (k-1)-ranges and k-ranges respectively. The former supports rank and
-///    select operations in order to find the end of a (k-1)-range. A start of a k-range can be
-///    identified if the k-length of a suffix is greater than its LCP value. This means that the
-///    k-VP of this suffix is different from the k-VP. For a suffix to be the start of a
-///    (k-1)-range it must be the start of a k-range and its LCP value must be less than (k-1). If
-///    its LCP value is greater than or equal to (k-1), then that means that it shares a (k-1)-VP
-///    with the previous suffix and thus it is not the start of a (k-1)-range.
-///
-/// ## Marking dummy k-mers
-///
-/// For each suffix with a true-length equal to k (TODO...)
-///
-/// # Construction with all dummies included
-///
-/// TODO...
 ///
 pub struct Output<SS: SubsetSeq + Send> {
     /// The result SBWT index.
