@@ -119,7 +119,7 @@
 //!   This is the fastest algorithm, but uses a lot of RAM.
 //! * [BuildByBoundedSuffixSort][`builder::BuildByBoundedSuffixSort`]: Runs a k-bounded suffix sort with SIMD suffix comparison. Good for short and medium values of k (k < 1000).
 //! * [BuildByLibsais][`builder::BuildByLibsais`]: builds from a suffix array of a concatenation of the input strings, computed with the libsais C-library. Only available
-//!   when the optional `libsais` feature is enabled. Good for very large values of k (k > 1000).
+//!   when the optional `libsais` feature is enabled. The running time is O(n), independent of k. Good for very large values of k (k > 1000).
 //!
 //! The two bit-packed k-mer sorting algorithms stream the input and support k up to 256. The two
 //! suffix-sorting algorithms instead hold the concatenation of the input sequences in memory, and have

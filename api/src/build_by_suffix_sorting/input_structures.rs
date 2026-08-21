@@ -1,3 +1,4 @@
+// Code by Martin Kostadinov.
 
 use simple_sds_sbwt::bit_vector::BitVector;
 use simple_sds_sbwt::ops::{BitVec, Rank, Select};
@@ -170,7 +171,7 @@ impl Lcp {
     pub fn set(&mut self, index: usize, value: usize) {
         let start = index * self.width;
         let end = start + self.width;
-        if end >= self.data.len() {
+        if end > self.data.len() {
             return;
         }
         let bytes = &value.to_le_bytes()[0..self.width];
@@ -190,6 +191,12 @@ impl Lcp {
     #[inline]
     pub fn width(&self) -> usize {
         self.width
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.reset();
+        self.len = 0;
     }
 
     #[inline]
@@ -224,3 +231,10 @@ impl From<Lcp> for Vec<u8> {
         value.data
     }
 }
+
+impl AsRef<[u8]> for Lcp {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
