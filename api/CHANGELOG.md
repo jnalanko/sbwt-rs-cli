@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.1
+
+The BuildByLibsais construction algorithm now runs fully in linear time at the cost of using O(n log n + n log k) extra bits. BuildByBoundedSuffixSort uses the same functions, so it also pays the same memory cost.
+
 ## v0.6.0
 
 ### New features
