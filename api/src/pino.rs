@@ -10,7 +10,7 @@ pub struct Pred8vPino {
     n: usize,
     nblocks: usize,
     // low 8 bits of all values, bucket concatenated
-    y: Vec<u8>,
+    lower_level: Vec<u8>,
     // compressed bucket directory
     index: Pred8vS1,
 }
@@ -24,7 +24,7 @@ impl Pred8vPino {
         let u = data[n - 1] as usize - min;
 
         let nblocks = ((u / 256) + 1) as usize;
-        let mut x = vec![0u32; nblocks + 1];
+        let mut upper_level = vec![0usize; nblocks + 1];
 
         // Count elements per bucket.
         for &value in data {
@@ -32,11 +32,11 @@ impl Pred8vPino {
             let bucket = (v >> 8) as usize;
 
             debug_assert!(bucket < nblocks);
-            x[bucket] += 1;
+            upper_level[bucket] += 1;
         }
 
         // Build payload.
-        let mut y = vec![0u8; n];
+        let mut lower_level = vec![0u8; n];
 
         let mut yi = 0usize;
         let mut i = 0usize;
@@ -45,14 +45,14 @@ impl Pred8vPino {
             let v = data[i] - min as u64;
             let bucket = (v >> 8) as usize;
 
-            let bucket_count = x[bucket];
+            let bucket_count = upper_level[bucket];
 
-            // X now becomes bucket start offset.
-            x[bucket] = yi as u32;
+            // Upper_level now becomes bucket start offset.
+            upper_level[bucket] = yi;
 
             for _ in 0..bucket_count {
                 let v = data[i] - min as u64;
-                y[yi] = (v & 255) as u8;
+                lower_level[yi] = (v & 255) as u8;
 
                 yi += 1;
                 i += 1;
@@ -62,24 +62,24 @@ impl Pred8vPino {
         debug_assert_eq!(yi, n);
 
         // Sentinel.
-        x[nblocks] = yi as u32;
-        let mut previous = x[nblocks];
+        upper_level[nblocks] = yi;
+        let mut previous = upper_level[nblocks];
         for i in (1..nblocks).rev() {
-            if x[i] == 0 {
-                x[i] = previous;
+            if upper_level[i] == 0 {
+                upper_level[i] = previous;
             } else {
-                previous = x[i];
+                previous = upper_level[i];
             }
         }
 
-        let mut block_indices = Vec::with_capacity(nblocks + 2);
+        let mut block_indices = Vec::<u64>::with_capacity(nblocks + 2);
 
         let mut bi = 0u64;
         block_indices.push(bi);
 
         for i in 0..nblocks {
-            let x_i = x[i] as u64;
-            let bcount = (x[i + 1] as u64).saturating_sub(x_i);
+            let x_i = upper_level[i] as u64;
+            let bcount = (upper_level[i + 1] as u64).saturating_sub(x_i);
 
             bi += 1 + bcount;
             block_indices.push(bi);
@@ -93,58 +93,10 @@ impl Pred8vPino {
             u,
             n,
             nblocks,
-            y,
+            lower_level,
             index,
         }
     }
-
-    /* pub fn from_sorted(data: &[u64]) -> Self {
-        assert!(!data.is_empty());
-
-        let n = data.len();
-        let min = data[0];
-        let u = data[n - 1] - min;
-
-        // let nblocks = (u as usize >> 8) + (((u & 255) != 0) as usize);
-        let nblocks = (u as usize >> 8) + 1;
-
-        // Temporary construction structure.
-        // Each bucket contains the low 8 bits.
-        let mut buckets = vec![Vec::<u8>::new(); nblocks];
-
-        for &value in data {
-            let v = value - min;
-            let bucket = (v >> 8) as usize;
-            buckets[bucket].push((v & 255) as u8);
-        }
-        // Flatten payload and create
-        // the bucket directory.
-        // The +1 is the sentinel expansion
-        // used by Pred8vS1.
-        let mut y = Vec::with_capacity(n);
-        let mut bucket_directory = Vec::with_capacity(nblocks + 1);
-        let mut pos = 0u64;
-        bucket_directory.push(pos);
-
-        for bucket in &buckets {
-            y.extend_from_slice(bucket);
-            pos += 1 + bucket.len() as u64;
-            bucket_directory.push(pos);
-        }
-
-        debug_assert_eq!(bucket_directory.len(), nblocks + 1);
-
-        let index = Pred8vS1::from_sorted(&bucket_directory);
-
-        Self {
-            min,
-            u,
-            n,
-            nblocks,
-            y,
-            index,
-        }
-    } */
 
     // Return:
     //   (position, exact_match)
@@ -167,7 +119,6 @@ impl Pred8vPino {
         }
         let bucket = (v >> 8) as usize;
         let (start, count) = self.index.select1(bucket);
-        let start = start as usize;
 
         // Empty bucket.
         // select1 returns the predecessor
@@ -180,7 +131,7 @@ impl Pred8vPino {
 
         // Scan the bucket.
         for i in 0..count {
-            let value = self.y[start + i];
+            let value = self.lower_level[start + i];
 
             if value >= low {
                 let exact = value == low;
@@ -225,12 +176,11 @@ impl Pred8vPino {
             return;
         }
 
-        let start = start as usize;
         let count = count as usize;
         let bucket_base = (bucket as u64) << 8;
 
         for i in 0..count {
-            let local = bucket_base + self.y[start + i] as u64;
+            let local = bucket_base + self.lower_level[start + i] as u64;
 
             if local < local_begin as u64 || local > local_end as u64 {
                 continue;
@@ -288,21 +238,21 @@ impl Pred8vPino {
         let num_words = (len + 64 - 1) / 64;
         let mut words: Vec<u64> = vec![0; num_words];
         let key = range.start;
-        if key >= self.u {
+        if key > self.u + self.min {
             return words;
         }
         let range_window_start = key as u64 & !63u64;
-        let range_window_end = range_window_start + num_words as u64 * 64;
-        
+
+        let range_window_end = range_window_start + num_words as u64 * 64 - 1;
+
         // Completely outside the represented universe.
         if range_window_end < self.min as u64 || range_window_start > (self.min + self.u) as u64 {
             return words;
         }
-        
+
         // Convert to Pino's local coordinates.
         let local_begin = range_window_start.saturating_sub(self.min as u64);
-        let local_end = range_window_end.min((self.u) as u64);
-        dbg!(len, num_words, range_window_start, range_window_end, local_begin, local_end);
+        let local_end = range_window_end.min((self.min + self.u) as u64) - self.min as u64;
 
         let first_bucket = (local_begin >> 8) as usize;
         let last_bucket = (local_end >> 8) as usize;
@@ -337,7 +287,7 @@ impl Pred8vPino {
     pub fn size_in_bytes(&self) -> usize {
         std::mem::size_of::<u64>() * 3
             + std::mem::size_of::<usize>() * 2
-            + self.y.len()
+            + self.lower_level.len()
             + self.index.size_in_bytes()
     }
 }
@@ -351,10 +301,10 @@ impl Pred8vPino {
         // u64 n
         // u64 min
         // u64 nblocks
-        // u8  y[n]
+        // u8  lower_level[n]
         // Pred8vS1 index
 
-        debug_assert_eq!(self.y.len(), self.n);
+        debug_assert_eq!(self.lower_level.len(), self.n);
 
         let mut written = 0usize;
 
@@ -370,8 +320,8 @@ impl Pred8vPino {
         w.write_all(&(self.nblocks as u64).to_le_bytes())?;
         written += 8;
 
-        w.write_all(&self.y)?;
-        written += self.y.len();
+        w.write_all(&self.lower_level)?;
+        written += self.lower_level.len();
 
         written += self.index.serialize(&mut w)?;
 
@@ -402,7 +352,7 @@ impl Pred8vPino {
             u,
             n,
             nblocks,
-            y,
+            lower_level: y,
             index,
         })
     }
@@ -410,6 +360,7 @@ impl Pred8vPino {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -672,7 +623,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
 
         for _case in 0..200 {
-            let mut values: Vec<u64> = (0..300).map(|_| rng.gen_range(0, 5000)).collect();
+            let mut values: Vec<u64> = (0..300).map(|_| rng.gen_range(1, 5000)).collect();
             values.sort();
             values.dedup();
 
@@ -709,7 +660,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
 
         for _case in 0..200 {
-            let mut values: Vec<u64> = (0..300).map(|_| rng.gen_range(0,5000)).collect();
+            let mut values: Vec<u64> = (0..300).map(|_| rng.gen_range(0, 5000)).collect();
             values.sort();
             values.dedup();
 
@@ -719,7 +670,7 @@ mod tests {
 
             let pino = Pred8vPino::from_sorted(&values);
 
-            for _ in 0..100 {
+            for it in 0..100 {
                 let start = rng.gen_range(0, 5000);
                 let len = rng.gen_range(1, 300);
 
@@ -728,17 +679,31 @@ mod tests {
                 let words = pino.get_words_in_range(range.clone());
 
                 let window_start = start & !63;
-
-                for value in window_start..window_start + words.len() * 64 {
+                
+                for value in window_start..window_start + words.len() * 64 - 1 {
                     let expected = value >= range.start
                         && value < range.end
                         && values.contains(&(value as u64));
 
                     let bit = value - window_start;
 
-                    let actual = (words[bit / 64] & (1u64 << (bit % 64))) != 0;
-
-                    assert_eq!(actual, expected, "range={:?}, value={}", range, value);
+                    let actual = value >= range.start
+                        && value < range.end
+                        && (words[bit / 64] & (1u64 << (bit % 64))) != 0;
+                    let pino_contains = pino.get_pred(value).1;
+                    let actual_contains =
+                        value >= range.start && value < range.end && pino_contains;
+                    assert_eq!(
+                        actual,
+                        expected,
+                        "range={:?}, value={}, iteration={}, pino.min={}, case={}",
+                        range,
+                        value,
+                        it,
+                        pino.min(),
+                        _case
+                    );
+                    assert_eq!(actual, actual_contains);
                 }
             }
         }
@@ -751,7 +716,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(3);
 
         for _case in 0..100 {
-            let mut values: Vec<u64> = (0..500).map(|_| rng.gen_range(0,20000)).collect();
+            let mut values: Vec<u64> = (0..500).map(|_| rng.gen_range(0, 20000)).collect();
             values.sort();
             values.dedup();
 

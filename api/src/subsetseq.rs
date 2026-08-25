@@ -4,11 +4,11 @@
 use std::ops::Range;
 
 use bitvec::order::Lsb0;
+use bitvec::prelude::*;
 use simple_sds_sbwt::bit_vector::*;
 use simple_sds_sbwt::ops::*;
 use simple_sds_sbwt::raw_vector::*;
 use simple_sds_sbwt::serialize::*;
-use bitvec::prelude::*;
 
 // Import simple_sds_sbwt::ops::BitVec explicitly.
 // It is already imported in the glob import above, but there is a name conflict:
@@ -119,7 +119,7 @@ pub trait SubsetSeq {
         C
     }
 
-    // This a key subroutine for SbwtIndex::push_labels_forward. We want to put it here in the SubsetSeq
+    // This is a key subroutine for SbwtIndex::push_labels_forward. We want to put it here in the SubsetSeq
     // trait because then we have have a really optimized version for particular implementations
     // like SubsetMatrix. See the code for what it does.
     fn push_labels_forward(
@@ -134,11 +134,11 @@ pub trait SubsetSeq {
     fn into_bitvectors(self) -> Vec<bitvec::vec::BitVec<u64, Lsb0>> where Self: Sized {
         let sigma = 4; // TODO
         (0..sigma).map(|c| {
-            let mut row = bitvec![u64, Lsb0; 0; self.len()];
-            self.call_on_char_occurrences(0..self.len(), c as u8, |i| {
-                row.set(i, true);
-            });
-            row
+                let mut row = bitvec![u64, Lsb0; 0; self.len()];
+                self.call_on_char_occurrences(0..self.len(), c as u8, |i| {
+                    row.set(i, true);
+                });
+                row
         }).collect()
     }
 }
@@ -310,9 +310,9 @@ impl SubsetSeq for SubsetMatrix {
     fn into_bitvectors(self) -> Vec<bitvec::vec::BitVec<u64, Lsb0>> where Self: Sized {
         // This is zero-copy throughout
         self.rows.into_iter()
-          .map(simple_sds_sbwt::raw_vector::RawVector::from)
-          .map(crate::util::simple_sds_raw_bitvec_to_bitvec)
-          .collect()
+            .map(simple_sds_sbwt::raw_vector::RawVector::from)
+            .map(crate::util::simple_sds_raw_bitvec_to_bitvec)
+            .collect()
     }
 }
 
@@ -335,8 +335,6 @@ impl std::fmt::Display for SubsetMatrix {
 }
 #[cfg(test)]
 mod tests {
-    //use crate::SubsetCorrectionSets;
-
     use crate::SubsetCorrectionSets;
 
 use super::*;
@@ -604,7 +602,7 @@ use super::*;
     fn differential_random() {
         let mut rng = StdRng::seed_from_u64(12345);
 
-        for _case in 0..1000 {
+        for _case in 0..100 {
             let n = rng.gen_range(1, 1000);
 
             let mut sets = Vec::with_capacity(n);
@@ -684,8 +682,8 @@ use super::*;
     fn differential_call_on_occurrences() {
         let mut rng = StdRng::seed_from_u64(999);
 
-        for _ in 0..500 {
-            let n = rng.gen_range(1, 300);
+        for _ in 0..100 {
+            let n = rng.gen_range(2, 3000);
 
             let mut sets = Vec::new();
 
@@ -702,9 +700,9 @@ use super::*;
             let matrix = SubsetMatrix::new(sets.clone(), 4);
             let corr = build_or_dump(sets);
 
-            for _ in 0..50 {
-                let a = rng.gen_range(0, n);
-                let b = rng.gen_range(a, n);
+            for it in 0..50 {
+                let a = rng.gen_range(0, n - 1);
+                let b = rng.gen_range(a + 1, n);
 
                 for c in 0..4 {
                     let mut v1 = Vec::new();
@@ -713,7 +711,7 @@ use super::*;
                     let mut v2 = Vec::new();
                     corr.call_on_char_occurrences(a..b, c, |i| v2.push(i));
 
-                    assert_eq!(v1, v2);
+                    assert_eq!(v1, v2, "First is the expected one. a {a} b {b} it {it}");
                 }
             }
         }

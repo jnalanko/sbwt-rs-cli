@@ -374,6 +374,7 @@ impl SubsetSeq for SubsetCorrectionSets {
         c: u8,
         mut callback: F,
     ) {
+        assert!(range.len() > 0);
         let mut concat_range = self
             .concat
             .get_words_in_range_for_sym(range.clone(), c as u8)
@@ -412,7 +413,7 @@ impl SubsetSeq for SubsetCorrectionSets {
             if i < (range.start & 63) {
                 continue;
             }
-            if i + (range.start & 63) >= range.end {
+            if i - (range.start & 63) >= range.len() {
                 break;
             }
             callback(range.start.saturating_sub(range.start & 63) + i);
@@ -459,7 +460,7 @@ impl SubsetSeq for SubsetCorrectionSets {
             };
 
             let concat_bv = bitvec::slice::BitSlice::<u64, Lsb0>::from_slice_mut(&mut concat_range);
-            
+
             if let Some(correction_range) = correction_range {
                 let correction_bv =
                     bitvec::slice::BitSlice::<u64, Lsb0>::from_slice(&correction_range);
@@ -473,12 +474,12 @@ impl SubsetSeq for SubsetCorrectionSets {
                 if i < (sbwt_input_range.start & 63) {
                     continue;
                 }
-                if i + (sbwt_input_range.start & 63) >= sbwt_input_range.end {
+                if i - (sbwt_input_range.start & 63) >= sbwt_input_range.len() {
                     break;
                 }
                 output_slice[output_offset] = labels[i - sbwt_input_range
                     .start
-                    .saturating_sub(sbwt_input_range.start & 63)];
+                    .saturating_sub(sbwt_input_range.start & !63)];
                 output_offset += 1;
             }
             assert_eq!(output_slice.len(), output_offset);

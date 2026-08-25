@@ -10,39 +10,40 @@ pub struct Base4RankVector {
     n: usize,
     n_bits: usize,
     bits: Vec<u64>,
+    super_sums: Vec<u64>,
 }
 
 impl Base4RankVector {
-    #[inline(always)]
-    unsafe fn write_prefix(bits: &mut [u64], word: usize, psums: &[u32; 4]) {
-        let p = bits.as_mut_ptr().add(word) as *mut u32;
-        *p.add(0) = psums[0];
-        *p.add(1) = psums[1];
-        *p.add(2) = psums[2];
-        *p.add(3) = psums[3];
-    }
-
-    #[inline(always)]
-    unsafe fn read_prefix(bits: &[u64], word: usize, sym: usize) -> u32 {
-        *((bits.as_ptr().add(word) as *const u32).add(sym))
-    }
-
     pub fn from_symbols(seq: &[u8]) -> Self {
         let n = seq.len();
         let nblocks = (n + B - 1) / B;
         let n_bits = nblocks * (2 * B + 128);
+        let mut super_sums = vec![0u64; ((n >> 32) + 1) * 4];
 
         let mut bits = vec![0u64; n_bits / 64];
-        let mut psums = [0u32; 4];
+        let mut psums = [0u64; 4];
 
         let mut bi = 0usize;
         let mut i = 0usize;
 
         while i < n {
+            if i > 0 && i % (1 << 32) == 0 {
+                super_sums[i << 32] = psums[0] + super_sums[(i >> 32) - 4] as u64;
+                super_sums[i << 32 + 1] = psums[1] + super_sums[(i >> 32) - 3] as u64;
+                super_sums[i << 32 + 2] = psums[2] + super_sums[(i >> 32) - 2] as u64;
+                super_sums[i << 32 + 3] = psums[3] + super_sums[(i >> 32) - 1] as u64;
+                psums[0] = 0;
+                psums[1] = 0;
+                psums[2] = 0;
+                psums[3] = 0;
+            }
             if i % B == 0 {
-                unsafe {
-                    Self::write_prefix(&mut bits, bi, &psums);
-                }
+                let bits_casted: &mut [u32] = bytemuck::cast_slice_mut(&mut bits);
+                bits_casted[bi * 2] = psums[0] as u32;
+                bits_casted[bi * 2 + 1] = psums[1] as u32;
+                bits_casted[bi * 2 + 2] = psums[2] as u32;
+                bits_casted[bi * 2 + 3] = psums[3] as u32;
+
                 bi += PREFIX_WORDS;
             }
 
@@ -72,19 +73,24 @@ impl Base4RankVector {
             i += j;
         }
 
-        //
         // Final block only contains prefix sums when n is a multiple of B.
-        //
         if n % B == 0 && n > 0 {
             dbg!(n, nblocks);
-            
+
             let word = (nblocks - 1) * WORDS_PER_BLOCK;
-            unsafe {
-                Self::write_prefix(&mut bits, word, &psums);
-            }
+            let bits_casted: &mut [u32] = bytemuck::cast_slice_mut(&mut bits);
+            bits_casted[word * 2] = psums[0] as u32;
+            bits_casted[word * 2 + 1] = psums[1] as u32;
+            bits_casted[word * 2 + 2] = psums[2] as u32;
+            bits_casted[word * 2 + 3] = psums[3] as u32;
         }
 
-        Self { n, n_bits, bits }
+        Self {
+            n,
+            n_bits,
+            bits,
+            super_sums,
+        }
     }
 
     #[inline(always)]
@@ -94,7 +100,7 @@ impl Base4RankVector {
 
     #[inline(always)]
     pub fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() + self.bits.len() * std::mem::size_of::<u64>()
+        std::mem::size_of::<Self>() + self.bits.len() * std::mem::size_of::<u64>() + self.super_sums.len() * std::mem::size_of::<u64>()
     }
 
     /// Rank of `sym` in the half-open interval [0,pos).
@@ -109,64 +115,57 @@ impl Base4RankVector {
 
         let blockstart = (pos >> LOG_B) * WORDS_PER_BLOCK;
 
-        let pre_block_rank =
-            unsafe { Self::read_prefix(&self.bits, blockstart, sym as usize) } as usize;
-
-        let blockwords = &self.bits[blockstart + PREFIX_WORDS..];
-
+        let bits_casted: &[u32] = bytemuck::cast_slice(&self.bits);
+        let pre_block_rank = bits_casted[blockstart * 2 + sym as usize] as usize;
+        let super_block_rank = self.super_sums[(pos >> 32) + sym as usize] as usize;
         let blocki = ((pos & (B - 1)) >> 6) << 1;
 
         let mut whole_word_rank = 0usize;
 
-        unsafe {
-            let mut p = blockwords.as_ptr();
-            let end = p.add(blocki);
+        let mut i = blockstart + PREFIX_WORDS;
+        while i < blockstart + PREFIX_WORDS + blocki {
+            let mut upper_w = self.bits[i];
+            let mut lower_w = self.bits[i + 1];
+            i += 2;
 
-            while p < end {
-                let mut upper_w = *p;
-                let mut lower_w = *p.add(1);
+            upper_w = if upper_set { upper_w } else { !upper_w };
+            lower_w = if lower_set { lower_w } else { !lower_w };
 
-                p = p.add(2);
-
-                upper_w = if upper_set { upper_w } else { !upper_w };
-                lower_w = if lower_set { lower_w } else { !lower_w };
-
-                whole_word_rank += (upper_w & lower_w).count_ones() as usize;
-            }
-
-            let mut leftover_rank = 0usize;
-
-            let contains;
-            if (pos & 63) != 0 {
-                let mut upper_w = *p;
-                let mut lower_w = *p.add(1);
-
-                upper_w = if upper_set { upper_w } else { !upper_w };
-                lower_w = if lower_set { lower_w } else { !lower_w };
-
-                let shift = 64 - (pos & 63);
-
-                leftover_rank = ((upper_w & lower_w) << shift).count_ones() as usize;
-
-                // check if the symbol at pos equals sym
-                contains = pos < self.n && ((((upper_w & lower_w) >> (pos & 63)) & 1) != 0) as bool;
-            } else {
-                // we should inspect the first element of blocki
-                let mut upper_w = *p;
-                let mut lower_w = *p.add(1);
-                upper_w = if upper_set { upper_w } else { !upper_w };
-                lower_w = if lower_set { lower_w } else { !lower_w };
-
-                let upper_bit = ((upper_w) & 1) != 0;
-                let lower_bit = ((lower_w) & 1) != 0;
-
-                contains = pos < self.n && (upper_bit & lower_bit);
-            }
-
-            let rank = pre_block_rank + whole_word_rank + leftover_rank;
-
-            (rank, contains)
+            whole_word_rank += (upper_w & lower_w).count_ones() as usize;
         }
+
+        let mut leftover_rank = 0usize;
+
+        let contains;
+        if (pos & 63) != 0 {
+            let mut upper_w = self.bits[i];
+            let mut lower_w = self.bits[i + 1];
+
+            upper_w = if upper_set { upper_w } else { !upper_w };
+            lower_w = if lower_set { lower_w } else { !lower_w };
+
+            let shift = 64 - (pos & 63);
+
+            leftover_rank = ((upper_w & lower_w) << shift).count_ones() as usize;
+
+            // check if the symbol at pos equals sym
+            contains = pos < self.n && ((((upper_w & lower_w) >> (pos & 63)) & 1) != 0) as bool;
+        } else {
+            // we should inspect the first element of blocki
+            let mut upper_w = self.bits[i];
+            let mut lower_w = self.bits[i + 1];
+            upper_w = if upper_set { upper_w } else { !upper_w };
+            lower_w = if lower_set { lower_w } else { !lower_w };
+
+            let upper_bit = ((upper_w) & 1) != 0;
+            let lower_bit = ((lower_w) & 1) != 0;
+
+            contains = pos < self.n && (upper_bit & lower_bit);
+        }
+
+        let rank = super_block_rank + pre_block_rank + whole_word_rank + leftover_rank;
+
+        (rank, contains)
     }
 
     #[inline(always)]
@@ -193,29 +192,26 @@ impl Base4RankVector {
         let mut block = global_word / words_per_block;
         let mut word_in_block = global_word % words_per_block;
 
-        unsafe {
-            for i in 0..4 {
-                let word_ptr = self
-                    .bits
-                    .as_ptr()
-                    .add(block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2);
+        for i in 0..4 {
+            if block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2 >= self.bits.len() {
+                break;
+            };
+            let mut upper = self.bits[block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2];
+            let mut lower =
+                self.bits[block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2 + 1];
 
-                let mut upper = *word_ptr;
-                let mut lower = *word_ptr.add(1);
+            upper = if upper_set { upper } else { !upper };
+            lower = if lower_set { lower } else { !lower };
 
-                upper = if upper_set { upper } else { !upper };
-                lower = if lower_set { lower } else { !lower };
+            let value = upper & lower;
 
-                let value = upper & lower;
+            words[i] = value;
 
-                words[i] = value;
+            word_in_block += 1;
 
-                word_in_block += 1;
-
-                if word_in_block == words_per_block {
-                    block += 1;
-                    word_in_block = 0;
-                }
+            if word_in_block == words_per_block {
+                block += 1;
+                word_in_block = 0;
             }
         }
 
@@ -245,29 +241,23 @@ impl Base4RankVector {
         let mut block = global_word / words_per_block;
         let mut word_in_block = global_word % words_per_block;
 
-        unsafe {
-            for i in 0..num_words {
-                let word_ptr = self
-                    .bits
-                    .as_ptr()
-                    .add(block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2);
+        for i in 0..num_words {
+            let mut upper = self.bits[block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2];
+            let mut lower =
+                self.bits[block * WORDS_PER_BLOCK + PREFIX_WORDS + word_in_block * 2 + 1];
 
-                let mut upper = *word_ptr;
-                let mut lower = *word_ptr.add(1);
+            upper = if upper_set { upper } else { !upper };
+            lower = if lower_set { lower } else { !lower };
 
-                upper = if upper_set { upper } else { !upper };
-                lower = if lower_set { lower } else { !lower };
+            let value = upper & lower;
 
-                let value = upper & lower;
+            words[i] = value;
 
-                words[i] = value;
+            word_in_block += 1;
 
-                word_in_block += 1;
-
-                if word_in_block == words_per_block {
-                    block += 1;
-                    word_in_block = 0;
-                }
+            if word_in_block == words_per_block {
+                block += 1;
+                word_in_block = 0;
             }
         }
 
@@ -292,22 +282,20 @@ impl Base4RankVector {
         debug_assert!(pos < self.n);
 
         let blockstart = (pos >> LOG_B) * WORDS_PER_BLOCK;
-        let blockwords = &self.bits[blockstart + PREFIX_WORDS..];
         let blocki = ((pos & (B - 1)) >> 6) << 1;
 
-        unsafe {
-            let p = blockwords.as_ptr().add(blocki);
+        let upper = self.bits[blockstart + PREFIX_WORDS + blocki];
+        let lower = self.bits[blockstart + PREFIX_WORDS + blocki + 1];
 
-            let word = (pos & 63) as u64;
+        let word = (pos & 63) as u64;
 
-            let upper_bit = ((*p >> word) & 1) != 0;
-            let lower_bit = ((*p.add(1) >> word) & 1) != 0;
+        let upper_bit = ((upper >> word) & 1) != 0;
+        let lower_bit = ((lower >> word) & 1) != 0;
 
-            // value is the symbol written at pos
-            let value = ((upper_bit as u8) << 1) | (lower_bit as u8);
+        // value is the symbol written at pos
+        let value = ((upper_bit as u8) << 1) | (lower_bit as u8);
 
-            value
-        }
+        value
     }
 
     pub fn serialize<W: Write>(&self, mut out: W) -> io::Result<usize> {
@@ -324,15 +312,13 @@ impl Base4RankVector {
         out.write_all(&(self.bits.len() as u64).to_le_bytes())?;
         written += 8;
 
-        unsafe {
-            let bytes = std::slice::from_raw_parts(
-                self.bits.as_ptr() as *const u8,
-                self.bits.len() * std::mem::size_of::<u64>(),
-            );
-            out.write_all(bytes)?;
-        }
+        out.write_all(bytemuck::cast_slice(&self.bits))?;
 
         written += self.bits.len() * std::mem::size_of::<u64>();
+
+        out.write_all(bytemuck::cast_slice(&self.super_sums))?;
+
+        written += self.super_sums.len() * std::mem::size_of::<u64>();
 
         Ok(written)
     }
@@ -351,16 +337,17 @@ impl Base4RankVector {
         debug_assert_eq!(bits_len, (n_bits + 63) / 64);
 
         let mut bits = vec![0u64; bits_len];
+        input.read_exact(bytemuck::cast_slice_mut(bits.as_mut_slice()))?;
 
-        unsafe {
-            let bytes = std::slice::from_raw_parts_mut(
-                bits.as_mut_ptr() as *mut u8,
-                bits.len() * std::mem::size_of::<u64>(),
-            );
-            input.read_exact(bytes)?;
-        }
+        let mut super_sums = vec![0u64; (1 + (n >> 32)) * 4];
+        input.read_exact(bytemuck::cast_slice_mut(&mut super_sums))?;
 
-        Ok(Self { n, n_bits, bits })
+        Ok(Self {
+            n,
+            n_bits,
+            bits,
+            super_sums,
+        })
     }
 }
 
