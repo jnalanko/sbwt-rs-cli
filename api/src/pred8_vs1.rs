@@ -14,7 +14,6 @@
 //   ...
 
 use std::io::{self, Read, Write};
-use std::ptr;
 
 const BUCKET_SHIFT: usize = 8;
 
@@ -38,23 +37,18 @@ pub struct Pred8vS1 {
     // Length = nblocks + 1
     // The last element is a sentinel:
     // x[nblocks] == n
-    x: Vec<u32>,
+    upper_level: Vec<u32>,
 
     // Packed hints + low bytes.
     // Every 32 values:
-    // +0..3     : upper bits hint
+    // +0..3     : upper bytes hint
     // +4..35    : low bytes
-    y: Vec<u8>,
-}
+    lower_level: Vec<u32>,
 
-#[inline(always)]
-unsafe fn read_hint(ptr: *const u8) -> u32 {
-    ptr::read_unaligned(ptr as *const u32)
-}
-
-#[inline(always)]
-unsafe fn write_hint(ptr: *mut u8, value: u32) {
-    ptr::write_unaligned(ptr as *mut u32, value);
+    // need when u>>8 >= 1<<32
+    super_hint: Vec<u64>,
+    // need when n >= 1<<32
+    super_upper: Vec<u64>,
 }
 
 impl Pred8vS1 {
@@ -70,140 +64,183 @@ impl Pred8vS1 {
 
         // First pass:
         // count elements per bucket.
-        let mut x = vec![0u32; nblocks as usize + 1];
+        let mut upper_level = vec![0u32; nblocks as usize + 1];
+        let mut super_hint = vec![0u64; (u >> (32 + 8)) + 1];
+        let mut super_upper = vec![0u64; (n >> 32) + 1];
 
         for &v in data {
             let bucket = (v as usize) >> BUCKET_SHIFT;
             debug_assert!(bucket < nblocks);
 
-            x[bucket] += 1;
+            upper_level[bucket] += 1;
         }
         // Allocate Y.
         let nhints = n.div_ceil(HINT_INTERVAL);
-        let mut y = vec![0u8; n + nhints * HINT_BYTES];
+        let num_bytes = n + nhints * HINT_BYTES;
+        let y_size = num_bytes.div_ceil(4);
+        let mut lower_level = vec![0u32; y_size];
 
         // Second pass:
         // convert bucket counts into offsets
         // and write low bits.
-        let mut yi: u32 = 0;
+        let mut yi: usize = 0;
         let mut y_pos: usize = 0;
         let mut i: usize = 0;
-        unsafe {
-            let y_ptr = y.as_mut_ptr();
+        let mut hint_counter = 0;
+        let mut next_bucket_thrs = 1;
+        let mut next_byte_thrs = 1;
+        while i < n {
+            let v = data[i];
+            let bucket = (v as usize) >> BUCKET_SHIFT;
+            // super blocking hint
+            if bucket >= next_bucket_thrs << 32 {
+                super_hint[next_bucket_thrs] = hint_counter as u64;
+                next_bucket_thrs += 1;
+            }
 
-            while i < n {
-                let v = data[i];
-                let bucket = (v as usize) >> BUCKET_SHIFT;
-                let bucket_count = x[bucket];
-                // X now stores the rank offset.
-                x[bucket] = yi;
-                if bucket_count != 0 {
-                    for _ in 0..bucket_count {
-                        if (yi & 31) == 0 {
-                            write_hint(y_ptr.add(y_pos), bucket as u32);
-                            y_pos += HINT_BYTES;
-                        }
-                        *y_ptr.add(y_pos) = (data[i] & 255) as u8;
-                        y_pos += 1;
-                        yi += 1;
-                        i += 1;
+            let bucket_count = upper_level[bucket];
+            // X now stores the rank offset.
+            upper_level[bucket] = yi as u32;
+            if yi >= next_byte_thrs << 32 {
+                super_upper[next_byte_thrs] = bucket as u64;
+                next_byte_thrs += 1;
+            }
+            if bucket_count != 0 {
+                for _ in 0..bucket_count {
+                    if (yi & 31) == 0 {
+                        lower_level[(hint_counter * Y_BLOCK_SIZE) / 4] = bucket as u32;
+                        y_pos += HINT_BYTES;
+                        hint_counter += 1;
                     }
+                    let y_bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut lower_level);
+
+                    y_bytes[y_pos] = (data[i] & 255) as u8;
+
+                    y_pos += 1;
+                    yi += 1;
+                    i += 1;
                 }
             }
         }
 
-        debug_assert_eq!(y_pos, y.len());
-
-        x[nblocks] = yi as u32;
-        // Propagate empty buckets backwards.
-        let mut previous = x[nblocks];
-
-        for i in (1..nblocks).rev() {
-            if x[i] == 0 {
-                x[i] = previous;
-            } else {
-                previous = x[i];
-            }
-        }
+        debug_assert_eq!(y_pos.div_ceil(4), lower_level.len());
 
         // Explicit sentinel.
-        // This is the important invariant:
         // X[nblocks] == number of elements
-        x[nblocks] = n as u32;
+        upper_level[nblocks] = yi as u32;
+        // Propagate empty buckets backwards.
+        let mut previous = upper_level[nblocks];
+
+        for i in (1..nblocks).rev() {
+            if upper_level[i] == 0 {
+                upper_level[i] = previous;
+            } else {
+                previous = upper_level[i];
+            }
+        }
 
         Self {
             u,
             n,
             nblocks,
-            x,
-            y,
+            upper_level,
+            lower_level,
+            super_hint,
+            super_upper,
         }
     }
 
     // Hot query path.
     #[inline(always)]
-    pub fn select1(&self, sq: usize) -> (isize, u32) {
+    pub fn select1(&self, sq: usize) -> (usize, u32) {
         if sq >= self.n {
-            return ((self.u - sq) as isize, 0);
+            return ((self.u - self.n) as usize, 0);
         }
         // this means we are querying the number of elements in total in the
         if sq == self.n - 1 {
-            return ((self.u - sq) as isize, 0);
+            return ((self.u - sq) as usize, 0);
         }
-        unsafe {
-            // Locate hint block.
-            let hint_block = sq >> HINT_SHIFT;
-            let hint_pos = hint_block * Y_BLOCK_SIZE;
-            let low_pos = hint_pos + HINT_BYTES + (sq & 31);
-            let hint = read_hint(self.y.as_ptr().add(hint_pos)) as usize;
-            let low = *self.y.get_unchecked(low_pos) as u64;
+        // Locate hint block.
+        let hint_block = sq >> HINT_SHIFT;
+        let hint_pos = hint_block * Y_BLOCK_SIZE;
+        let low_pos = hint_pos + HINT_BYTES + (sq & 31);
+        let y_bytes: &[u8] = bytemuck::cast_slice(&self.lower_level);
+        let low = y_bytes[low_pos] as u64;
 
-            // Next element.
-            let next_sq = sq + 1;
-            let next_hint_pos = (next_sq >> HINT_SHIFT) * Y_BLOCK_SIZE;
-
-            let next_low_pos = next_hint_pos + HINT_BYTES + (next_sq & 31);
-
-            let next_low = *self.y.get_unchecked(next_low_pos) as u64;
-
-            // Scan X.
-            // The sentinel guarantees termination.
-            let mut j = 1usize;
-            let mut p = self.x.as_ptr().add(hint + j);
-            while (*p as usize) <= sq {
-                p = p.add(1);
-                j += 1;
-            }
-            let mut p2 = self.x.as_ptr().add(hint + j - 1);
-            let mut j2 = j - 1;
-            while (*p2 as usize) <= next_sq {
-                p2 = p2.add(1);
-                j2 += 1;
-            }
-            // dbg!(*p2, j2, hint + j2, self.nblocks);
-            //assert!(*p2 > next_sq as u32);
-            let upper = ((hint + j - 1) << BUCKET_SHIFT) as u64;
-            let next_upper = ((hint + j2 - 1) << BUCKET_SHIFT) as u64;
-            let curr_pos = upper + low;
-            let next_pos = next_upper + next_low;
-            // dbg!(curr_pos, next_pos, sq, j, j2, next_sq);
-            debug_assert!(next_pos > curr_pos);
-            let bucket_count = next_pos - curr_pos - 1;
-            let mut result = curr_pos - sq as u64;
-
-            //dbg!(result, bucket_count, sq);
-
-            if bucket_count == 0 {
-                result = result.saturating_sub(1); // it can only underflow if the first bucket is empty, which we assume it never will be due to construction of Pino, then the result is pointing correctly to itself and needs not to be subtracted by 1
-            }
-            (result as isize, bucket_count as u32)
+        let hint_number = hint_pos / 4;
+        let mut hint = self.lower_level[hint_number] as usize;
+        let mut hint_offset = 0;
+        let mut h = 0;
+        while hint_number < self.super_hint[h] as usize {
+            h += 1;
+            hint_offset += 1 << 32;
         }
+        hint += hint_offset;
+        // Next element.
+        let next_sq = sq + 1;
+        let next_hint_pos = (next_sq >> HINT_SHIFT) * Y_BLOCK_SIZE;
+
+        let next_low_pos = next_hint_pos + HINT_BYTES + (next_sq & 31);
+
+        let next_low = y_bytes[next_low_pos] as u64;
+        h = 1;
+        let mut bucket_count_offset = 0;
+        while sq >= (h << 32) && hint >= self.super_upper[h] as usize {
+            bucket_count_offset += 1 << 32;
+            h += 1;
+        }
+        // Scan upper_level for the correct bucket.
+        // The sentinel guarantees termination.
+        let mut j = 1usize;
+
+        let mut bucket_count = self.upper_level[hint as usize + j];
+        if sq > (h << 32) && hint + j >= self.super_upper[h] as usize {
+            bucket_count_offset += 1 << 32;
+            h += 1;
+        }
+        while (bucket_count as usize + bucket_count_offset) <= sq {
+            j += 1;
+            bucket_count = self.upper_level[hint as usize + j];
+            if sq > (h << 32) && hint + j >= self.super_upper[h] as usize {
+                bucket_count_offset += 1 << 32;
+                h += 1;
+            }
+        }
+        let mut j2 = j - 1;
+        let mut bucket_count_2 = self.upper_level[hint as usize + j2];
+        while (bucket_count_2 as usize + bucket_count_offset) <= next_sq {
+            //p2 = p2.add(1);
+            j2 += 1;
+            bucket_count_2 = self.upper_level[hint as usize + j2];
+            if next_sq > (h << 32) && hint + j2 >= self.super_upper[h] as usize {
+                bucket_count_offset += 1 << 32;
+                h += 1;
+            }
+        }
+
+        let upper = ((hint + j - 1) << BUCKET_SHIFT) as u64;
+        let next_upper = ((hint + j2 - 1) << BUCKET_SHIFT) as u64;
+        let curr_pos = upper + low;
+        let next_pos = next_upper + next_low;
+
+        debug_assert!(next_pos > curr_pos);
+        let bucket_count = next_pos - curr_pos - 1;
+        let mut result = curr_pos - sq as u64;
+
+        if bucket_count == 0 {
+            result = result.saturating_sub(1); // it can only underflow if the first bucket is empty, which we assume it never will be due to construction of Pino, then the result is pointing correctly to itself and needs not to be subtracted by 1
+        }
+        (result as usize, bucket_count as u32)
     }
 
     // Number of bytes occupied by this structure.
     #[inline]
     pub fn size_in_bytes(&self) -> usize {
-        3 * std::mem::size_of::<u64>() + self.x.len() * std::mem::size_of::<u32>() + self.y.len()
+        3 * std::mem::size_of::<u64>()
+            + self.upper_level.len() * std::mem::size_of::<u32>()
+            + self.lower_level.len()
+            + self.super_upper.len() * std::mem::size_of::<u64>()
+            + self.super_hint.len() * std::mem::size_of::<u64>()
     }
 
     pub fn num_buckets(&self) -> usize {
@@ -229,11 +266,11 @@ impl Pred8vS1 {
     // u64 u
     // u64 n
     // u64 nblocks
-    // u32 x[0..=nblocks]   // includes sentinel x[nblocks]
-    // u8  y[]
+    // u32 upper_level[0..=nblocks]   // includes sentinel x[nblocks]
+    // u8  lower_level[n + num_hints*4ß]
     #[inline]
     pub fn serialize<W: Write>(&self, mut w: W) -> io::Result<usize> {
-        debug_assert_eq!(self.x.len(), self.nblocks + 1);
+        debug_assert_eq!(self.upper_level.len(), self.nblocks + 1);
 
         w.write_all(&self.u.to_le_bytes())?;
         w.write_all(&(self.n as u64).to_le_bytes())?;
@@ -241,16 +278,14 @@ impl Pred8vS1 {
 
         // X is stored as little-endian u32 values.
         // This assumes the target architecture is little endian.
-        unsafe {
-            let bytes = std::slice::from_raw_parts(
-                self.x.as_ptr() as *const u8,
-                self.x.len() * std::mem::size_of::<u32>(),
-            );
-            w.write_all(bytes)?;
-        }
+        w.write_all(bytemuck::cast_slice(&self.upper_level))?;
 
         // Y contains both hints and payload bytes.
-        w.write_all(&self.y)?;
+        w.write_all(bytemuck::cast_slice(&self.lower_level))?;
+
+        w.write_all(bytemuck::cast_slice(&self.super_hint))?;
+
+        w.write_all(bytemuck::cast_slice(&self.super_upper))?;
 
         Ok(self.size_in_bytes())
     }
@@ -270,24 +305,30 @@ impl Pred8vS1 {
 
         // Read X as raw little-endian u32 storage.
         // Matches serialize().
-        unsafe {
-            let bytes = std::slice::from_raw_parts_mut(
-                x.as_mut_ptr() as *mut u8,
-                x.len() * std::mem::size_of::<u32>(),
-            );
-            r.read_exact(bytes)?;
-        }
+        r.read_exact(bytemuck::cast_slice_mut(x.as_mut_slice()))?;
 
         let nhints = n / HINT_INTERVAL + 1;
-        let mut y = vec![0u8; n + nhints * HINT_BYTES];
-        r.read_exact(&mut y)?;
+
+        let num_bytes = n + nhints * HINT_BYTES;
+        let y_size = num_bytes.div_ceil(4);
+
+        let mut y = vec![0u32; y_size];
+        r.read_exact(bytemuck::cast_slice_mut(&mut y))?;
+
+        let mut super_hint = vec![0u64; (u >> 32) + 1];
+        r.read_exact(bytemuck::cast_slice_mut(&mut super_hint))?;
+
+        let mut super_upper = vec![0u64; (n >> 32) + 1];
+        r.read_exact(bytemuck::cast_slice_mut(&mut super_upper))?;
 
         Ok(Self {
             u,
             n,
             nblocks,
-            x,
-            y,
+            upper_level: x,
+            lower_level: y,
+            super_hint,
+            super_upper,
         })
     }
 }
@@ -311,10 +352,10 @@ mod tests {
 
             let (returned_pos, count) = pred.select1(rank);
 
-            assert!(returned_pos <= pos as isize);
+            assert!(returned_pos <= pos as usize);
             assert_eq!(count as u64, next - pos - 1);
         }
-        assert_eq!(pred.x[pred.nblocks], pred.n as u32);
+        assert_eq!(pred.upper_level[pred.nblocks], pred.n as u32);
     }
 
     #[test]
@@ -330,10 +371,10 @@ mod tests {
 
             let (returned_pos, count) = pred.select1(rank);
 
-            assert!(returned_pos <= pos as isize);
+            assert!(returned_pos <= pos as usize);
             assert_eq!(count as u64, next - pos - 1);
         }
-        assert_eq!(pred.x[pred.nblocks], pred.n as u32);
+        assert_eq!(pred.upper_level[pred.nblocks], pred.n as u32);
     }
 
     #[test]
@@ -349,10 +390,10 @@ mod tests {
 
             let (returned_pos, count) = pred.select1(rank);
 
-            assert_eq!(returned_pos, (pos - rank as u64) as isize);
+            assert_eq!(returned_pos, (pos - rank as u64) as usize);
             assert_eq!(count as u64, next - pos - 1);
         }
-        assert_eq!(pred.x[pred.nblocks], pred.n as u32);
+        assert_eq!(pred.upper_level[pred.nblocks], pred.n as u32);
     }
 
     #[test]
@@ -392,10 +433,10 @@ mod tests {
             let (returned_pos, count) = pred.select1(rank);
             //dbg!(returned_pos, count, rank);
 
-            assert_eq!(returned_pos, (pos - rank as u64) as isize);
+            assert_eq!(returned_pos, (pos - rank as u64) as usize);
             assert_eq!(count as u64, next - pos - 1);
         }
-        assert_eq!(pred.x[pred.nblocks], pred.n as u32);
+        assert_eq!(pred.upper_level[pred.nblocks], pred.n as u32);
     }
 
     #[test]
@@ -407,7 +448,7 @@ mod tests {
         let loaded = Pred8vS1::load(bytes.as_slice()).unwrap();
         assert_eq!(pred.u, loaded.u);
         assert_eq!(pred.n, loaded.n);
-        assert_eq!(pred.x, loaded.x);
-        assert_eq!(pred.y, loaded.y);
+        assert_eq!(pred.upper_level, loaded.upper_level);
+        assert_eq!(pred.lower_level, loaded.lower_level);
     }
 }
