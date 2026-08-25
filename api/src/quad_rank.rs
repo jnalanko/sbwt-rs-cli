@@ -28,10 +28,10 @@ impl Base4RankVector {
 
         while i < n {
             if i > 0 && i % (1 << 32) == 0 {
-                super_sums[i << 32] = psums[0] + super_sums[(i >> 32) - 4] as u64;
-                super_sums[i << 32 + 1] = psums[1] + super_sums[(i >> 32) - 3] as u64;
-                super_sums[i << 32 + 2] = psums[2] + super_sums[(i >> 32) - 2] as u64;
-                super_sums[i << 32 + 3] = psums[3] + super_sums[(i >> 32) - 1] as u64;
+                super_sums[i >> 32] = psums[0] + super_sums[(i >> 32) - 4] as u64;
+                super_sums[i >> 32 + 1] = psums[1] + super_sums[(i >> 32) - 3] as u64;
+                super_sums[i >> 32 + 2] = psums[2] + super_sums[(i >> 32) - 2] as u64;
+                super_sums[i >> 32 + 3] = psums[3] + super_sums[(i >> 32) - 1] as u64;
                 psums[0] = 0;
                 psums[1] = 0;
                 psums[2] = 0;
