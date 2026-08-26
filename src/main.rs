@@ -221,6 +221,7 @@ fn build_command(matches: &clap::ArgMatches){
     let in_memory = matches.get_flag("in-memory");
     let bounded_suffix_sort = matches.get_flag("bounded-suffix-sort");
     let bucket_sort_prefix_length = *matches.get_one::<usize>("bucket-sort-prefix-length").unwrap();
+    let stream_suffix_array_from_disk = matches.get_flag("stream-sa-from-disk");
     #[cfg(feature = "libsais")]
     let via_libsais = matches.get_flag("via-libsais");
     #[cfg(not(feature = "libsais"))]
@@ -266,7 +267,7 @@ fn build_command(matches: &clap::ArgMatches){
     let (sbwt, lcs) = if via_libsais {
         #[cfg(feature = "libsais")]
         {
-            let builder = BuildByLibsais::new(reader, k).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+            let builder = BuildByLibsais::new(reader, k).stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
             builder.run()
         }
         #[cfg(not(feature = "libsais"))]
@@ -274,7 +275,7 @@ fn build_command(matches: &clap::ArgMatches){
             panic!("--via-libsais requires sbwt-cli to be built with `--features libsais`");
         }
     } else if bounded_suffix_sort {
-        let builder = BuildByBoundedSuffixSort::new(reader, k).prefix_length_for_bucket_sort(bucket_sort_prefix_length).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        let builder = BuildByBoundedSuffixSort::new(reader, k).prefix_length_for_bucket_sort(bucket_sort_prefix_length).stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
         builder.run()
     } else if in_memory {
         let builder = BitPackedKmerSortingMem::new(reader, k).mem_gb(mem_gb).dedup_batches(dedup_batches).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
@@ -1225,6 +1226,11 @@ fn build_subcommand() -> clap::Command {
             .long("bucket-sort-prefix-length")
             .default_value("4")
             .value_parser(clap::value_parser!(usize)))
+        .arg(clap::Arg::new("stream-sa-from-disk")
+            .help("Whether to stream the suffix array from disk after it is constructed. Only used with --bounded-suffix-sort or --via-libsais if this binary is built with the 'libsais' feature enabled.")
+            .long("stream-sa-from-disk")
+            .action(clap::ArgAction::SetTrue)
+        )
         .arg(clap::Arg::new("build-lcs")
             .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
             .short('l')

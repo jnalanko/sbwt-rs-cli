@@ -364,6 +364,8 @@ impl<SS: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<SS> {
 pub struct BuildByBoundedSuffixSort<SS: SeqStream + Send> {
     input: SS,
     prefix_length_for_bucket_sort: usize,
+    stream_suffix_array_from_disk: bool,
+    temp_dir: std::path::PathBuf,
 
     k: usize,
     n_threads: usize,
@@ -377,6 +379,8 @@ pub struct BuildByBoundedSuffixSort<SS: SeqStream + Send> {
 impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
 
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
+    /// - don't stream suffix array from disk
+    /// - use the current directory as the temporary directory
     /// - 4 threads
     /// - no LCS array
     /// - no reverse complements added
@@ -385,12 +389,25 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
     /// - add_all_dummy_paths = false
     /// - bucket sort prefix length 4
     pub fn new(input: SS, k: usize) -> Self {
-        Self{input, prefix_length_for_bucket_sort: 4, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+        Self{input, stream_suffix_array_from_disk: false, temp_dir: std::path::PathBuf::from("."), prefix_length_for_bucket_sort: 4, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
     }
 
     /// Set the length of the prefix used to bucket the contexts before sorting them.
     pub fn prefix_length_for_bucket_sort(mut self, prefix_length: usize) -> Self {
         self.prefix_length_for_bucket_sort = prefix_length;
+        self
+    }
+
+    /// Whether to stream the suffix array from disk.
+    pub fn stream_suffix_array_from_disk(mut self, enable: bool) -> Self {
+        self.stream_suffix_array_from_disk = enable;
+        self
+    }
+
+    /// Set the temporary directory where the algorithm can store temporary files.
+    pub fn temp_dir(mut self, temp_dir: &std::path::Path) -> Self {
+        self.temp_dir = temp_dir.to_path_buf();
+        std::fs::create_dir_all(&self.temp_dir).unwrap();
         self
     }
 
@@ -448,6 +465,7 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
         let mut concatenation = Vec::<u8>::new();
         crate::build_by_suffix_sorting::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
+        let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
             crate::build_by_suffix_sorting::build_with_bounded_suffix_array::<SubsetMatrix>(
                 self.n_threads,
@@ -457,6 +475,8 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
                 self.build_lcs,
                 self.add_all_dummy_paths,
                 false, // Counts are not part of the return value of this interface
+                self.stream_suffix_array_from_disk,
+                &mut temp_file_manager,
             );
 
         if self.build_select_support {
@@ -516,6 +536,8 @@ impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BuildByLibsais<SS: SeqStream + Send> {
     input: SS,
+    stream_suffix_array_from_disk: bool,
+    temp_dir: std::path::PathBuf,
 
     k: usize,
     n_threads: usize,
@@ -537,7 +559,20 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
     pub fn new(input: SS, k: usize) -> Self {
-        Self{input, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+        Self{input, stream_suffix_array_from_disk: false, temp_dir: std::path::PathBuf::from("."), k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+    }
+
+    /// Whether to stream the suffix array from disk.
+    pub fn stream_suffix_array_from_disk(mut self, enable: bool) -> Self {
+        self.stream_suffix_array_from_disk = enable;
+        self
+    }
+
+    /// Set the temporary directory where the algorithm can store temporary files.
+    pub fn temp_dir(mut self, temp_dir: &std::path::Path) -> Self {
+        self.temp_dir = temp_dir.to_path_buf();
+        std::fs::create_dir_all(&self.temp_dir).unwrap();
+        self
     }
 
     /// Sets the k-mer length.
@@ -594,22 +629,23 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
 
         let mut concatenation = Vec::<u8>::new();
         crate::build_by_suffix_sorting::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
+        let length = concatenation.len();
 
-        // let (bwt_bytes, lcp_bytes) = libsais_bwt_and_lcp(&concatenation, self.n_threads);
         let suffix_array = libsais_suffix_array(&concatenation, self.n_threads);
+        let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
 
         let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
             crate::build_by_suffix_sorting::build::<SubsetMatrix>(
                 self.n_threads,
                 concatenation,
+                length,
                 suffix_array,
-                // &mut bwt_bytes.as_slice(),
-                // &mut lcp_bytes.as_slice(),
-                // concatenation.len(),
                 self.k,
                 self.build_lcs,
                 self.add_all_dummy_paths,
                 false, // Counts are not part of the return value of this interface
+                self.stream_suffix_array_from_disk,
+                &mut temp_file_manager,
             );
 
         if self.build_select_support {
