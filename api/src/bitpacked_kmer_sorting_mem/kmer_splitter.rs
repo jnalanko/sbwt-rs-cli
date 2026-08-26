@@ -107,7 +107,7 @@ fn input_parsing_thread<IN: crate::SeqStream + Send>(mut seqs: IN, buf_cap: usiz
 // The return value is Some if store_first_mers is true
 fn kmer_encoder_thread<const B: usize>(input: Receiver<SeqBatch>, output: Sender<Vec<LongKmer<B>>>, shared_bin_buffers: &[Mutex::<Vec::<LongKmer::<B>>>], k: usize, thread_local_buf_caps: usize, shared_buf_caps: usize, dedup_batches: bool, store_first_mers: bool) -> Option<Vec<(LongKmer<B>, u8)>> {
     assert!(shared_bin_buffers.len() == N_BINS);
-    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::new(); N_BINS];
+    let mut this_thread_bin_buffers = vec![Vec::<LongKmer::<B>>::with_capacity(thread_local_buf_caps); N_BINS];
 
     let mut first_mers = if store_first_mers {
         Some(Vec::<(LongKmer::<B>, u8)>::new())
