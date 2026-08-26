@@ -198,7 +198,7 @@ fn determine_buf_capacities<const B: usize>(approx_mem_gb: usize, n_threads: usi
     //   at a time. This needs to be large enough to avoid parallel contention, but small enough
     //   to distribute work quickly and evenly. A good default is 2^20.
     // * thread_local_bin_buf_capacity. There is one thread-local buffer for each of the 64
-    //   distinct 3-mers. Each of these buffers up to thread_local_bin_buf_capacity k-mers.
+    //   distinct 3-mers. Each of these buffers hold up to thread_local_bin_buf_capacity k-mers.
     //   So if thread_local_bin_buf_capacity is C_t, then the total space is: 
     //      C_t * n_threads * 64 * sizeof(LongKmer<B>>
     //      = C_t * n_threads * 64 * 8B
