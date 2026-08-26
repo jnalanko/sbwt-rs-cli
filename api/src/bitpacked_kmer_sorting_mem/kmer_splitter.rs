@@ -258,7 +258,12 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
 
     assert!(k >= BIN_PREFIX_LEN);
 
-    let (producer_buf_cap, thread_local_buf_caps, shared_buf_caps) = determine_buf_capacities::<B>(approx_mem_gb, n_threads);
+    let (producer_buf_cap, thread_local_buf_caps, mut shared_buf_caps) = determine_buf_capacities::<B>(approx_mem_gb, n_threads);
+    if !dedup_batches {
+        // The shared buffers are for collection k-mers for deduplication.
+        // Otherwise they are unnecessary space overhead.
+        shared_buf_caps = thread_local_buf_caps;
+    }
 
     log::info!("Allocating shared buffers");
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
@@ -334,12 +339,13 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
             if pieces.is_empty() {
                 vec![]
             } else {
+                let total_size: usize = pieces.iter().map(|v| v.len()).sum();
                 let mut piece_iter = pieces.into_iter();
                 let mut first = piece_iter.next().unwrap();
+                first.reserve_exact(total_size);
                 for next_piece in piece_iter {
                     first.extend(next_piece);
                 }
-                first.shrink_to_fit();
                 first
             }
         }).collect();
