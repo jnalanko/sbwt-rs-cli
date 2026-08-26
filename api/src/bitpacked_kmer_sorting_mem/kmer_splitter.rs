@@ -340,13 +340,11 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
                 vec![]
             } else {
                 let total_size: usize = pieces.iter().map(|v| v.len()).sum();
-                let mut piece_iter = pieces.into_iter();
-                let mut first = piece_iter.next().unwrap();
-                first.reserve_exact(total_size);
-                for next_piece in piece_iter {
-                    first.extend(next_piece);
+                let mut concat = Vec::with_capacity(total_size);
+                for next_piece in pieces.into_iter() {
+                    concat.extend(next_piece);
                 }
-                first
+                concat
             }
         }).collect();
 
