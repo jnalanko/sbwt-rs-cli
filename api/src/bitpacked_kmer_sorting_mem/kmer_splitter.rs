@@ -264,7 +264,7 @@ pub fn get_bitpacked_sorted_distinct_kmers<const B: usize, IN: crate::SeqStream 
     let mut shared_bin_buffers_vec = Vec::<Mutex::<Vec::<LongKmer::<B>>>>::new();
     for _ in 0..N_BINS {
         // Allocate with enough capacity to push one more local thread-local batch without reallocation.
-        // This simplifies code in the encode threads: they can lock the shared bin, push their k-mers,
+        // This simplifies code in the encoder threads: they can lock the shared bin, push their k-mers,
         // and then possibly flush without the shared bin having to reallocate.
         let buf = Vec::<LongKmer::<B>>::with_capacity(shared_buf_caps + thread_local_buf_caps);
         let b = Mutex::new(buf);
