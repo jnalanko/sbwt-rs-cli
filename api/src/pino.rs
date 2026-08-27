@@ -18,10 +18,11 @@ pub struct Pred8vPino {
 impl Pred8vPino {
     pub fn from_sorted(data: &[u64]) -> Self {
         assert!(!data.is_empty());
-
+        
         let n = data.len();
         let min = data[0] as usize;
         let u = data[n - 1] as usize - min;
+        log::info!("Constructing Pino for {} elements...", n);
 
         let nblocks = ((u / 256) + 1) as usize;
         let mut upper_level = vec![0usize; nblocks + 1];
@@ -87,6 +88,13 @@ impl Pred8vPino {
         block_indices.push(bi + 1);
 
         let index = Pred8vS1::from_sorted(&block_indices);
+
+        log::info!(
+            "Built Pino for n {} elements, with universe {} and top level index size {} for {nblocks} buckets",
+            n,
+            u,
+            index.size_in_bytes()
+        );
 
         Self {
             min,
