@@ -293,8 +293,7 @@ impl Pred8vPino {
     }
 
     pub fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() * 3
-            + std::mem::size_of::<usize>() * 2
+        std::mem::size_of::<usize>() * 4
             + self.lower_level.len()
             + self.index.size_in_bytes()
     }
@@ -305,10 +304,10 @@ use std::io::{self, Read, Write};
 impl Pred8vPino {
     pub fn serialize<W: Write>(&self, mut w: W) -> io::Result<usize> {
         // Layout:
-        // u64 u
-        // u64 n
-        // u64 min
-        // u64 nblocks
+        // usize u
+        // usize n
+        // usize min
+        // usize nblocks
         // u8  lower_level[n]
         // Pred8vS1 index
 
@@ -319,13 +318,13 @@ impl Pred8vPino {
         w.write_all(&self.u.to_le_bytes())?;
         written += 8;
 
-        w.write_all(&(self.n as u64).to_le_bytes())?;
+        w.write_all(&self.n.to_le_bytes())?;
         written += 8;
 
         w.write_all(&self.min.to_le_bytes())?;
         written += 8;
 
-        w.write_all(&(self.nblocks as u64).to_le_bytes())?;
+        w.write_all(&self.nblocks.to_le_bytes())?;
         written += 8;
 
         w.write_all(&self.lower_level)?;

@@ -278,8 +278,8 @@ impl Pred8vS1 {
         debug_assert_eq!(self.upper_level.len(), self.nblocks + 1);
 
         w.write_all(&self.u.to_le_bytes())?;
-        w.write_all(&(self.n as u64).to_le_bytes())?;
-        w.write_all(&(self.nblocks as u64).to_le_bytes())?;
+        w.write_all(&self.n.to_le_bytes())?;
+        w.write_all(&self.nblocks.to_le_bytes())?;
 
         // X is stored as little-endian u32 values.
         // This assumes the target architecture is little endian.

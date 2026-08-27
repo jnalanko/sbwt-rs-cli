@@ -314,13 +314,10 @@ impl Base4RankVector {
 
         let mut written = 0;
 
-        out.write_all(&(self.n as u64).to_le_bytes())?;
+        out.write_all(&self.n.to_le_bytes())?;
         written += 8;
 
-        out.write_all(&(self.n_bits as u64).to_le_bytes())?;
-        written += 8;
-
-        out.write_all(&(self.bits.len() as u64).to_le_bytes())?;
+        out.write_all(&self.n_bits.to_le_bytes())?;
         written += 8;
 
         out.write_all(bytemuck::cast_slice(&self.bits))?;
@@ -343,10 +340,8 @@ impl Base4RankVector {
 
         let n = read_u64(&mut input)? as usize;
         let n_bits = read_u64(&mut input)? as usize;
-        let bits_len = read_u64(&mut input)? as usize;
 
-        debug_assert_eq!(bits_len, (n_bits + 63) / 64);
-
+        let bits_len = n_bits.div_ceil(64);
         let mut bits = vec![0u64; bits_len];
         input.read_exact(bytemuck::cast_slice_mut(bits.as_mut_slice()))?;
 

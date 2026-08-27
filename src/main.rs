@@ -1160,8 +1160,9 @@ fn transform_index_command(matches: &clap::ArgMatches) {
             let rows: Vec<BitVec<u64, Lsb0>> = sbwt_subsetseq.into_bitvectors();
             log::info!("Calling new from bit vectors");
             let ss_new = SubsetCorrectionSets::new_from_bit_vectors(rows);
-            log::info!("Construction done, calling new on upper level");
+            log::info!("Construction done for subset sequence of size {}, constructing SBWT index", ss_new.size_in_bytes());
             let index_new = SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p);
+            log::info!("SBWT construction done");
             SbwtIndexVariant::SubsetCorrectionSets(index_new)
         },
         (_, t) => unreachable!("Unknown target index type {}", t),

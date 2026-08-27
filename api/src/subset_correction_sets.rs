@@ -48,6 +48,30 @@ impl SubsetCorrectionSets {
             _ => unreachable!(),
         }
     }
+
+    pub fn size_in_bytes(&self) -> usize {
+        self.concat.size_in_bytes()
+            + self
+                .correction_set_a_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+            + self
+                .correction_set_c_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+            + self
+                .correction_set_g_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+            + self
+                .correction_set_t_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+    }
 }
 
 impl SubsetSeq for SubsetCorrectionSets {
@@ -275,7 +299,6 @@ impl SubsetSeq for SubsetCorrectionSets {
                 concat.push(value);
             }
         }
-
 
         // Keep your existing Self construction here.
         // ...
