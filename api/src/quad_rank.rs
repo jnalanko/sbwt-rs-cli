@@ -17,7 +17,10 @@ impl Base4RankVector {
     pub fn from_symbols(seq: &[u8]) -> Self {
         log::info!("Constructing quad_rank",);
         let n = seq.len();
-        let nblocks = (n + B - 1) / B;
+        // One block per B symbols, plus a sentinel block. The sentinel holds the
+        // prefix sums for pos == n, which rank_with_contains reads when n is a
+        // multiple of B and pos lands exactly on the start of a new block.
+        let nblocks = (n / B) + 1;
         let n_bits = nblocks * (2 * B + 128);
         let mut super_sums = vec![0u64; ((n >> 32) + 1) * 4];
 
@@ -76,10 +79,9 @@ impl Base4RankVector {
             i += j;
         }
 
-        // Final block only contains prefix sums when n is a multiple of B.
-        if n % B == 0 && n > 0 {
-            dbg!(n, nblocks);
-
+        // The sentinel block only contains prefix sums; it is written here because
+        // the main loop stops before reaching it.
+        if n % B == 0 {
             let word = (nblocks - 1) * WORDS_PER_BLOCK;
             let bits_casted: &mut [u32] = bytemuck::cast_slice_mut(&mut bits);
             bits_casted[word * 2] = psums[0] as u32;
@@ -232,7 +234,7 @@ impl Base4RankVector {
     #[inline(always)]
     pub fn get_words_in_range_for_sym(&self, range: std::ops::Range<usize>, sym: u8) -> Vec<u64> {
         // length of vector with first position offset to be aligned to a 64 bit word as in the data layout
-        let len = (range.start & 63) + range.end.min(self.n - 1) - range.start;
+        let len = (range.start & 63) + range.end - range.start;
         let num_words = (len + 64 - 1) / 64;
         let mut words: Vec<u64> = vec![0; num_words];
         let pos = range.start;
