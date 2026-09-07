@@ -96,11 +96,12 @@ pub trait SubsetSeq {
 
     /// Build the cumulative sum array C required in [`crate::sbwt::SbwtIndex`].
     fn get_C_array(&self) -> Vec<usize> {
-        let sigma = 4; // TODO
+        let sigma: u8 = 4; // TODO
         let n = self.len();
 
-        let mut C: Vec<usize> = vec![0; sigma];
-        for i in 0..n {
+        let mut C: Vec<usize> = vec![0; sigma as usize];
+        // This is suicide for the poor correction sets on big input!!!
+        /* for i in 0..n {
             for c in 0..(sigma as u8) {
                 if self.set_contains(i, c) {
                     for d in (c + 1)..(sigma as u8) {
@@ -108,13 +109,18 @@ pub trait SubsetSeq {
                     }
                 }
             }
-        }
+        } */
 
         // Plus one for the ghost dollar
-        #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
+        /* #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
         for c in 0..sigma {
             C[c] += 1;
-        }
+        } */
+
+        C[0] = 1; // Plus one for the ghost dollar
+        C[1] = self.rank(0, n) + C[0];
+        C[2] = self.rank(1, n) + C[1];
+        C[3] = self.rank(2, n) + C[2];
 
         C
     }
@@ -337,7 +343,7 @@ impl std::fmt::Display for SubsetMatrix {
 mod tests {
     use crate::SubsetCorrectionSets;
 
-use super::*;
+    use super::*;
 
     #[test]
     fn serialize_and_load() {

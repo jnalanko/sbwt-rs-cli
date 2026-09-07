@@ -139,6 +139,11 @@ impl Pred8vS1 {
             }
         }
 
+        log::info!("Completed Pred8s1 construction with n {n} elements, with universe {u} and super hint level of size {} and super upper level of size {}, with {nblocks} buckets",
+            super_hint.len(),
+            super_upper.len(),
+            );
+
         Self {
             u,
             n,
@@ -238,7 +243,7 @@ impl Pred8vS1 {
     pub fn size_in_bytes(&self) -> usize {
         3 * std::mem::size_of::<u64>()
             + self.upper_level.len() * std::mem::size_of::<u32>()
-            + self.lower_level.len()
+            + self.lower_level.len() * std::mem::size_of::<u32>()
             + self.super_upper.len() * std::mem::size_of::<u64>()
             + self.super_hint.len() * std::mem::size_of::<u64>()
     }
@@ -273,8 +278,8 @@ impl Pred8vS1 {
         debug_assert_eq!(self.upper_level.len(), self.nblocks + 1);
 
         w.write_all(&self.u.to_le_bytes())?;
-        w.write_all(&(self.n as u64).to_le_bytes())?;
-        w.write_all(&(self.nblocks as u64).to_le_bytes())?;
+        w.write_all(&self.n.to_le_bytes())?;
+        w.write_all(&self.nblocks.to_le_bytes())?;
 
         // X is stored as little-endian u32 values.
         // This assumes the target architecture is little endian.

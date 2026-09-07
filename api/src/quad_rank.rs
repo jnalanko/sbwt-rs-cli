@@ -15,6 +15,7 @@ pub struct Base4RankVector {
 
 impl Base4RankVector {
     pub fn from_symbols(seq: &[u8]) -> Self {
+        log::info!("Constructing quad_rank",);
         let n = seq.len();
         let nblocks = (n + B - 1) / B;
         let n_bits = nblocks * (2 * B + 128);
@@ -28,14 +29,16 @@ impl Base4RankVector {
 
         while i < n {
             if i > 0 && i % (1 << 32) == 0 {
-                super_sums[i << 32] = psums[0] + super_sums[(i >> 32) - 4] as u64;
-                super_sums[i << 32 + 1] = psums[1] + super_sums[(i >> 32) - 3] as u64;
-                super_sums[i << 32 + 2] = psums[2] + super_sums[(i >> 32) - 2] as u64;
-                super_sums[i << 32 + 3] = psums[3] + super_sums[(i >> 32) - 1] as u64;
+                super_sums[4 * (i >> 32)] = psums[0] + super_sums[4 * (i >> 32) - 4] as u64;
+                super_sums[4 * (i >> 32) + 1] = psums[1] + super_sums[4 * (i >> 32) - 3] as u64;
+                super_sums[4 * (i >> 32) + 2] = psums[2] + super_sums[4 * (i >> 32) - 2] as u64;
+                super_sums[4 * (i >> 32) + 3] = psums[3] + super_sums[4 * (i >> 32) - 1] as u64;
+
                 psums[0] = 0;
                 psums[1] = 0;
                 psums[2] = 0;
                 psums[3] = 0;
+                log::info!("In quad_rank construction at superblock {} ", (i >> 32),);
             }
             if i % B == 0 {
                 let bits_casted: &mut [u32] = bytemuck::cast_slice_mut(&mut bits);
@@ -85,6 +88,12 @@ impl Base4RankVector {
             bits_casted[word * 2 + 3] = psums[3] as u32;
         }
 
+        log::info!(
+            "Built quad_rank for length n {}, size {} ",
+            n,
+            bits.len() * std::mem::size_of::<u64>() + super_sums.len() * std::mem::size_of::<u64>()
+        );
+
         Self {
             n,
             n_bits,
@@ -100,7 +109,9 @@ impl Base4RankVector {
 
     #[inline(always)]
     pub fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() + self.bits.len() * std::mem::size_of::<u64>() + self.super_sums.len() * std::mem::size_of::<u64>()
+        std::mem::size_of::<Self>()
+            + self.bits.len() * std::mem::size_of::<u64>()
+            + self.super_sums.len() * std::mem::size_of::<u64>()
     }
 
     /// Rank of `sym` in the half-open interval [0,pos).
@@ -117,7 +128,7 @@ impl Base4RankVector {
 
         let bits_casted: &[u32] = bytemuck::cast_slice(&self.bits);
         let pre_block_rank = bits_casted[blockstart * 2 + sym as usize] as usize;
-        let super_block_rank = self.super_sums[(pos >> 32) + sym as usize] as usize;
+        let super_block_rank = self.super_sums[4 * (pos >> 32) + sym as usize] as usize;
         let blocki = ((pos & (B - 1)) >> 6) << 1;
 
         let mut whole_word_rank = 0usize;
@@ -303,13 +314,10 @@ impl Base4RankVector {
 
         let mut written = 0;
 
-        out.write_all(&(self.n as u64).to_le_bytes())?;
+        out.write_all(&self.n.to_le_bytes())?;
         written += 8;
 
-        out.write_all(&(self.n_bits as u64).to_le_bytes())?;
-        written += 8;
-
-        out.write_all(&(self.bits.len() as u64).to_le_bytes())?;
+        out.write_all(&self.n_bits.to_le_bytes())?;
         written += 8;
 
         out.write_all(bytemuck::cast_slice(&self.bits))?;
@@ -332,10 +340,8 @@ impl Base4RankVector {
 
         let n = read_u64(&mut input)? as usize;
         let n_bits = read_u64(&mut input)? as usize;
-        let bits_len = read_u64(&mut input)? as usize;
 
-        debug_assert_eq!(bits_len, (n_bits + 63) / 64);
-
+        let bits_len = n_bits.div_ceil(64);
         let mut bits = vec![0u64; bits_len];
         input.read_exact(bytemuck::cast_slice_mut(bits.as_mut_slice()))?;
 

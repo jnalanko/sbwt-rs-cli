@@ -48,6 +48,30 @@ impl SubsetCorrectionSets {
             _ => unreachable!(),
         }
     }
+
+    pub fn size_in_bytes(&self) -> usize {
+        self.concat.size_in_bytes()
+            + self
+                .correction_set_a_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+            + self
+                .correction_set_c_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+            + self
+                .correction_set_g_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+            + self
+                .correction_set_t_pred
+                .as_ref()
+                .map(|p| p.size_in_bytes())
+                .unwrap_or(0)
+    }
 }
 
 impl SubsetSeq for SubsetCorrectionSets {
@@ -72,6 +96,83 @@ impl SubsetSeq for SubsetCorrectionSets {
     }
 
     fn new_from_bit_vectors(vecs: Vec<BitVec<u64, Lsb0>>) -> Self {
+        /* assert_eq!(vecs.len(), 4);
+               log::info!("Inside new from bit vectors");
+               let a = &vecs[0];
+               let c = &vecs[1];
+               let g = &vecs[2];
+               let t = &vecs[3];
+
+               assert_eq!(a.len(), c.len());
+               assert_eq!(c.len(), g.len());
+               assert_eq!(g.len(), t.len());
+
+               let n = a.len();
+
+               let mut concat = Vec::<u8>::with_capacity(n);
+
+               let mut correction_a = Vec::<u64>::with_capacity(n/100);
+               let mut correction_c = Vec::<u64>::with_capacity(n/50);
+               let mut correction_g = Vec::<u64>::with_capacity(n/20);
+               let mut correction_t = Vec::<u64>::with_capacity(n/20);
+
+               for i in 0..n {
+                   if i % (1 << 26) == 0 {
+                       log::info!("at {i} of {n}. Gone through {:.3}% of the bitvectors", ((i * 100) as f64) / (n as f64));
+                   }
+                   let a_bit = a[i];
+                   let c_bit = c[i];
+                   let g_bit = g[i];
+                   let t_bit = t[i];
+
+                   let count = (a_bit as u8) + (c_bit as u8) + (g_bit as u8) + (t_bit as u8);
+
+                   if count == 1 {
+                       if a_bit {
+                           concat.push(0);
+                       } else if c_bit {
+                           concat.push(1);
+                       } else if g_bit {
+                           concat.push(2);
+                       } else {
+                           concat.push(3);
+                       }
+                   } else {
+                       if count == 0 {
+                           concat.push(0);
+                           correction_a.push(i as u64);
+                       } else if a_bit {
+                           concat.push(0);
+
+                           if c_bit {
+                               correction_c.push(i as u64);
+                           }
+                           if g_bit {
+                               correction_g.push(i as u64);
+                           }
+                           if t_bit {
+                               correction_t.push(i as u64);
+                           }
+                       } else if c_bit {
+                           concat.push(1);
+
+                           if g_bit {
+                               correction_g.push(i as u64);
+                           }
+                           if t_bit {
+                               correction_t.push(i as u64);
+                           }
+                       } else if g_bit {
+                           concat.push(2);
+
+                           if t_bit {
+                               correction_t.push(i as u64);
+                           }
+                       }
+                   }
+               }
+        */
+
         assert_eq!(vecs.len(), 4);
 
         let a = &vecs[0];
@@ -87,63 +188,124 @@ impl SubsetSeq for SubsetCorrectionSets {
 
         let mut concat = Vec::<u8>::with_capacity(n);
 
-        let mut correction_a = Vec::<u64>::new();
-        let mut correction_c = Vec::<u64>::new();
-        let mut correction_g = Vec::<u64>::new();
-        let mut correction_t = Vec::<u64>::new();
+        // These are estimates only. Vec will automatically grow if necessary.
+        let mut correction_a = Vec::<u64>::with_capacity(n / 100);
+        let mut correction_c = Vec::<u64>::with_capacity(n / 300);
+        let mut correction_g = Vec::<u64>::with_capacity(n / 200);
+        let mut correction_t = Vec::<u64>::with_capacity(n / 150);
 
-        for i in 0..n {
-            let a_bit = a[i];
-            let c_bit = c[i];
-            let g_bit = g[i];
-            let t_bit = t[i];
+        // Access the underlying u64 storage. Since these are Lsb0 bitvecs,
+        // bit 0 of each u64 corresponds to the first position in that word.
+        let a_words = a.as_raw_slice();
+        let c_words = c.as_raw_slice();
+        let g_words = g.as_raw_slice();
+        let t_words = t.as_raw_slice();
 
-            let count = (a_bit as u8) + (c_bit as u8) + (g_bit as u8) + (t_bit as u8);
+        let num_words = (n + 63) / 64;
 
-            if count == 1 {
-                if a_bit {
-                    concat.push(0);
-                } else if c_bit {
-                    concat.push(1);
-                } else if g_bit {
-                    concat.push(2);
-                } else {
-                    concat.push(3);
-                }
+        for word_idx in 0..num_words {
+            let base = word_idx * 64;
+
+            if base % (1 << 30) == 0 {
+                log::info!(
+                    "at {base} of {n}. Gone through {:.3}% of the bitvectors",
+                    if n == 0 {
+                        100.0
+                    } else {
+                        (base as f64 * 100.0) / n as f64
+                    }
+                );
+            }
+
+            // The last u64 may contain unused bits beyond n.
+            let bits_in_word = (n - base).min(64);
+            let valid_mask = if bits_in_word == 64 {
+                u64::MAX
             } else {
-                if count == 0 {
-                    concat.push(0);
-                    correction_a.push(i as u64);
-                } else if a_bit {
-                    concat.push(0);
+                (1u64 << bits_in_word) - 1
+            };
 
-                    if c_bit {
-                        correction_c.push(i as u64);
-                    }
-                    if g_bit {
-                        correction_g.push(i as u64);
-                    }
-                    if t_bit {
-                        correction_t.push(i as u64);
-                    }
-                } else if c_bit {
-                    concat.push(1);
+            let a_word = a_words[word_idx] & valid_mask;
+            let c_word = c_words[word_idx] & valid_mask;
+            let g_word = g_words[word_idx] & valid_mask;
+            let t_word = t_words[word_idx] & valid_mask;
 
-                    if g_bit {
-                        correction_g.push(i as u64);
-                    }
-                    if t_bit {
-                        correction_t.push(i as u64);
-                    }
-                } else if g_bit {
-                    concat.push(2);
+            // A has priority, then C, then G, then T.
+            //
+            // correction_a: no base is present
+            // correction_c: A and C are present, so A wins
+            // correction_g: A/C and G are present, so A/C wins
+            // correction_t: A/C/G and T are present, so A/C/G wins
+            let correction_a_word = !(a_word | c_word | g_word | t_word) & valid_mask;
+            let correction_c_word = a_word & c_word;
+            let correction_g_word = (a_word | c_word) & g_word;
+            let correction_t_word = (a_word | c_word | g_word) & t_word;
 
-                    if t_bit {
-                        correction_t.push(i as u64);
-                    }
-                }
+            // Store correction positions.
+            //
+            // trailing_zeros() finds the next set bit and
+            // mask &= mask - 1 removes it.
+            let mut mask = correction_a_word;
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                correction_a.push((base + bit) as u64);
+                mask &= mask - 1;
+            }
+
+            let mut mask = correction_c_word;
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                correction_c.push((base + bit) as u64);
+                mask &= mask - 1;
+            }
+
+            let mut mask = correction_g_word;
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                correction_g.push((base + bit) as u64);
+                mask &= mask - 1;
+            }
+
+            let mut mask = correction_t_word;
+            while mask != 0 {
+                let bit = mask.trailing_zeros() as usize;
+                correction_t.push((base + bit) as u64);
+                mask &= mask - 1;
+            }
+
+            // Determine which base wins at each position.
+            //
+            // A -> 0
+            // C -> 1
+            // G -> 2
+            // T -> 3
+            let selected_c = (!a_word) & c_word;
+            let selected_g = (!(a_word | c_word)) & g_word;
+            let selected_t = (!(a_word | c_word | g_word)) & t_word;
+
+            // Encode each selected base as a 2-bit value:
+            //
+            // A = 00
+            // C = 01
+            // G = 10
+            // T = 11
+            let low_bits = selected_c | selected_t;
+            let high_bits = selected_g | selected_t;
+
+            // Unpack the 64 positions into concat.
+            for bit in 0..bits_in_word {
+                let value = ((low_bits >> bit) & 1) as u8 | ((((high_bits >> bit) & 1) as u8) << 1);
+
+                concat.push(value);
             }
         }
+
+        // Keep your existing Self construction here.
+        // ...
+
+        log::info!(
+            "Constructed auxilary data structures needed for construction of the needed structures",
+        );
 
         Self {
             concat: Base4RankVector::from_symbols(&concat),

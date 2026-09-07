@@ -18,10 +18,11 @@ pub struct Pred8vPino {
 impl Pred8vPino {
     pub fn from_sorted(data: &[u64]) -> Self {
         assert!(!data.is_empty());
-
+        
         let n = data.len();
         let min = data[0] as usize;
         let u = data[n - 1] as usize - min;
+        log::info!("Constructing Pino for {} elements...", n);
 
         let nblocks = ((u / 256) + 1) as usize;
         let mut upper_level = vec![0usize; nblocks + 1];
@@ -87,6 +88,13 @@ impl Pred8vPino {
         block_indices.push(bi + 1);
 
         let index = Pred8vS1::from_sorted(&block_indices);
+
+        log::info!(
+            "Built Pino for n {} elements, with universe {} and top level index size {} for {nblocks} buckets",
+            n,
+            u,
+            index.size_in_bytes()
+        );
 
         Self {
             min,
@@ -285,8 +293,7 @@ impl Pred8vPino {
     }
 
     pub fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<u64>() * 3
-            + std::mem::size_of::<usize>() * 2
+        std::mem::size_of::<usize>() * 4
             + self.lower_level.len()
             + self.index.size_in_bytes()
     }
@@ -297,10 +304,10 @@ use std::io::{self, Read, Write};
 impl Pred8vPino {
     pub fn serialize<W: Write>(&self, mut w: W) -> io::Result<usize> {
         // Layout:
-        // u64 u
-        // u64 n
-        // u64 min
-        // u64 nblocks
+        // usize u
+        // usize n
+        // usize min
+        // usize nblocks
         // u8  lower_level[n]
         // Pred8vS1 index
 
@@ -311,13 +318,13 @@ impl Pred8vPino {
         w.write_all(&self.u.to_le_bytes())?;
         written += 8;
 
-        w.write_all(&(self.n as u64).to_le_bytes())?;
+        w.write_all(&self.n.to_le_bytes())?;
         written += 8;
 
         w.write_all(&self.min.to_le_bytes())?;
         written += 8;
 
-        w.write_all(&(self.nblocks as u64).to_le_bytes())?;
+        w.write_all(&self.nblocks.to_le_bytes())?;
         written += 8;
 
         w.write_all(&self.lower_level)?;

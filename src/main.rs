@@ -1144,7 +1144,8 @@ fn transform_index_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetCorrectionSets(sbwt)
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "bit_matrix") => {
-            log::info!("Transform bit matrix -> correction sets");
+            log::info!("Transform correction sets -> bit matrix");
+            log::warn!("Not sure this is supported!");
             let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
             let p = prefix_lookup_table.prefix_length;
             let rows: Vec<BitVec<u64, Lsb0>> = sbwt_subsetseq.into_bitvectors();
@@ -1157,8 +1158,11 @@ fn transform_index_command(matches: &clap::ArgMatches) {
             let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
             let p = prefix_lookup_table.prefix_length;
             let rows: Vec<BitVec<u64, Lsb0>> = sbwt_subsetseq.into_bitvectors();
+            log::info!("Calling new from bit vectors");
             let ss_new = SubsetCorrectionSets::new_from_bit_vectors(rows);
+            log::info!("Construction done for subset sequence of size {}, constructing SBWT index", ss_new.size_in_bytes());
             let index_new = SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p);
+            log::info!("SBWT construction done");
             SbwtIndexVariant::SubsetCorrectionSets(index_new)
         },
         (_, t) => unreachable!("Unknown target index type {}", t),
