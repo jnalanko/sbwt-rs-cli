@@ -1145,7 +1145,6 @@ fn transform_index_command(matches: &clap::ArgMatches) {
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "bit_matrix") => {
             log::info!("Transform correction sets -> bit matrix");
-            log::warn!("Not sure this is supported!");
             let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
             let p = prefix_lookup_table.prefix_length;
             let rows: Vec<BitVec<u64, Lsb0>> = sbwt_subsetseq.into_bitvectors();

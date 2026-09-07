@@ -95,34 +95,39 @@ pub trait SubsetSeq {
     fn call_on_char_occurrences<F: FnMut(usize)>(&self, range: Range<usize>, c: u8, callback: F);
 
     /// Build the cumulative sum array C required in [`crate::sbwt::SbwtIndex`].
+    /// This is almost free if rank support has been initialized ([SubsetSeq::build_rank]),
+    /// otherwise has to iterate all the sets.
     fn get_C_array(&self) -> Vec<usize> {
         let sigma: u8 = 4; // TODO
         let n = self.len();
 
         let mut C: Vec<usize> = vec![0; sigma as usize];
-        // This is suicide for the poor correction sets on big input!!!
-        /* for i in 0..n {
-            for c in 0..(sigma as u8) {
-                if self.set_contains(i, c) {
-                    for d in (c + 1)..(sigma as u8) {
-                        C[d as usize] += 1;
+
+        if self.has_rank_support() {
+            C[0] = 1; // Plus one for the ghost dollar
+            C[1] = self.rank(0, n) + C[0];
+            C[2] = self.rank(1, n) + C[1];
+            C[3] = self.rank(2, n) + C[2];
+        } else {
+            for i in 0..n {
+                for c in 0..(sigma as u8) {
+                    if self.set_contains(i, c) {
+                        for d in (c + 1)..(sigma as u8) {
+                            C[d as usize] += 1;
+                        }
                     }
                 }
             }
-        } */
 
-        // Plus one for the ghost dollar
-        /* #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
-        for c in 0..sigma {
-            C[c] += 1;
-        } */
-
-        C[0] = 1; // Plus one for the ghost dollar
-        C[1] = self.rank(0, n) + C[0];
-        C[2] = self.rank(1, n) + C[1];
-        C[3] = self.rank(2, n) + C[2];
+            // Plus one for the ghost dollar
+            #[allow(clippy::needless_range_loop)] // Is perfectly clear this way
+            for c in 0..sigma {
+                C[c as usize] += 1;
+            }
+        }
 
         C
+
     }
 
     // This is a key subroutine for SbwtIndex::push_labels_forward. We want to put it here in the SubsetSeq
