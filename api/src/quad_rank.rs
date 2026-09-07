@@ -535,4 +535,78 @@ mod tests {
             }
         }
     }
+
+
+    fn naive_rank(seq: &[u8], pos: usize, sym: u8) -> usize {
+        seq[..pos].iter().filter(|&&x| x == sym).count()
+    }
+
+    // AI-generated testcase.
+    #[test]
+    fn rank_inside_last_block_when_n_is_multiple_of_block_size() {
+        for n in [B, 2 * B, 4 * B] {
+            let seq = build_test_sequence(n);
+            let rv = Base4RankVector::from_symbols(&seq);
+
+            for pos in (n - B)..n {
+                for sym in 0..4 {
+                    assert_eq!(
+                        rv.rank_with_contains(pos, sym).0,
+                        naive_rank(&seq, pos, sym),
+                        "n={}, pos={}, sym={}",
+                        n,
+                        pos,
+                        sym
+                    );
+                }
+            }
+        }
+    }
+
+    // AI-generated testcase.
+    #[test]
+    fn rank_at_end_when_n_is_multiple_of_block_size() {
+        let n = B;
+        let seq = build_test_sequence(n);
+        let rv = Base4RankVector::from_symbols(&seq);
+
+        for sym in 0..4 {
+            assert_eq!(
+                rv.rank_with_contains(n, sym),
+                (naive_rank(&seq, n, sym), false),
+                "sym={}",
+                sym
+            );
+        }
+    }
+
+    // AI-generated testcase.
+    #[test]
+    fn get_words_in_range_covers_range_ending_at_n() {
+        for n in [65_usize, 129, 1025] {
+            let seq = build_test_sequence(n);
+            let rv = Base4RankVector::from_symbols(&seq);
+
+            for sym in 0..4 {
+                let words = rv.get_words_in_range_for_sym(0..n, sym);
+
+                assert_eq!(words.len(), n.div_ceil(64), "n={}, sym={}", n, sym);
+
+                let last = ((words[(n - 1) / 64] >> ((n - 1) % 64)) & 1) != 0;
+                assert_eq!(last, seq[n - 1] == sym, "n={}, sym={}: last position", n, sym);
+            }
+        }
+    }
+
+    // AI-generated testcase.
+    #[test]
+    fn rank_on_empty_sequence() {
+        let rv = Base4RankVector::from_symbols(&[]);
+
+        assert_eq!(rv.len(), 0);
+
+        for sym in 0..4 {
+            assert_eq!(rv.rank_with_contains(0, sym), (0, false), "sym={}", sym);
+        }
+    }
 }

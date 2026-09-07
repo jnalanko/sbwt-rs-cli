@@ -804,4 +804,146 @@ mod tests {
         assert_eq!(ss.select(0, 7), Some(599));
         assert_eq!(ss.select(0, 8), None);
     }
+
+
+    // Sets {A},{C},{G},{T},{A},... — one character each, no corrections.
+    fn singleton_sets(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| vec![(i % 4) as u8]).collect()
+    }
+
+    fn naive_occurrences(sets: &[Vec<u8>], c: u8) -> Vec<usize> {
+        (0..sets.len()).filter(|&i| sets[i].contains(&c)).collect()
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn get_C_array_when_n_is_multiple_of_1024() {
+        let sets = singleton_sets(1024);
+        let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+
+        let mut counts = [0_usize; 4];
+        for set in &sets {
+            for &c in set {
+                counts[c as usize] += 1;
+            }
+        }
+
+        // Plus one for the ghost dollar, as in SubsetSeq::get_C_array.
+        let expected = vec![
+            1,
+            1 + counts[0],
+            1 + counts[0] + counts[1],
+            1 + counts[0] + counts[1] + counts[2],
+        ];
+
+        assert_eq!(ss.get_C_array(), expected);
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn rank_when_n_is_multiple_of_1024() {
+        let n = 2048;
+        let sets = singleton_sets(n);
+        let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+
+        for pos in [0_usize, 1, 1023, 1024, 1500, 2047, n] {
+            for c in 0..4_u8 {
+                let expected = sets[..pos].iter().filter(|s| s.contains(&c)).count();
+                assert_eq!(ss.rank(c, pos), expected, "pos={}, c={}", pos, c);
+            }
+        }
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn call_on_char_occurrences_reports_last_position() {
+        let n = 65;
+        let mut sets = singleton_sets(n);
+        sets[n - 1] = vec![1]; // a C at the very last position
+
+        let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+
+        for c in 0..4_u8 {
+            let mut got = Vec::new();
+            ss.call_on_char_occurrences(0..n, c, |i| got.push(i));
+            assert_eq!(got, naive_occurrences(&sets, c), "c={}", c);
+        }
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn call_on_char_occurrences_with_correction_in_last_word() {
+        let n = 65;
+        let mut sets = singleton_sets(n);
+        sets[n - 1] = vec![]; // empty set -> recorded in the A correction set
+
+        let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+
+        for c in 0..4_u8 {
+            let mut got = Vec::new();
+            ss.call_on_char_occurrences(0..n, c, |i| got.push(i));
+            assert_eq!(got, naive_occurrences(&sets, c), "c={}", c);
+        }
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn push_labels_forward_covers_last_position() {
+        let n = 65;
+        let mut sets = singleton_sets(n);
+        sets[n - 1] = vec![1];
+
+        let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+
+        let labels: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
+        let counts: Vec<usize> = (0..4_u8)
+            .map(|c| naive_occurrences(&sets, c).len())
+            .collect();
+
+        let mut out: Vec<Vec<u8>> = counts.iter().map(|&k| vec![0_u8; k]).collect();
+        ss.push_labels_forward(
+            &labels,
+            0..n,
+            out.iter_mut().map(|v| v.as_mut_slice()).collect(),
+        );
+
+        for c in 0..4_u8 {
+            let expected: Vec<u8> = naive_occurrences(&sets, c)
+                .into_iter()
+                .map(|i| labels[i])
+                .collect();
+            assert_eq!(out[c as usize], expected, "c={}", c);
+        }
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn into_bitvectors_keeps_last_position() {
+        let n = 65;
+        let mut sets = singleton_sets(n);
+        sets[n - 1] = vec![1];
+
+        let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+        let rows = ss.into_bitvectors();
+
+        for (c, row) in rows.iter().enumerate() {
+            assert_eq!(row.len(), n, "row {}", c);
+            for i in 0..n {
+                assert_eq!(row[i], sets[i].contains(&(c as u8)), "row {}, bit {}", c, i);
+            }
+        }
+    }
+
+    // AI-generated testcase
+    #[test]
+    fn empty_subset_sequence() {
+        let ss = SubsetCorrectionSets::new(vec![], 4);
+
+        assert_eq!(ss.len(), 0);
+
+        for c in 0..4_u8 {
+            assert_eq!(ss.next_set_with_char(0, c), None, "c={}", c);
+            assert_eq!(ss.rank(c, 0), 0, "c={}", c);
+        }
+    }
 }
