@@ -531,7 +531,11 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
     /// Construct from existing [`crate::subsetseq::SubsetSeq`].
     #[allow(non_snake_case)]
-    pub fn from_subset_seq(subset_rank: SS, n_kmers: usize, k: usize, precalc_prefix_length: usize) -> Self {
+    pub fn from_subset_seq(mut subset_rank: SS, n_kmers: usize, k: usize, precalc_prefix_length: usize) -> Self {
+        if !subset_rank.has_rank_support() {
+            log::info!("Building rank support");
+            subset_rank.build_rank();
+        }
         let C = subset_rank.get_C_array();
         let n = subset_rank.len();
         let mut index = Self{sbwt: subset_rank, n_kmers, k, C, prefix_lookup_table: PrefixLookupTable::new_empty(n)};
