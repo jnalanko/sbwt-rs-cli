@@ -8,6 +8,10 @@ use crate::pino::Pred8vPino;
 use crate::quad_rank::Base4RankVector;
 use crate::subsetseq::SubsetSeq;
 
+/// An implementation of [SubsetSeq] that stores a base 2-bit-per-position encoding
+/// plus a small structure that encodes the positions where
+/// set membership deviates from the base encoding. This is more compact than
+/// [SubsetMatrix](crate::subsetseq::SubsetMatrix).
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct SubsetCorrectionSets {
     concat: Base4RankVector,
