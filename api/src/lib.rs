@@ -1,12 +1,12 @@
 //! # Introduction
 //! 
 //! This crate contains an implementation of the 
-//! [Bit Matrix SBWT data structure](`SbwtIndex<SubsetMatrix>`), as described in 
+//! [SBWT data structure](`SbwtIndex<SubsetMatrix>`), as described in 
 //! [Small Searchable k-Spectra via Subset Rank Queries on the Spectral Burrows-Wheeler Transform](https://epubs.siam.org/doi/abs/10.1137/1.9781611977714.20),
 //! for the DNA alphabet ACGT. A CLI for the main features of the library can be found at [sbwt-rs-cli](https://github.com/jnalanko/sbwt-rs-cli).
 //! The data structure uses a variant of the Burrows-Wheeler transform to compress a set of k-mers in way that allows fast lookup queries. 
 //! If the input k-mers are consecutive k-mers from longer underlying sequences,
-//! the index takes typically around 5 bits per distinct k-mer, supporting k-mer lookup queries at a speed of around
+//! the default index takes typically around 5 bits per distinct k-mer, supporting k-mer lookup queries at a speed of around
 //! 1 μs / k-mer on modern hardware.
 //! 
 //! Queries can be further sped up by using the [Longest common suffix array](LcsArray), (see [here](https://link.springer.com/chapter/10.1007/978-3-031-43980-3_1))
@@ -125,13 +125,17 @@
 //! suffix-sorting algorithms instead hold the concatenation of the input sequences in memory, and have
 //! no upper bound on k.
 //!
+//! # Index variants
+//!
+//! [SbwtIndex] is generic over any [SubsetSeq] implementation for the underlying SBWT subset sequece. Besides the default [SubsetMatrix], the crate also provides [SubsetCorrectionSets], described in a [recent preprint](https://www.biorxiv.org/content/10.64898/2026.03.16.712042v1), which takes roughly half the space of SubsetMatrix at the cost of being 4-5 times slower to query.
+//!
 //! # Details on the space usage of the index
 //! 
 //! The index exploits overlaps between k-mers to encode them in small space.
 //! We say that a k-mer x is a *source k-mer* if it has no incoming edges in the
 //! node-centric de Bruijn graph of the input k-mers S, that is, there does not
 //! exist a k-mer y ∈ S such that y[1..k) = x[0..k-1).
-//! The number of bits in [`SbwtIndex<SubsetMatrix>`] is 5(n + n') plus a small constant, 
+//! The number of bits in [`SbwtIndex<SubsetMatrix>`] is 5(n + n') plus a small constant and [`SbwtIndex<SubsetCorrectionSets>`] is roughly 2.5(n + n') plus a small constant, 
 //! where n is the number
 //! of distinct k-mers in the dataset, and n' is the number of nodes in the trie
 //! of all prefixes of length k-1 of all source k-mers (See [here](SbwtIndex#sbwt-graph) for more
