@@ -202,9 +202,9 @@ pub use streaming_index::{StreamingIndex, LcsArray, MatchingStatisticsIterator, 
 mod subsetseq;
 pub use subsetseq::*;
 
-pub mod pred8_vs1;
-pub mod pino;
-pub mod quad_rank;
+mod pred8_vs1;
+mod pino;
+mod quad_rank;
 mod subset_correction_sets;
 pub use subset_correction_sets::*;
 
