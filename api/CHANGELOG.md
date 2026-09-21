@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.3
+
+### New features
+
+* Added a new subset rank structure: SubsetCorrectionSets. It uses roughly half the space compared to SubsetMatrix, but is 4-5 times slower.
+* Added an option to stream the suffix array from disk (instead of keeping it in memory) to `BuildByBoundedSuffixSort` and the libsais-based builder, reducing peak memory usage during construction.
+
+### Improvements
+
+* Improved the peak space usage during in-memory construction
+
+### Bugfixes
+
+* `SbwtIndex::from_subset_seq` now builds rank support automatically if it is missing, instead of assuming it is already present.
+* Fixed a buffer-length bug in `par_build_lengths`.
+* Fixed `get_C_array` to also work on subset sequences without rank support.
+* Various edge case fixes in the rank/select data structures (`pred8_vs1`, `quad_rank`, `pino`, `subsetseq`), found via added edge-case tests.
+
 ## v0.6.2
 
 Removed some unnecessary implementation details from the docs.
