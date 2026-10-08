@@ -11,6 +11,10 @@ name = "sbwt"
 path = "src/main.rs"
 
 [[bin]]
+name = "load-lcs"
+path = "src/bin/load_lcs.rs"
+
+[[bin]]
 name = "sbwt-cli-test-harness"
 path = "tests/bin/cli_test_harness.rs"
 required-features = ["tests"]
