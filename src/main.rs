@@ -576,6 +576,7 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     match index {
         SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
         SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
+        SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
     }
 }
 
@@ -692,6 +693,9 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
         SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
             matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()))
         }
+        SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => {
+            matching_statistics(&sbwt, &lcs, queryfile, outfile.map(|v| v.as_path()))
+        }
     };
 
 }
@@ -736,6 +740,9 @@ fn benchmark_command(matches: &clap::ArgMatches) {
         SbwtIndexVariant::SubsetCorrectionSets(sbwt) => {
             benchmark(sbwt, lcs, json_out.as_mut());
         }
+        SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => {
+            benchmark(sbwt, lcs, json_out.as_mut());
+        }
     };
 }
 
@@ -775,6 +782,9 @@ fn dump_unitigs_command(matches: &clap::ArgMatches) {
             dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
         },
         SbwtIndexVariant::SubsetCorrectionSets(mut sbwt) => {
+            dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
+        }
+        SbwtIndexVariant::SubsetInterleavedMatrix(mut sbwt) => {
             dump_unitigs(&mut sbwt, outfile.map(|f| &**f), &lcs, n_threads);
         }
     };
@@ -840,6 +850,12 @@ fn merge_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetCorrectionSets(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt1), SbwtIndexVariant::SubsetInterleavedMatrix(sbwt2)) => {
+            let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
+            log::info!("Serializing to {}", sbwt_outfile.display());
+            SbwtIndexVariant::SubsetInterleavedMatrix(merged).serialize(&mut out).unwrap();
+            log::info!("Finished");
+        },
         _ => {
             panic!("SBWT merge requires that both indices have the same SubsetSeq implementation")
         }
@@ -887,6 +903,12 @@ fn intersect_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetCorrectionSets(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt1), SbwtIndexVariant::SubsetInterleavedMatrix(sbwt2)) => {
+            let result = run_intersect(sbwt1, sbwt2, low_ram, n_threads);
+            log::info!("Serializing to {}", sbwt_outfile.display());
+            SbwtIndexVariant::SubsetInterleavedMatrix(result).serialize(&mut out).unwrap();
+            log::info!("Finished");
+        },
         _ => {
             panic!("SBWT intersection requires that both indices have the same SubsetSeq implementation")
         }
@@ -932,6 +954,12 @@ fn difference_command(matches: &clap::ArgMatches) {
             SbwtIndexVariant::SubsetCorrectionSets(result).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt1), SbwtIndexVariant::SubsetInterleavedMatrix(sbwt2)) => {
+            let result = run_difference(sbwt1, sbwt2, low_ram, n_threads);
+            log::info!("Serializing to {}", sbwt_outfile.display());
+            SbwtIndexVariant::SubsetInterleavedMatrix(result).serialize(&mut out).unwrap();
+            log::info!("Finished");
+        },
         _ => {
             panic!("SBWT difference requires that both indices have the same SubsetSeq implementation")
         }
@@ -967,6 +995,9 @@ fn jaccard_command(matches: &clap::ArgMatches) {
             run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
+            run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
+        },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt1), SbwtIndexVariant::SubsetInterleavedMatrix(sbwt2)) => {
             run_jaccard(sbwt1, sbwt2, low_ram, n_threads);
         },
         _ => {
@@ -1167,6 +1198,37 @@ fn transform_index_command(matches: &clap::ArgMatches) {
             let index_new = SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p);
             log::info!("SBWT construction done");
             SbwtIndexVariant::SubsetCorrectionSets(index_new)
+        },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt), "interleaved_matrix") => {
+            log::warn!("The index is already an interleaved matrix index");
+            SbwtIndexVariant::SubsetInterleavedMatrix(sbwt)
+        },
+        (SbwtIndexVariant::SubsetMatrix(sbwt), "interleaved_matrix") => {
+            log::info!("Transform bit matrix -> interleaved matrix");
+            let (sbwt_subsetseq, n_kmers, k, c_array, prefix_lookup_table) = sbwt.into_parts();
+            let ss_new = SubsetInterleavedMatrix::new_from_bit_vectors(sbwt_subsetseq.into_bitvectors());
+            SbwtIndexVariant::SubsetInterleavedMatrix(SbwtIndex::<SubsetInterleavedMatrix>::from_parts(ss_new, n_kmers, k, c_array, prefix_lookup_table))
+        },
+        (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "interleaved_matrix") => {
+            log::info!("Transform correction sets -> interleaved matrix");
+            let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
+            let p = prefix_lookup_table.prefix_length;
+            let ss_new = SubsetInterleavedMatrix::new_from_bit_vectors(sbwt_subsetseq.into_bitvectors());
+            SbwtIndexVariant::SubsetInterleavedMatrix(SbwtIndex::<SubsetInterleavedMatrix>::from_subset_seq(ss_new, n_kmers, k, p))
+        },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt), "bit_matrix") => {
+            log::info!("Transform interleaved matrix -> bit matrix");
+            let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
+            let p = prefix_lookup_table.prefix_length;
+            let ss_new = SubsetMatrix::new_from_bit_vectors(sbwt_subsetseq.into_bitvectors());
+            SbwtIndexVariant::SubsetMatrix(SbwtIndex::<SubsetMatrix>::from_subset_seq(ss_new, n_kmers, k, p))
+        },
+        (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt), "correction_sets") => {
+            log::info!("Transform interleaved matrix -> correction sets");
+            let (sbwt_subsetseq, n_kmers, k, _c_array, prefix_lookup_table) = sbwt.into_parts();
+            let p = prefix_lookup_table.prefix_length;
+            let ss_new = SubsetCorrectionSets::new_from_bit_vectors(sbwt_subsetseq.into_bitvectors());
+            SbwtIndexVariant::SubsetCorrectionSets(SbwtIndex::<SubsetCorrectionSets>::from_subset_seq(ss_new, n_kmers, k, p))
         },
         (_, t) => unreachable!("Unknown target index type {}", t),
     };
@@ -1642,7 +1704,7 @@ fn main() {
                 .help("Target subset sequence representation of the transformed index")
                 .long("type")
                 .required(true)
-                .value_parser(["bit_matrix", "correction_sets"])
+                .value_parser(["bit_matrix", "correction_sets", "interleaved_matrix"])
             )
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
