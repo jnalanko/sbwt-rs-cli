@@ -56,6 +56,29 @@ pub trait SubsetSeq {
     /// Returns the number of sets in the range [0..i) that have character `c`.
     fn rank(&self, c: u8, i: usize) -> usize;
 
+    /// Hints the CPU to start loading the memory that [`SubsetSeq::rank`] needs for
+    /// `c` and `i`, so that a later rank query does not have to wait for it. Does not
+    /// affect any results. The default implementation does nothing.
+    fn prefetch_rank(&self, _c: u8, _i: usize) {}
+
+    /// Returns `(self.rank(c, i), self.rank(c, j))`. Implementations can override this to
+    /// share work between the two queries.
+    fn rank_pair(&self, c: u8, i: usize, j: usize) -> (usize, usize) {
+        (self.rank(c, i), self.rank(c, j))
+    }
+
+    /// Like [`SubsetSeq::rank_pair`], but implementations may additionally share work that
+    /// depends on `i` and `j` being close to each other, at the cost of a branch.
+    fn rank_pair_shared(&self, c: u8, i: usize, j: usize) -> (usize, usize) {
+        self.rank_pair(c, i, j)
+    }
+
+    /// Like calling [`SubsetSeq::prefetch_rank`] for `i` and `j`.
+    fn prefetch_rank_pair(&self, c: u8, i: usize, j: usize) {
+        self.prefetch_rank(c, i);
+        self.prefetch_rank(c, j);
+    }
+
     /// Returns the index of the set that contains the i-th occurence of character c, if exists.
     fn select(&self, c: u8, i: usize) -> Option<usize>;
 
@@ -465,6 +488,28 @@ mod tests {
         }
     }
 
+    // rank_pair and rank_pair_shared give the two ranks, for positions close together (the same
+    // block of every implementation) and far apart; prefetching first must not change anything.
+    fn test_rank_pair_generic<SS: SubsetSeq>() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let sets: Vec<Vec<u8>> = (0..3000).map(|_| (0..4u8).filter(|_| rng.gen_bool(0.3)).collect()).collect();
+        let mut ss = SS::new(sets, 4);
+        ss.build_rank();
+        let n = ss.len();
+        for i in (0..=n).step_by(13) {
+            for j in [i, (i + 1).min(n), (i + 63).min(n), (i + 300).min(n), (i + 1000).min(n), n] {
+                for c in 0..4u8 {
+                    ss.prefetch_rank(c, i);
+                    ss.prefetch_rank_pair(c, i, j);
+                    let expected = (ss.rank(c, i), ss.rank(c, j));
+                    assert_eq!(ss.rank_pair(c, i, j), expected, "rank_pair c = {} ({}, {})", c, i, j);
+                    assert_eq!(ss.rank_pair_shared(c, i, j), expected, "rank_pair_shared c = {} ({}, {})", c, i, j);
+                }
+            }
+        }
+    }
+
     fn test_rank_generic<SS: SubsetSeq>() {
         let mut ss = get_example::<SS>();
         ss.build_rank();
@@ -577,6 +622,7 @@ mod tests {
         test_subset_size_generic::<SS>();
         test_set_contains_generic::<SS>();
         test_rank_generic::<SS>();
+        test_rank_pair_generic::<SS>();
         test_select_generic::<SS>();
         test_next_set_with_char_generic::<SS>();
         test_call_on_occurrences_generic::<SS>();
@@ -593,6 +639,11 @@ mod tests {
     #[test]
     fn subset_correction_sets_generic_tests() {
         run_subset_seq_tests::<SubsetCorrectionSets>();
+    }
+
+    #[test]
+    fn subset_interleaved_matrix_generic_tests() {
+        run_subset_seq_tests::<crate::SubsetInterleavedMatrix>();
     }
 
     use rand::rngs::StdRng;

@@ -177,6 +177,32 @@ impl InterleavedRank {
         self.lines[i / BITS_PER_LINE].rank(i % BITS_PER_LINE)
     }
 
+    /// Returns `(self.rank(i), self.rank(j))`. Requires `i, j <= len`.
+    #[inline]
+    pub fn rank_pair(&self, i: usize, j: usize) -> (usize, usize) {
+        (self.rank(i), self.rank(j))
+    }
+
+    /// Like [InterleavedRank::rank_pair], but if `i` and `j` are in the same block, reads the
+    /// block only once. Branches on whether they are in the same block.
+    #[inline]
+    pub fn rank_pair_shared(&self, i: usize, j: usize) -> (usize, usize) {
+        let l = i / BITS_PER_LINE;
+        if l == j / BITS_PER_LINE {
+            let line = &self.lines[l];
+            (line.rank(i % BITS_PER_LINE), line.rank(j % BITS_PER_LINE))
+        } else {
+            self.rank_pair(i, j)
+        }
+    }
+
+    /// Hints the CPU to start loading the block that [InterleavedRank::rank] reads for `i`.
+    #[inline]
+    pub fn prefetch(&self, i: usize) {
+        // Plain address arithmetic, no bounds check: a prefetch of any address is harmless.
+        crate::util::prefetch_read(self.lines.as_ptr().wrapping_add(i / BITS_PER_LINE));
+    }
+
     /// The bit at position `i < len`.
     #[inline]
     pub fn get(&self, i: usize) -> bool {
@@ -366,6 +392,28 @@ impl SubsetSeq for SubsetInterleavedMatrix {
         self.rows[c as usize].rank(i)
     }
 
+    #[inline]
+    fn prefetch_rank(&self, c: u8, i: usize) {
+        self.rows[c as usize].prefetch(i)
+    }
+
+    #[inline]
+    fn rank_pair(&self, c: u8, i: usize, j: usize) -> (usize, usize) {
+        self.rows[c as usize].rank_pair(i, j)
+    }
+
+    #[inline]
+    fn rank_pair_shared(&self, c: u8, i: usize, j: usize) -> (usize, usize) {
+        self.rows[c as usize].rank_pair_shared(i, j)
+    }
+
+    #[inline]
+    fn prefetch_rank_pair(&self, c: u8, i: usize, j: usize) {
+        let row = &self.rows[c as usize];
+        row.prefetch(i);
+        row.prefetch(j);
+    }
+
     fn select(&self, c: u8, i: usize) -> Option<usize> {
         self.rows[c as usize].select(i)
     }
@@ -477,6 +525,16 @@ mod tests {
                 v.for_each_one(start..end, |i| got.push(i));
                 let expected: Vec<usize> = ones.iter().copied().filter(|&i| i >= start && i < end).collect();
                 assert_eq!(got, expected, "range {}..{} with len {}", start, end, len);
+            }
+        }
+        // Pairs: neighbors, within a block, across blocks, and (i, len); prefetching first
+        // (it must not change anything).
+        for i in (0..=len).step_by(7) {
+            for j in [i, (i + 1).min(len), (i + 63).min(len), (i + 500).min(len), (i + 15000).min(len), len] {
+                v.prefetch(i);
+                v.prefetch(j);
+                assert_eq!(v.rank_pair(i, j), (ranks[i], ranks[j]));
+                assert_eq!(v.rank_pair_shared(i, j), (ranks[i], ranks[j]), "pair ({}, {})", i, j);
             }
         }
         // Serialization round trip.

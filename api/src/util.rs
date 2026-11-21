@@ -22,6 +22,26 @@ pub(crate) fn write_bytes<W: std::io::Write>(out: &mut W, bytes: &[u8]) -> std::
 
 // Searcher the range [0..n)
 // Return the index of the answer, or n if does not exist
+/// Hints the CPU to load the cache line at `ptr` into the first-level cache. On x86_64 and
+/// aarch64 this is a prefetch instruction; on other targets it does nothing. Safe for any pointer
+/// value: a prefetch never dereferences the pointer and cannot fault.
+#[inline(always)]
+pub(crate) fn prefetch_read<T>(ptr: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: a prefetch is only a hint and cannot fault, even on an invalid address.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(ptr as *const i8)
+    };
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: PRFM is only a hint and cannot fault, even on an invalid address; it reads no
+    // memory that the program can observe and changes no registers or flags.
+    unsafe {
+        std::arch::asm!("prfm pldl1keep, [{0}]", in(reg) ptr, options(nostack, preserves_flags, readonly))
+    };
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = ptr;
+}
+
 pub(crate) fn binary_search_leftmost_that_fulfills_pred<T, Access: Fn(usize) -> T, Pred: Fn(T) -> bool>(access: Access, pred: Pred, n: usize) -> usize {
     let mut ans = n;
     let mut step = n.next_power_of_two();

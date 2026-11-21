@@ -385,6 +385,34 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         self.C[char_idx] + self.sbwt.rank(char_idx as u8, i)
     }
 
+    /// Hints the CPU to start loading the memory that [SbwtIndex::lf_step] needs for
+    /// `i` and `char_idx`. Does not affect any results.
+    pub fn prefetch_lf_step(&self, i: usize, char_idx: usize) {
+        self.sbwt.prefetch_rank(char_idx as u8, i);
+    }
+
+    /// [SbwtIndex::lf_step] on both ends of `interval`, with one [SubsetSeq::rank_pair]
+    /// query instead of two rank queries.
+    #[inline]
+    pub fn lf_step_interval(&self, interval: &std::ops::Range<usize>, char_idx: usize) -> std::ops::Range<usize> {
+        let (start, end) = self.sbwt.rank_pair(char_idx as u8, interval.start, interval.end);
+        self.C[char_idx] + start..self.C[char_idx] + end
+    }
+
+    /// Like [SbwtIndex::lf_step_interval], but with [SubsetSeq::rank_pair_shared].
+    #[inline]
+    pub fn lf_step_interval_shared(&self, interval: &std::ops::Range<usize>, char_idx: usize) -> std::ops::Range<usize> {
+        let (start, end) = self.sbwt.rank_pair_shared(char_idx as u8, interval.start, interval.end);
+        self.C[char_idx] + start..self.C[char_idx] + end
+    }
+
+    /// [SbwtIndex::prefetch_lf_step] on both ends of `interval`, with one
+    /// [SubsetSeq::prefetch_rank_pair] call.
+    #[inline]
+    pub fn prefetch_lf_step_interval(&self, interval: &std::ops::Range<usize>, char_idx: usize) {
+        self.sbwt.prefetch_rank_pair(char_idx as u8, interval.start, interval.end);
+    }
+
     /// The inverse function of [`SbwtIndex::lf_step`].
     /// Requires that the [select support](SbwtIndex::build_select) has been built.
     /// Returns None if called on the source node of the SBWT graph.
@@ -1060,6 +1088,29 @@ mod tests {
             };
             let I2 = lut.lookup(two_mer);
             assert_eq!(I1, I2);
+        }
+    }
+
+    // lf_step_interval and lf_step_interval_shared give lf_step at both ends of the interval, for
+    // every interval of the search of every k-mer of some sequences; prefetching first must not
+    // change anything.
+    #[test]
+    fn lf_step_interval_matches_lf_step() {
+        let seqs: &[&[u8]] = &[b"ACGTTGCAAGGCTTACGATCGATCGGATCCATGCATGCATTAGCAGTTGACCATGGCATTACGG", b"TTGACCATGGCATTACGGATACGATTAGCAAAACCCGGGTTT"];
+        let (sbwt, _) = BitPackedKmerSortingMem::new_from_slices(seqs, 5).add_rev_comp(true).run();
+        for seq in seqs {
+            for start in 0..seq.len() {
+                let mut interval = 0..sbwt.n_sets();
+                for &ch in &seq[start..(start + 8).min(seq.len())] {
+                    let c = sbwt.char_idx(ch);
+                    sbwt.prefetch_lf_step(interval.start, c);
+                    sbwt.prefetch_lf_step_interval(&interval, c);
+                    let expected = sbwt.lf_step(interval.start, c)..sbwt.lf_step(interval.end, c);
+                    assert_eq!(sbwt.lf_step_interval(&interval, c), expected);
+                    assert_eq!(sbwt.lf_step_interval_shared(&interval, c), expected);
+                    interval = expected;
+                }
+            }
         }
     }
 
