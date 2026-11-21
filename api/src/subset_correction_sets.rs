@@ -684,6 +684,35 @@ fn load_pred<R: std::io::Read>(r: &mut R) -> std::io::Result<Option<Pred8vPino>>
 mod tests {
     use super::*;
 
+    // call_on_char_occurrences reports exactly the occurrences in the range, for ranges starting
+    // and ending inside and at the ends of words, including those ending at n.
+    #[test]
+    fn call_on_char_occurrences_matches_the_sets() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(4);
+        for n in [1, 63, 64, 65, 127, 128, 129, 513, 1024, 1025, 3000] {
+            let sets: Vec<Vec<u8>> = (0..n)
+                .map(|_| (0..4u8).filter(|_| rng.gen_bool(0.3)).collect())
+                .collect();
+            let ss = SubsetCorrectionSets::new(sets.clone(), 4);
+            let mut ends: Vec<usize> = (1..=n).step_by(7).collect();
+            ends.extend([n, n.saturating_sub(1).max(1), (n / 64) * 64]);
+            for &end in ends.iter().filter(|&&e| e >= 1 && e <= n) {
+                for start in [0, end - 1, end.saturating_sub(64), end.saturating_sub(65), (end - 1) & !63, end / 2] {
+                    if start >= end {
+                        continue;
+                    }
+                    for c in 0..4u8 {
+                        let mut got = Vec::new();
+                        ss.call_on_char_occurrences(start..end, c, |i| got.push(i));
+                        let expected: Vec<usize> = (start..end).filter(|&i| sets[i].contains(&c)).collect();
+                        assert_eq!(got, expected, "n = {} range {}..{} c = {}", n, start, end, c);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_next_set_with_char() {
         // Sets:

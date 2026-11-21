@@ -312,7 +312,8 @@ impl Pred8vS1 {
         // Matches serialize().
         r.read_exact(bytemuck::cast_slice_mut(x.as_mut_slice()))?;
 
-        let nhints = n / HINT_INTERVAL + 1;
+        // The same lengths as in from_sorted.
+        let nhints = n.div_ceil(HINT_INTERVAL);
 
         let num_bytes = n + nhints * HINT_BYTES;
         let y_size = num_bytes.div_ceil(4);
@@ -320,7 +321,7 @@ impl Pred8vS1 {
         let mut y = vec![0u32; y_size];
         r.read_exact(bytemuck::cast_slice_mut(&mut y))?;
 
-        let mut super_hint = vec![0u64; (u >> 32) + 1];
+        let mut super_hint = vec![0u64; (u >> (32 + 8)) + 1];
         r.read_exact(bytemuck::cast_slice_mut(&mut super_hint))?;
 
         let mut super_upper = vec![0u64; (n >> 32) + 1];
@@ -446,14 +447,21 @@ mod tests {
 
     #[test]
     fn serialize_roundtrip() {
-        let values = vec![0, 10, 20, 300, 10000];
-        let pred = Pred8vS1::from_sorted(&values);
-        let mut bytes = Vec::new();
-        pred.serialize(&mut bytes).unwrap();
-        let loaded = Pred8vS1::load(bytes.as_slice()).unwrap();
-        assert_eq!(pred.u, loaded.u);
-        assert_eq!(pred.n, loaded.n);
-        assert_eq!(pred.upper_level, loaded.upper_level);
-        assert_eq!(pred.lower_level, loaded.lower_level);
+        // Lengths around multiples of the hint interval (32): the hint blocks were sized
+        // differently when loading than when building at exact multiples.
+        for n in [5, 31, 32, 33, 64, 65, 1000] {
+            let values: Vec<u64> = (0..n as u64).map(|i| i * 37 + (i % 5)).collect();
+            let pred = Pred8vS1::from_sorted(&values);
+            let mut bytes = Vec::new();
+            pred.serialize(&mut bytes).unwrap();
+            let loaded = Pred8vS1::load(bytes.as_slice()).unwrap();
+            assert_eq!(pred.u, loaded.u, "n = {}", n);
+            assert_eq!(pred.n, loaded.n, "n = {}", n);
+            assert_eq!(pred.upper_level, loaded.upper_level, "n = {}", n);
+            assert_eq!(pred.lower_level, loaded.lower_level, "n = {}", n);
+            assert_eq!(pred.super_hint, loaded.super_hint, "n = {}", n);
+            assert_eq!(pred.super_upper, loaded.super_upper, "n = {}", n);
+            assert_eq!(bytes.len(), pred.size_in_bytes(), "n = {}", n);
+        }
     }
 }
