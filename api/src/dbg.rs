@@ -160,14 +160,14 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
             }
         };
 
-        Self::new_with_k_minus_1_marks(sbwt, k_minus_1_marks, n_threads)
+        Self::new_with_k_minus_1_marks(sbwt, k_minus_1_marks)
     }
 
     /// Like [Dbg::new], with the (k-1)-suffix groups of `sbwt` given: one bit per node, set for the
     /// first node of each group, e.g. from [result_k_minus_1_marks](crate::set_operations::interleaving::result_k_minus_1_marks)
     /// for the result of a set operation.
     /// IMPORTANT: [select support][SbwtIndex::build_select()] must be built before calling this function.
-    pub fn new_with_k_minus_1_marks(sbwt: &'a SbwtIndex<SS>, k_minus_1_marks: bitvec::vec::BitVec, n_threads: usize) -> Self
+    pub fn new_with_k_minus_1_marks(sbwt: &'a SbwtIndex<SS>, k_minus_1_marks: bitvec::vec::BitVec) -> Self
     where SS: Sync {
         assert!(sbwt.sbwt.has_select_support());
         assert_eq!(k_minus_1_marks.len(), sbwt.n_sets());
