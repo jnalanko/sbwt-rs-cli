@@ -28,6 +28,13 @@ impl AtomicBitmap {
         }
     }
 
+    /// Sets the bit at `index` and returns whether it was already set.
+    pub fn test_and_set(&self, index: usize) -> bool {
+        assert!(index < self.len);
+        let mask = 1_u64 << (index % 64);
+        self.data[index / 64].fetch_or(mask, std::sync::atomic::Ordering::AcqRel) & mask != 0
+    }
+
     pub fn get(&self, index: usize) -> bool {
         assert!(index < self.len);
         let word_idx = index / 64;

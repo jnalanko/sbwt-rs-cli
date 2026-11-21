@@ -10,6 +10,7 @@ use num::traits::ToBytes;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
+use rayon::slice::ParallelSliceMut;
 use bitvec::prelude::*;
 
 use crate::compact_int_vector::CompactIntVector;
@@ -575,17 +576,14 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         labels_out[0] = b'$'; // The root has no predecessor so it always gets a dollar.
         let mut remaining_char_output_ranges = self.split_output_range_by_char(labels_out);
 
-        let input_piece_len = self.n_sets().div_ceil(n_threads);
+        // Final pieces may be empty, e.g. if there are fewer sets than threads
+        let input_pieces = crate::util::segment_range(0..self.n_sets(), n_threads);
 
         // Subdivide char output ranges for threads.
         // For each thread one input sbwt range and four (= |ACGT|) output ranges. 
         let mut thread_input_output_ranges = Vec::<(std::ops::Range<usize>, Vec::<&mut[u8]>)>::new();
 
-        for t in 0..n_threads {
-
-            let input_range_start = t*input_piece_len;
-            let input_range_end = std::cmp::min((t+1)*input_piece_len, self.n_sets());
-            let input_subrange = input_range_start..input_range_end;
+        for input_subrange in input_pieces {
 
             let mut thread_output_subranges: Vec<&mut[u8]> = Vec::new();
 
@@ -593,7 +591,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             for (char_idx, output_range) in remaining_char_output_ranges.into_iter().enumerate() {
 
                 // The length of the output range is equal to the number of occurrences of the current character in the input range
-                let output_range_len = self.sbwt.rank(char_idx as u8, input_range_end) - self.sbwt.rank(char_idx as u8, input_range_start);
+                let output_range_len = self.sbwt.rank(char_idx as u8, input_subrange.end) - self.sbwt.rank(char_idx as u8, input_subrange.start);
                 let (output_subrange, tail) = output_range.split_at_mut(output_range_len); 
                 range_tails.push(tail);
 
@@ -652,9 +650,12 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         // Exclusive ends
         let mut input_edge_ranges: Vec<(usize, usize, usize, usize)> = vec![];
         let mut edges_so_far = 0_usize;
-        for r in output_char_ranges.iter() {
-            let input_range_len = if edges_so_far == 0 {
-                assert!(r.len() > 0);
+        for (i, r) in output_char_ranges.iter().enumerate() {
+            // Only the first range contains the root, which has no incoming edge. The first range
+            // can have no edges at all (an index with only the root), so it is identified by its
+            // position.
+            let input_range_len = if i == 0 {
+                assert!(r.len() > 0); // The root is always there
                 r.len() - 1 // No incoming edge to the first node 
             } else {
                 r.len()
@@ -667,9 +668,13 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 
         assert_eq!(output_char_ranges.len(), input_edge_ranges.len());
 
-        output_char_ranges.into_par_iter().enumerate().for_each(|(i, mut out)| {
-            self.push_labels_forward_compact(input_edge_ranges[i], labels_in, &mut out, i == 0);
-        })
+        // In a pool of n_threads threads, as push_all_labels_forward, not in the pool of the caller
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
+        thread_pool.install(|| {
+            output_char_ranges.into_par_iter().enumerate().for_each(|(i, mut out)| {
+                self.push_labels_forward_compact(input_edge_ranges[i], labels_in, &mut out, i == 0);
+            })
+        });
     }
 
     /// Internal function. A compact version of [push_labels_forward].
@@ -758,33 +763,58 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         last
     } 
 
-    // Internal function: marks the first k-mer of every (k-1)-suffix group.
-    pub(crate) fn mark_k_minus_1_mers(&self, n_threads: usize) -> bitvec::vec::BitVec 
+    // Internal function: marks the first k-mer of every (k-1)-suffix group, with the labels of the
+    // column inversion in a byte per node.
+    pub(crate) fn mark_k_minus_1_mers(&self, n_threads: usize) -> bitvec::vec::BitVec
+    where Self: Sync {
+        self.mark_k_minus_1_mers_with::<Vec<u8>>(n_threads)
+    }
+
+    // Like [SbwtIndex::mark_k_minus_1_mers], with the labels in 3 bits per node instead of a byte:
+    // the two columns of labels are the peak memory of the column inversion, so it takes 6 instead
+    // of 16 bits per node, but the columns take about twice as long to build.
+    pub(crate) fn mark_k_minus_1_mers_low_memory(&self, n_threads: usize) -> bitvec::vec::BitVec
+    where Self: Sync {
+        self.mark_k_minus_1_mers_with::<CompactIntVector<3>>(n_threads)
+    }
+
+    // The column inversion of mark_k_minus_1_mers, with the labels in L.
+    fn mark_k_minus_1_mers_with<L: ColumnLabels<SS>>(&self, n_threads: usize) -> bitvec::vec::BitVec
     where Self: Sync {
         let n_nodes = self.n_sets();
         let k = self.k();
 
         // Build the last column of the SBWT matrix
         log::info!("Building column {} of the SBWT matrix", k-1);
-        let mut labels_in = self.build_last_column(); 
+        let mut labels_in = L::last_column(self);
         let mut labels_out = labels_in.clone();
 
         let mut marks = bitvec::bitvec![0; self.n_sets()];
         marks.set(0, true);
+
+        const CHUNK_WORDS: usize = 1024; // Words of marks per parallel task (65536 nodes)
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
         // Iterate columns from right to left
         for round in 0..k-1 {
             if round > 0 {
                 log::info!("Building column {} of the SBWT matrix", k-1-round);
 
-                self.push_all_labels_forward(&labels_in, &mut labels_out, n_threads);
+                L::push_forward(self, &labels_in, &mut labels_out, n_threads);
             }
 
-            for i in 1..n_nodes {
-                if labels_out[i] != labels_out[i-1] {
-                    marks.set(i, true);
-                }
-            }
+            // Mark the nodes whose label differs from the label of the node before them
+            let labels = &labels_out;
+            thread_pool.install(|| {
+                marks.as_raw_mut_slice().par_chunks_mut(CHUNK_WORDS).enumerate().for_each(|(chunk, words)| {
+                    for (w, word) in words.iter_mut().enumerate() {
+                        let first = (chunk * CHUNK_WORDS + w) * 64;
+                        for (b, i) in (first.max(1)..(first + 64).min(n_nodes)).map(|i| (i - first, i)) {
+                            *word |= ((labels.label(i) != labels.label(i-1)) as usize) << b;
+                        }
+                    }
+                });
+            });
 
             (labels_in, labels_out) = (labels_out, labels_in);
         }
@@ -903,6 +933,32 @@ impl PrefixLookupTable {
 
         Ok(Self{ranges, prefix_length})
     }
+}
+
+/// The labels of one column of the SBWT matrix, one per node, as the column inversion of
+/// [SbwtIndex::mark_k_minus_1_mers] stores them.
+trait ColumnLabels<SS: SubsetSeq>: Clone + Send + Sync {
+    fn last_column(sbwt: &SbwtIndex<SS>) -> Self;
+    fn push_forward(sbwt: &SbwtIndex<SS>, labels_in: &Self, labels_out: &mut Self, n_threads: usize);
+    fn label(&self, i: usize) -> usize;
+}
+
+/// A byte per node, the character itself.
+impl<SS: SubsetSeq> ColumnLabels<SS> for Vec<u8> where SbwtIndex<SS>: Sync {
+    fn last_column(sbwt: &SbwtIndex<SS>) -> Self { sbwt.build_last_column() }
+    fn push_forward(sbwt: &SbwtIndex<SS>, labels_in: &Self, labels_out: &mut Self, n_threads: usize) {
+        sbwt.push_all_labels_forward(labels_in, labels_out, n_threads)
+    }
+    fn label(&self, i: usize) -> usize { self[i] as usize }
+}
+
+/// 3 bits per node: 0 for the dollar, and 1 to 4 for A, C, G and T.
+impl<SS: SubsetSeq> ColumnLabels<SS> for CompactIntVector<3> where SbwtIndex<SS>: Sync {
+    fn last_column(sbwt: &SbwtIndex<SS>) -> Self { sbwt.build_last_column_compact() }
+    fn push_forward(sbwt: &SbwtIndex<SS>, labels_in: &Self, labels_out: &mut Self, n_threads: usize) {
+        sbwt.push_all_labels_forward_compact(labels_in, labels_out, n_threads)
+    }
+    fn label(&self, i: usize) -> usize { self.get(i) }
 }
 
 #[cfg(test)]

@@ -209,7 +209,7 @@ mod subset_correction_sets;
 pub use subset_correction_sets::*;
 
 mod set_operations;
-pub use set_operations::{MergeInterleaving, merge, intersect, difference};
+pub use set_operations::{MergeInterleaving, ThreeWayInterleaving, result_k_minus_1_marks, merge, merge_without_cleanup, merge_with_removed_positions, intersect, intersect_with_removed_positions, difference, difference_with_removed_positions, filter, filter_with_removed_positions};
 
 mod atomic_bitmap;
 

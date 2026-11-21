@@ -175,6 +175,22 @@ impl<'a> Clone for VecSeqStream<'a> {
     }
 }
 
+/// The resident memory of this process in GiB, from /proc/self/status (Linux only), for the log.
+pub(crate) fn resident_gib() -> Option<f64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kb: f64 = status.lines().find_map(|line| line.strip_prefix("VmRSS:"))?.trim().trim_end_matches("kB").trim().parse().ok()?;
+    Some(kb / (1u64 << 20) as f64)
+}
+
+/// Logs the resident memory of the process at `when`, with the sizes in bytes of the named
+/// structures `parts`, so that the log shows what the memory of a step consists of.
+pub(crate) fn log_memory(log_prefix: &str, when: &str, parts: &[(&str, usize)]) {
+    let gib = |bytes: usize| bytes as f64 / (1u64 << 30) as f64;
+    let resident = resident_gib().map_or("unknown".to_string(), |g| format!("{g:.1} GiB"));
+    let parts: Vec<String> = parts.iter().map(|(name, bytes)| format!("{name} {:.1} GiB", gib(*bytes))).collect();
+    log::info!("{} Memory {}: resident {}; {}", log_prefix, when, resident, parts.join(", "));
+}
+
 // This function runs in parallel, so a rayon thread pool must be initialized.
 pub(crate) fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
     if bitvecs.len() == 1 {

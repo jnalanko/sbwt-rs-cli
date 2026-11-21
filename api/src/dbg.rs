@@ -129,11 +129,30 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// IMPORTANT: [select support][SbwtIndex::build_select()] must be built before calling this function. 
     pub fn new(sbwt: &'a SbwtIndex<SS>, lcs: Option<&crate::streaming_index::LcsArray>, n_threads: usize) -> Self
     where SS: Sync {
+        Self::new_with_all_options(sbwt, lcs, false, n_threads)
+    }
+
+    /// Like [Dbg::new], with less memory if no LCS array is given: the column inversion that then
+    /// marks the (k-1)-suffix groups stores its labels in 3 bits per node instead of a byte (6
+    /// instead of 16 bits per node at its peak), and takes about twice as long. With an LCS array,
+    /// the same as [Dbg::new].
+    pub fn new_low_memory(sbwt: &'a SbwtIndex<SS>, lcs: Option<&crate::streaming_index::LcsArray>, n_threads: usize) -> Self
+    where SS: Sync {
+        Self::new_with_all_options(sbwt, lcs, true, n_threads)
+    }
+
+    // A private function that the public interface calls
+    fn new_with_all_options(sbwt: &'a SbwtIndex<SS>, lcs: Option<&crate::streaming_index::LcsArray>, compact_labels: bool, n_threads: usize) -> Self
+    where SS: Sync {
         assert!(sbwt.sbwt.has_select_support());
         let k_minus_1_marks = match lcs {
             Some(lcs) => {
                 log::info!("Building (k-1)-mer marks from LCS array");
                 Self::mark_k_minus_1_mers(lcs, sbwt.k())
+            }
+            None if compact_labels => {
+                log::info!("No LCS-array given. Building (k-1)-mer marks with column inversion, with 3-bit labels.");
+                sbwt.mark_k_minus_1_mers_low_memory(n_threads)
             }
             None => {
                 log::info!("No LCS-array given. Building (k-1)-mer marks with column inversion.");
@@ -141,6 +160,17 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
             }
         };
 
+        Self::new_with_k_minus_1_marks(sbwt, k_minus_1_marks, n_threads)
+    }
+
+    /// Like [Dbg::new], with the (k-1)-suffix groups of `sbwt` given: one bit per node, set for the
+    /// first node of each group, e.g. from [result_k_minus_1_marks](crate::set_operations::interleaving::result_k_minus_1_marks)
+    /// for the result of a set operation.
+    /// IMPORTANT: [select support][SbwtIndex::build_select()] must be built before calling this function.
+    pub fn new_with_k_minus_1_marks(sbwt: &'a SbwtIndex<SS>, k_minus_1_marks: bitvec::vec::BitVec, n_threads: usize) -> Self
+    where SS: Sync {
+        assert!(sbwt.sbwt.has_select_support());
+        assert_eq!(k_minus_1_marks.len(), sbwt.n_sets());
         log::info!("Marking dummy nodes");
         let dummy_marks = Self::mark_dummies(sbwt);
         Self{sbwt, k_minus_1_marks, dummy_marks}
@@ -408,31 +438,78 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         }
     }
 
-    /// Returns the sequence of nodes and the label of the unitig
-    /// The out_labels_buf is working space for the function. Don't assume
-    /// anything about its contents when the function returns. If you also
-    /// want the string label of the unitig, call [Dbg::push_unitig_string] with 
-    /// the returned Node vector.
-    pub fn walk_unitig_from(&self, mut v: Node, out_labels_buf: &mut Vec<u8>) -> Vec<Node> {
+    /// Returns the nodes of the unitig that starts at `v`, in order. The walk continues as long as
+    /// the current node has exactly one outgoing edge and the next node has exactly one incoming
+    /// edge, and stops if it gets back to `v` (a cyclic unitig). If you also want the string label
+    /// of the unitig, call [Dbg::push_unitig_string] with the returned nodes.
+    ///
+    /// `_out_labels_buf` is not used: the labels follow from the returned nodes.
+    ///
+    /// Panics if `v` is a dummy node.
+    pub fn walk_unitig_from(&self, v: Node, _out_labels_buf: &mut Vec<u8>) -> Vec<Node> {
+        // Each step looks at the (k-1)-suffix group of the current node v only once:
+        // - the outgoing edges of v are those of the group start (the group's set in the SBWT),
+        // - the next node u is lf_step(group start, c), and
+        // - the incoming edges of u come exactly from the nodes of this group, so the in-degree of
+        //   u is the size of the group minus the dummy node at its start, if any (a dummy node is
+        //   always the first node of its group, and a group has at most one).
+        // This avoids the select that indegree(u) would need to find this group again.
+        assert!(!self.dummy_marks[v.id]);
+        let sigma = self.sbwt.alphabet().len();
         let v0 = v;
+        let mut v = v;
+        // The first push allocates room for 4 nodes, where vec![v] would allocate room for 1 and
+        // reallocate at the second push
         let mut nodes = Vec::<Node>::new();
         nodes.push(v);
-        
-        while self.outdegree(v) == 1 {
-            out_labels_buf.clear();
-            self.push_outlabels(v, out_labels_buf);
-            let c = out_labels_buf[0];
-            v = self.follow_outedge(v, c).unwrap();
-            if v != v0 && self.indegree(v) == 1 {
-                nodes.push(v);
-            } else { break; }
+        loop {
+            let group_start = self.get_suffix_group_start(v.id);
+            let mut out_char = 0;
+            let mut outdegree = 0;
+            for c in 0..sigma {
+                if self.sbwt.sbwt.set_contains(group_start, c as u8) {
+                    out_char = c;
+                    outdegree += 1;
+                }
+            }
+            if outdegree != 1 {
+                break;
+            }
+            let group_end = Self::next_1_bit(&self.k_minus_1_marks, group_start + 1);
+            let u_indegree = group_end - group_start - self.dummy_marks[group_start] as usize;
+            let u = Node{id: self.sbwt.lf_step(group_start, out_char)};
+            if u != v0 && u_indegree == 1 {
+                nodes.push(u);
+                v = u;
+            } else {
+                break;
+            }
         }
-
         nodes
     }
 
     pub fn is_dummy_colex_position(&self, pos: usize) -> bool {
         self.dummy_marks[pos]
+    }
+
+    /// One bit per node, set for the first node of each (k-1)-suffix group: the groups that
+    /// [filter](crate::filter) takes as `group_starts`.
+    pub fn k_minus_1_marks(&self) -> &bitvec::vec::BitVec {
+        &self.k_minus_1_marks
+    }
+
+    /// One bit per node, set for the dummy nodes.
+    pub fn dummy_marks(&self) -> &bitvec::vec::BitVec {
+        &self.dummy_marks
+    }
+
+    /// Like [Dbg::new_with_k_minus_1_marks], with the dummy marks given too: both as
+    /// [Dbg::k_minus_1_marks] and [Dbg::dummy_marks] return them for `sbwt`, e.g. stored from an
+    /// earlier DBG of the same SBWT. Nothing is computed, so nothing checks that they are right.
+    pub fn from_marks(sbwt: &'a SbwtIndex<SS>, k_minus_1_marks: bitvec::vec::BitVec, dummy_marks: bitvec::vec::BitVec) -> Self {
+        assert_eq!(k_minus_1_marks.len(), sbwt.n_sets());
+        assert_eq!(dummy_marks.len(), sbwt.n_sets());
+        Self{sbwt, k_minus_1_marks, dummy_marks}
     }
 
 }
@@ -441,11 +518,93 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 #[cfg(test)]
 mod tests {
     use std::io::BufRead;
+    use std::sync::Arc;
 
-    use crate::{BitPackedKmerSortingMem, util};
+    use crate::{BitPackedKmerSortingMem, LcsArray, MergeInterleaving, SbwtIndex, SubsetSeq, merge_without_cleanup, util};
     use bitvec::prelude::*;
     use rand_chacha::rand_core::RngCore;
     use super::*;
+
+    /// A walk_unitig_from built from the public node operations, as a reference for the tests of
+    /// walk_unitig_from.
+    fn walk_unitig_from_reference<SS: SubsetSeq + Send + Sync>(dbg: &Dbg<SS>, mut v: Node) -> Vec<Node> {
+        let v0 = v;
+        let mut nodes = vec![v];
+        let mut out_labels_buf = Vec::<u8>::new();
+        while dbg.outdegree(v) == 1 {
+            out_labels_buf.clear();
+            dbg.push_outlabels(v, &mut out_labels_buf);
+            let c = out_labels_buf[0];
+            v = dbg.follow_outedge(v, c).unwrap();
+            if v != v0 && dbg.indegree(v) == 1 {
+                nodes.push(v);
+            } else { break; }
+        }
+        nodes
+    }
+
+    /// Checks walk_unitig_from against the reference from every node of the graph (not only from
+    /// unitig starts, so that walks into branches and around cycles are covered too).
+    fn check_walk_unitig_from<SS: SubsetSeq + Send + Sync>(sbwt: &SbwtIndex<SS>, case: &str) {
+        let lcs = LcsArray::from_sbwt(sbwt, 2, false);
+        let dbg = Dbg::new(sbwt, Some(&lcs), 2);
+        let mut buf = Vec::new();
+        for v in dbg.node_iterator() {
+            assert_eq!(dbg.walk_unitig_from(v, &mut buf), walk_unitig_from_reference(&dbg, v), "{case}: node {}", v.id);
+        }
+    }
+
+    #[test]
+    fn walk_unitig_from_matches_reference() {
+        for k in [3, 5, 12, 31] {
+            let long = util::gen_random_dna_string(1000, k as u64);
+            let short: Vec<Vec<u8>> = (0..60).map(|i| util::gen_random_dna_string(k + 5, 2000 + i)).collect();
+            let cycle: Vec<u8> = b"ACGTTGCATGCAAGCTTGCA".iter().cycle().take(200).copied().collect(); // A cyclic unitig
+            let mut kmer_set: Vec<Vec<u8>> = long.windows(k).step_by(2).map(|w| w.to_vec()).collect();
+            kmer_set.sort();
+            kmer_set.dedup();
+            let cases: Vec<(&str, Vec<&[u8]>)> = vec![
+                ("long", vec![long.as_slice()]),
+                ("short", short.iter().map(|s| s.as_slice()).collect()),
+                ("cycle", vec![cycle.as_slice()]),
+                ("long + cycle", vec![long.as_slice(), cycle.as_slice()]),
+            ];
+            for (name, seqs) in cases {
+                let (mut sbwt, _) = BitPackedKmerSortingMem::new_from_slices(&seqs, k).run();
+                sbwt.build_select();
+                check_walk_unitig_from(&sbwt, &format!("{name}, k={k}"));
+            }
+            let (mut sbwt, _) = BitPackedKmerSortingMem::new_from_vecs(&kmer_set, k).run();
+            sbwt.build_select();
+            check_walk_unitig_from(&sbwt, &format!("k-mer set, k={k}"));
+
+            // A merged index that keeps its redundant dummy nodes: groups with a dummy and real k-mers
+            let (a, _) = BitPackedKmerSortingMem::new_from_slices(&[&long[..600]], k).run();
+            let (b, _) = BitPackedKmerSortingMem::new_from_slices(&short.iter().map(|s| s.as_slice()).chain([&long[400..]]).collect::<Vec<_>>(), k).run();
+            let il = MergeInterleaving::new(&a, &b, false, 2);
+            let mut merged = merge_without_cleanup(Arc::new(a), Arc::new(b), Arc::new(il), 0, 2);
+            merged.build_select();
+            check_walk_unitig_from(&merged, &format!("merge with redundant dummies, k={k}"));
+        }
+    }
+
+    #[test]
+    fn k_minus_1_marks_with_and_without_lcs() {
+        // Over 200 000 nodes: several parallel chunks of the column inversion
+        let k = 31;
+        let long = util::gen_random_dna_string(200_000, 7);
+        let short: Vec<Vec<u8>> = (0..2000).map(|i| util::gen_random_dna_string(k + 10, 3000 + i)).collect();
+        let seqs: Vec<&[u8]> = short.iter().map(|s| s.as_slice()).chain([long.as_slice()]).collect();
+        let (mut sbwt, lcs) = BitPackedKmerSortingMem::new_from_slices(&seqs, k).build_lcs(true).run();
+        sbwt.build_select();
+        let with_lcs = Dbg::new(&sbwt, lcs.as_ref(), 2);
+        for n_threads in [1, 3] {
+            let without_lcs = Dbg::new(&sbwt, None, n_threads);
+            assert_eq!(without_lcs.k_minus_1_marks, with_lcs.k_minus_1_marks, "{n_threads} thread(s)");
+            let low_memory = Dbg::new_low_memory(&sbwt, None, n_threads);
+            assert_eq!(low_memory.k_minus_1_marks, with_lcs.k_minus_1_marks, "{n_threads} thread(s), 3-bit labels");
+        }
+    }
 
     #[test]
     fn indegree_with_redundant_dummy_in_neighbor() {

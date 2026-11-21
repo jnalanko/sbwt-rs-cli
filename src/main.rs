@@ -796,14 +796,17 @@ fn resolve_lut_len<SS: SubsetSeq>(index1: &SbwtIndex<SS>, index2: &SbwtIndex<SS>
     lut_len
 }
 
-fn run_merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex<SS>, index2: SbwtIndex<SS>, low_ram: bool, n_threads: usize) -> SbwtIndex<SS> {
+fn run_merge<SS: SubsetSeq + Send + Sync>(index1: SbwtIndex<SS>, index2: SbwtIndex<SS>, low_ram: bool, keep_redundant_dummies: bool, n_threads: usize) -> SbwtIndex<SS> {
     let lut_len = resolve_lut_len(&index1, &index2);
 
     log::info!("Computing the merge interleaving (low-ram mode: {})", low_ram);
     let interl = MergeInterleaving::new(&index1, &index2, low_ram, n_threads);
     log::info!("Executing the merge");
-    let merged = merge(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads);
-    merged
+    if keep_redundant_dummies {
+        merge_without_cleanup(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads)
+    } else {
+        merge(Arc::new(index1), Arc::new(index2), Arc::new(interl), lut_len, n_threads)
+    }
 }
 
 fn merge_command(matches: &clap::ArgMatches) {
@@ -814,6 +817,7 @@ fn merge_command(matches: &clap::ArgMatches) {
     let sbwt_outfile = matches.get_one::<std::path::PathBuf>("output").unwrap();
     let cpp_format = matches.get_flag("load-cpp-format");
     let low_ram = matches.get_flag("low-ram");
+    let keep_redundant_dummies = matches.get_flag("keep-redundant-dummies");
 
     // Open output file (open early to fail early if there is a problem)
     let mut out = BufWriter::new(File::create(sbwt_outfile).unwrap());
@@ -825,13 +829,13 @@ fn merge_command(matches: &clap::ArgMatches) {
     // To avoid variants^2 match arms, we require that both indices have the same SubsetSeq implementation.
     match (index1, index2) {
         (SbwtIndexVariant::SubsetMatrix(sbwt1), SbwtIndexVariant::SubsetMatrix(sbwt2)) => {
-            let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
+            let merged = run_merge(sbwt1, sbwt2, low_ram, keep_redundant_dummies, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
             SbwtIndexVariant::SubsetMatrix(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt1), SbwtIndexVariant::SubsetCorrectionSets(sbwt2)) => {
-            let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
+            let merged = run_merge(sbwt1, sbwt2, low_ram, keep_redundant_dummies, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
             SbwtIndexVariant::SubsetCorrectionSets(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
@@ -1464,6 +1468,11 @@ fn main() {
             .arg(clap::Arg::new("low-ram")
                 .help("Enable optimizations to reduce peak RAM at the expense of slower running time.")
                 .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("keep-redundant-dummies")
+                .help("Do not remove the dummy nodes that become redundant in the merge. The result has the same k-mers, but may have more dummy nodes.")
+                .long("keep-redundant-dummies")
                 .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("load-cpp-format")

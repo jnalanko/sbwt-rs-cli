@@ -479,4 +479,27 @@ mod tests {
 
         eprintln!("{:?}", SFS);
     }
+
+    #[test]
+    fn lcs_of_tiny_indexes_with_many_threads() {
+        // An index with only the root (no k-mers, e.g. an empty intersection) and indexes with
+        // fewer nodes than threads: the low-memory construction splits the nodes into one range
+        // per thread, and then the first range has no edges and the ranges after it are empty.
+        let k = 5;
+        let cases: Vec<Vec<Vec<u8>>> = vec![
+            vec![],
+            vec![b"ACGTA".to_vec()],
+            vec![b"ACGTACG".to_vec(), b"TTTTT".to_vec()],
+        ];
+        for kmers_seqs in cases {
+            let (sbwt, _) = BitPackedKmerSortingMem::new_from_vecs(&kmers_seqs, k).run();
+            let expected = LcsArray::from_sbwt(&sbwt, 1, false);
+            for n_threads in [1, 2, 3, 8, 64] {
+                for optimize_peak_ram in [false, true] {
+                    let lcs = LcsArray::from_sbwt(&sbwt, n_threads, optimize_peak_ram);
+                    assert_eq!(lcs, expected, "n_sets={} n_threads={n_threads} optimize_peak_ram={optimize_peak_ram}", sbwt.n_sets());
+                }
+            }
+        }
+    }
 }

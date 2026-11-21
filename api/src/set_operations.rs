@@ -2,10 +2,11 @@ pub mod interleaving;
 mod common;
 mod merge;
 mod intersect_difference;
+mod dummy_chains;
 
-pub use interleaving::MergeInterleaving;
-pub use merge::merge;
-pub use intersect_difference::{intersect, difference};
+pub use interleaving::{MergeInterleaving, ThreeWayInterleaving, result_k_minus_1_marks};
+pub use merge::{merge, merge_without_cleanup, merge_with_removed_positions};
+pub use intersect_difference::{intersect, intersect_with_removed_positions, difference, difference_with_removed_positions, filter, filter_with_removed_positions};
 
 #[cfg(test)]
 mod tests {
@@ -127,7 +128,8 @@ mod tests {
 
     // ── Merge helpers ──────────────────────────────────────────────────
 
-fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
+// Returns the number of redundant dummy nodes removed by the merge
+fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) -> usize {
         // Original logic: Build individual indices
         let (sbwt1, _) = BitPackedKmerSortingMem::new_from_slices(&[seq1], k)
             .n_threads(n_threads)
@@ -166,6 +168,51 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         merged_kmers.sort();
 
         assert_eq!(true_kmers, merged_kmers);
+
+        check_merge_impl(&sbwt1, &sbwt2, &inter_high_ram, &sbwt_merged, n_threads)
+    }
+
+    // Checks both modes of merge_impl against the result of merge, and merge_without_cleanup.
+    // Returns the number of removed positions.
+    fn check_merge_impl(sbwt1: &SbwtIndex<SubsetMatrix>, sbwt2: &SbwtIndex<SubsetMatrix>, inter: &MergeInterleaving, sbwt_merged: &SbwtIndex<SubsetMatrix>, n_threads: usize) -> usize {
+        let merged_length = inter.s1.len();
+
+        // With stripping: same index as merge, and the removed marks describe the difference
+        let (mut stripped, removed) = merge::merge_impl(Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()), Arc::new(inter.clone()), 4, true, n_threads);
+        let removed = removed.unwrap();
+        assert_eq!(&stripped, sbwt_merged);
+        assert_eq!(removed.len(), merged_length);
+        assert_eq!(stripped.n_sets(), merged_length - removed.count_ones());
+        for p in removed.iter_ones() {
+            assert!(inter.is_dummy[p], "non-dummy position {} was removed", p);
+        }
+
+        // Without stripping: colex positions are exactly the interleaving positions
+        let (mut unstripped, none) = merge::merge_impl(Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()), Arc::new(inter.clone()), 4, false, n_threads);
+        assert!(none.is_none());
+        assert_eq!((stripped.clone(), removed.clone()), merge_with_removed_positions(Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()), Arc::new(inter.clone()), 4, n_threads));
+        assert_eq!(unstripped, merge_without_cleanup(Arc::new(sbwt1.clone()), Arc::new(sbwt2.clone()), Arc::new(inter.clone()), 4, n_threads));
+        assert_eq!(unstripped.n_sets(), merged_length);
+        assert_eq!(unstripped.n_kmers(), stripped.n_kmers());
+        assert_eq!(unstripped.compute_dummy_node_marks(), inter.is_dummy);
+        // The groups of both results, from the groups of the merge plan
+        assert_eq!(result_k_minus_1_marks(&inter.is_leader, Some(&removed), n_threads), stripped.mark_k_minus_1_mers(1));
+        assert_eq!(result_k_minus_1_marks(&inter.is_leader, None, n_threads), unstripped.mark_k_minus_1_mers(1));
+
+        // The j-th kept position of the unstripped index is position j of the stripped index
+        stripped.build_select();
+        unstripped.build_select();
+        for (j, p) in removed.iter_zeros().enumerate() {
+            assert_eq!(unstripped.access_kmer(p), stripped.access_kmer(j));
+        }
+
+        // Every real k-mer can be found in the unstripped index at the same place as in the interleaving
+        for p in inter.is_dummy.iter_zeros() {
+            let kmer = unstripped.access_kmer(p);
+            assert_eq!(unstripped.search(&kmer), Some(p..p+1));
+        }
+
+        removed.count_ones()
     }
 
     #[test]
@@ -193,7 +240,14 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
     fn test_merge_redundant_dummy() {
         let seq1 = b"ACTGA";
         let seq2 = b"CTGAC";
-        check_merge(seq1, seq2, 5, 1);
+        assert!(check_merge(seq1, seq2, 5, 1) > 0);
+    }
+
+    #[test]
+    fn test_merge_all_dummies_redundant_keeps_root() {
+        // The 3-mers of the cyclic string AACGT, split so that every k-mer of the union has a
+        // predecessor in the union. All dummy chains become redundant, but the root must stay.
+        assert!(check_merge(b"AACGT", b"CGTAAC", 3, 1) > 0);
     }
 
     #[test]
@@ -208,6 +262,91 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         for n_threads in [1, 2, 4] {
             check_merge(&seq1, &seq2, 5, n_threads);
         }
+    }
+
+    #[test]
+    fn test_merge_redundant_dummy_long_k21() {
+        // Same redundant-dummy trigger as test_merge_redundant_dummy, but with k = 21. With k = 5,
+        // the random tails of test_merge_redundant_dummy_long contain a k-mer ending in CTGA, so the
+        // trigger dummy is never created and nothing is stripped. With k = 21 that is very unlikely,
+        // so this test exercises the strip pass on multiple threads.
+        let p = crate::util::gen_random_dna_string(20, 303); // (k-1)-mer shared by the two triggers
+        let tail1 = crate::util::gen_random_dna_string(2000, 101);
+        let tail2 = crate::util::gen_random_dna_string(2000, 202);
+        let seq1: Vec<u8> = b"A".iter().chain(p.iter()).chain(tail1.iter()).copied().collect();
+        let seq2: Vec<u8> = p.iter().chain(b"C".iter()).chain(tail2.iter()).copied().collect();
+        for n_threads in [1, 2, 4] {
+            assert!(check_merge(&seq1, &seq2, 21, n_threads) > 0);
+        }
+    }
+
+    #[test]
+    fn test_merge_interleaved_kmer_sets() {
+        // The k-mers of random sequences, dealt out in alternating blocks to the two inputs. The
+        // first k-mer of every block is a source in its own input but has its predecessor in the
+        // other one, so the merge has many redundant dummy chains, of all lengths. The merge must
+        // equal a from-scratch build of the union, dummies included.
+        for k in [3, 4, 6, 10] {
+            for seed in [1u64, 2, 3, 4, 5] {
+                let seq = crate::util::gen_random_dna_string(300, seed);
+                let kmers = kmers_of(&seq, k);
+                let (mut s1, mut s2) = (vec![], vec![]);
+                let mut start = 0;
+                for block_idx in 0.. {
+                    if start >= kmers.len() { break; }
+                    let end = (start + block_idx % 4 + 1).min(kmers.len()); // Blocks of 1 to 4 k-mers
+                    if block_idx % 2 == 0 { s1.extend_from_slice(&kmers[start..end]) } else { s2.extend_from_slice(&kmers[start..end]) }
+                    start = end;
+                }
+                let union: Vec<Vec<u8>> = s1.iter().chain(s2.iter()).cloned().collect();
+                let truth = index_fingerprint(&build_from_kmer_set(&kmers_of_set(&union), k, false));
+                let a = build_from_kmer_set(&s1, k, false);
+                let b = build_from_kmer_set(&s2, k, false);
+                for n_threads in [1, 3] {
+                    let il = Arc::new(MergeInterleaving::new(&a, &b, false, n_threads));
+                    let (m, removed) = merge_with_removed_positions(Arc::new(a.clone()), Arc::new(b.clone()), il.clone(), 0, n_threads);
+                    assert!(removed.any(), "nothing to strip: k={k} seed={seed}");
+                    assert_eq!(truth, index_fingerprint(&m), "k={k} seed={seed} n_threads={n_threads}");
+                    assert_eq!(result_k_minus_1_marks(&il.is_leader, Some(&removed), n_threads), m.mark_k_minus_1_mers(1), "k={k} seed={seed} n_threads={n_threads}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_input_with_redundant_dummies() {
+        // An input made by merge_without_cleanup has redundant dummies of its own. Merging it with
+        // another index removes those as well, so the result equals a from-scratch build.
+        for k in [3, 4, 6, 10] {
+            for seed in [1u64, 2, 3, 4, 5] {
+                let seq = crate::util::gen_random_dna_string(300, seed);
+                let kmers = kmers_of(&seq, k);
+                // Deal the k-mers out in blocks of 1 to 3 to three sets
+                let mut sets: [Vec<Vec<u8>>; 3] = Default::default();
+                let mut start = 0;
+                for block_idx in 0.. {
+                    if start >= kmers.len() { break; }
+                    let end = (start + block_idx % 3 + 1).min(kmers.len());
+                    sets[block_idx % 3].extend_from_slice(&kmers[start..end]);
+                    start = end;
+                }
+                let [a, b, c] = sets.map(|s| Arc::new(build_from_kmer_set(&s, k, false)));
+                let il = MergeInterleaving::new(&a, &b, false, 1);
+                let ab = Arc::new(merge_without_cleanup(a, b, Arc::new(il), 0, 1));
+                let il = MergeInterleaving::new(&ab, &c, false, 1);
+                let abc = merge(ab, c, Arc::new(il), 0, 1);
+
+                let truth = index_fingerprint(&build_from_kmer_set(&kmers_of_set(&kmers), k, false));
+                assert_eq!(truth, index_fingerprint(&abc), "k={k} seed={seed}");
+            }
+        }
+    }
+
+    /// `kmers` without repeats, in the order they first occur.
+    fn kmers_of_set(kmers: &[Vec<u8>]) -> Vec<Vec<u8>> {
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        for x in kmers { if !out.contains(x) { out.push(x.clone()); } }
+        out
     }
 
     // ── Intersection helpers ──────────────────────────────────────────────────
@@ -308,8 +447,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // Both contain {GTACG, TACGA, ACGAA, CGAAA, GAAAA, AAAAA, …} from the shared suffix.
         // GTACG's predecessor is AGTAC in seq1 and CGTAC in seq2; neither is in the
         // intersection, so GTACG becomes a NEW source node in the intersection.
-        // An auxiliary index must be built and merged into both inputs to supply
-        // the missing dummy predecessor chain.
+        // The repair must supply the missing dummy predecessor chain.
         let shared = b"GTACGAAAAAAAAAAAAAAA" as &[u8];
         let seq1: Vec<u8> = b"A".iter().chain(shared).copied().collect();
         let seq2: Vec<u8> = b"C".iter().chain(shared).copied().collect();
@@ -411,8 +549,8 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // (continuations A vs C, nothing survives), so its ancestors $$AC and $$$A are
         // marked dead unconditionally. But $$AC also feeds the live $ACG chain of the
         // shared k-mer ACGT — killing it orphans $ACG. The orphan's incoming-edge bit is
-        // cleared, it is collected as a source node, and the auxiliary index rebuilds the
-        // chain $$$A, $$AC, $ACG, re-creating exactly the killed ancestors still needed.
+        // cleared, it is collected as a source node, and the repair rebuilds the chain
+        // $$$A, $$AC, $ACG, re-creating exactly the killed ancestors still needed.
         // Expected result: padded spectrum of {ACGT}.
         let k = 4;
         let mut isec_kmers: Vec<Vec<u8>> = vec![b"ACGT".to_vec()];
@@ -449,7 +587,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // k=4. Intersection = {ACGT}, a new source (predecessors TACG / GACG not shared).
         // Both indexes contain dummy $$AC (via sources ACAA / ACCC) whose edges (A vs C)
         // AND to nothing -> pass 1 flags it dead. But ACGT's fresh chain $$$A,$$AC,$ACG
-        // passes through $$AC, so the aux index must revive it.
+        // passes through $$AC, so the repair must revive it.
         let seq1 = b"ACAATACGT";
         let seq2 = b"ACCCGACGT";
         check_intersect(seq1, seq2, 4, 1);
@@ -735,13 +873,12 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
     }
 
     #[test]
-    fn test_empty_aux_index_multithreaded() {
-        // Dead-end-only set operations run the dummy-repair pass with no source k-mers,
-        // so the auxiliary index is a root-only SBWT (one row, zero edges). Its label
-        // vector used to be split across threads inside the three-way interleaving,
-        // producing an empty range that tripped an assert in push_all_labels_forward —
-        // reachable at n_threads >= 2 in both intersect and difference. Fingerprints are
-        // compared because an empty result cannot be spectrum-reconstructed in parallel.
+    fn test_repair_without_sources_multithreaded() {
+        // Dead-end-only set operations run the dummy repair with no source k-mers: it only
+        // removes dead chains, and the root is the only needed dummy node. The merge plans are
+        // tiny, so with several threads some pieces are empty, in intersect and difference.
+        // Fingerprints are compared because an empty result cannot be spectrum-reconstructed
+        // in parallel.
         let k = 5;
         // Difference: {ACCTT} \ {CACCT, ACCTT} = {} with index1's whole chain dangling.
         let a = build_from_kmer_set(&kmers_of(b"ACCTT", k), k, true);
@@ -764,6 +901,123 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
                 assert_eq!(truth, index_fingerprint(&i),
                     "intersect: n_threads={n_threads} opt_ram={opt_ram}");
             }
+        }
+    }
+
+    #[test]
+    fn test_more_threads_than_positions() {
+        // With more threads than positions, some thread pieces are empty, in the interleaving
+        // and in all three set operations. The results must not depend on the thread count.
+        let cases: [(&[u8], &[u8], usize); 4] = [
+            (b"ACGTA", b"TTGCA", 4),
+            (b"ACTGA", b"CTGAC", 5),  // Redundant dummy in the merge
+            (b"AACGT", b"CGTAAC", 3), // All dummies redundant in the merge
+            (b"ACCTT", b"CACCTT", 5), // Dummy repair in the difference
+        ];
+        for (seq1, seq2, k) in cases {
+            let a = build_from_kmer_set(&kmers_of(seq1, k), k, true);
+            let b = build_from_kmer_set(&kmers_of(seq2, k), k, true);
+            let mut reference = None;
+            for n_threads in [1, 3, 8, 64] {
+                for opt_ram in [false, true] {
+                    let il = Arc::new(MergeInterleaving::new(&a, &b, opt_ram, n_threads));
+                    let (a_arc, b_arc) = (Arc::new(a.clone()), Arc::new(b.clone()));
+                    let m = merge(a_arc.clone(), b_arc.clone(), il.clone(), 0, n_threads);
+                    let i = intersect(a_arc.clone(), b_arc.clone(), il.clone(), 0, opt_ram, n_threads).unwrap();
+                    let d = difference(a_arc, b_arc, il.clone(), 0, opt_ram, n_threads).unwrap();
+                    let got = (Arc::try_unwrap(il).unwrap(),
+                        index_fingerprint(&m), index_fingerprint(&i), index_fingerprint(&d));
+                    match &reference {
+                        None => reference = Some(got),
+                        Some(r) => assert_eq!(*r, got,
+                            "seq1={seq1:?} seq2={seq2:?} k={k} n_threads={n_threads} opt_ram={opt_ram}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_intersect_and_difference_with_removed_positions() {
+        // Every node of the result is at an unremoved position of the returned interleaving, in
+        // order, and the node at the position is the node of that input (or a new dummy node
+        // of a repaired chain if it is in neither input).
+        let k = 5;
+        let shared = b"GTACGAAAAAAAAAAAAAAA" as &[u8];
+        let repair1: Vec<u8> = b"A".iter().chain(shared).copied().collect();
+        let repair2: Vec<u8> = b"C".iter().chain(shared).copied().collect();
+        let random1 = crate::util::gen_random_dna_string(400, 21);
+        let random2: Vec<u8> = random1[150..].iter().chain(crate::util::gen_random_dna_string(200, 22).iter()).copied().collect();
+        let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
+            ("no repair", b"AAGTACGAAAAAAAAAAACCCC".to_vec(), b"AAGTACGAAAAAAAAAAATTTT".to_vec()),
+            ("repair", repair1, repair2),
+            ("dead chain and repair", b"ACCTTGGGTACGTTTTTTTTTTTT".to_vec(), b"ACCTGAGGTACGTTTTTTTTTTTT".to_vec()),
+            ("empty intersection", b"ACCTT".to_vec(), b"GGGCA".to_vec()),
+            ("random", random1, random2),
+            // All cycles: the only kind of difference that needs no dummy chains beyond the root,
+            // so the only one that takes the direct pass
+            ("cycle", b"ACG".iter().cycle().take(k + 32).copied().collect(), b"TTTTTTTT".to_vec()),
+        ];
+        for is_difference in [false, true] {
+            let (mut with_s3, mut without_s3, mut n_new_nodes) = (false, false, 0);
+            for (case, seq1, seq2) in cases.iter() {
+                let case = format!("{case}, difference = {is_difference}");
+                for n_threads in [1, 3] {
+                    let index1 = build_from_kmer_set(&kmers_of(seq1, k), k, true);
+                    let index2 = build_from_kmer_set(&kmers_of(seq2, k), k, true);
+                    let il = Arc::new(MergeInterleaving::new(&index1, &index2, false, n_threads));
+                    let (plain, (mut result, three_way, removed)) = if is_difference {
+                        (difference(Arc::new(index1.clone()), Arc::new(index2.clone()), il.clone(), 0, false, n_threads).unwrap(),
+                         difference_with_removed_positions(Arc::new(index1.clone()), Arc::new(index2.clone()), il, 0, false, n_threads).unwrap())
+                    } else {
+                        (intersect(Arc::new(index1.clone()), Arc::new(index2.clone()), il.clone(), 0, false, n_threads).unwrap(),
+                         intersect_with_removed_positions(Arc::new(index1.clone()), Arc::new(index2.clone()), il, 0, false, n_threads).unwrap())
+                    };
+                    assert_eq!(index_fingerprint(&result), index_fingerprint(&plain), "{case}");
+
+                    result.build_select(); // The inputs already have select support
+                    assert_eq!(removed.len(), three_way.s1.len(), "{case}");
+                    assert_eq!(removed.count_zeros(), result.n_sets(), "{case}");
+                    with_s3 |= three_way.s3.any();
+                    without_s3 |= !three_way.s3.any();
+
+                    let (mut c1, mut c2) = (0, 0);
+                    let mut result_colex = 0;
+                    let mut nodes = Vec::<Vec<u8>>::with_capacity(removed.len()); // The node at each position
+                    for p in 0..removed.len() {
+                        if !removed[p] {
+                            let kmer = result.access_kmer(result_colex);
+                            if three_way.s1[p] {
+                                assert_eq!(kmer, index1.access_kmer(c1), "{case}: position {p}");
+                            } else if three_way.s2[p] {
+                                assert_eq!(kmer, index2.access_kmer(c2), "{case}: position {p}");
+                            } else {
+                                assert!(three_way.s3[p], "{case}: position {p} is in no input");
+                                assert!(kmer.contains(&b'$'), "{case}: new node {} is not a dummy", String::from_utf8_lossy(&kmer));
+                                n_new_nodes += 1;
+                            }
+                            nodes.push(kmer);
+                            result_colex += 1;
+                        } else if three_way.s1[p] {
+                            nodes.push(index1.access_kmer(c1));
+                        } else {
+                            assert!(three_way.s2[p], "{case}: removed position {p} is in no input");
+                            nodes.push(index2.access_kmer(c2));
+                        }
+                        c1 += three_way.s1[p] as usize;
+                        c2 += three_way.s2[p] as usize;
+                    }
+                    // The groups of the merge plan: a position starts one iff its (k-1)-suffix differs
+                    // from that of the previous position
+                    for p in 0..nodes.len() {
+                        let starts_group = p == 0 || nodes[p][1..] != nodes[p - 1][1..];
+                        assert_eq!(three_way.is_leader[p], starts_group, "{case}: group start at position {p} ({})", String::from_utf8_lossy(&nodes[p]));
+                    }
+                    assert_eq!(result_k_minus_1_marks(&three_way.is_leader, Some(&removed), n_threads), result.mark_k_minus_1_mers(1), "{case}: groups of the result");
+                }
+            }
+            assert!(with_s3 && without_s3, "both paths must be covered, difference = {is_difference}");
+            assert!(n_new_nodes > 0, "new dummy nodes from the repair must be covered, difference = {is_difference}");
         }
     }
 
@@ -849,7 +1103,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // outgoing edges of a group are stored once, at its first row, and are computed by OR-ing
         // over the group's rows, so a group that is partly removed exercises that per-group
         // reduction and the "does this group hold a real difference k-mer" test that selects
-        // between the index1 and auxiliary-index edge rules.
+        // between the edge rule of the inputs and the edges of the repaired chains.
         for k in [3, 5] {
             // All four k-mers cA^(k-1) share the (k-1)-suffix A^(k-1), so they form one group.
             let group: Vec<Vec<u8>> = [b'A', b'C', b'G', b'T'].iter()
@@ -875,7 +1129,7 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
         // The difference is {ACCTT}, whose chain must keep the C branch and drop the G branch.
         // Selecting edges by "in index1 but not index2" would set both, because index2 has
         // nothing in the $$$A group to cancel the G — a phantom edge into a row the result does
-        // not contain.  The G branch must come from the auxiliary index or not at all.
+        // not contain.  The G branch must come from a repaired chain or not at all.
         let a = vec![b"ACCTT".to_vec(), b"AGGGG".to_vec()];
         let b = vec![b"AGGGG".to_vec(), b"TAGGG".to_vec()];
         assert_difference_correct(&a, &b, 5, "phantom edge, C branch survives");
@@ -974,5 +1228,191 @@ fn check_merge(seq1: &[u8], seq2: &[u8], k: usize, n_threads: usize) {
             assert_difference_correct(&a, &b, k, "multi-sequence inputs");
             assert_difference_correct(&b, &a, k, "multi-sequence inputs reversed");
         }
+    }
+
+    // ── Filter ──────────────────────────────────────────────────────────────
+
+    /// Filters an index of `kmers` by `keep_kmer` and checks that the result is the same as an index
+    /// built from scratch from the kept k-mers, with and without given group starts, and that every
+    /// node of the result is at an unremoved position of the returned merge plan: a node of the
+    /// input, or a new dummy node of the repair.
+    fn check_filter(kmers: &[Vec<u8>], k: usize, keep_kmer: impl Fn(&[u8]) -> bool, case: &str) {
+        let index = build_from_kmer_set(kmers, k, true);
+        let keep: BitVec<u64, Lsb0> = (0..index.n_sets()).map(|i| {
+            let kmer = index.access_kmer(i);
+            !kmer.contains(&b'$') && keep_kmer(&kmer)
+        }).collect();
+        let expected: Vec<Vec<u8>> = kmers.iter().filter(|x| keep_kmer(x)).cloned().collect();
+        let truth = index_fingerprint(&build_from_kmer_set(&expected, k, false));
+
+        let group_starts = index.mark_k_minus_1_mers(1);
+        let group_starts: BitVec<u64, Lsb0> = group_starts.iter().by_vals().collect();
+        for (given_groups, n_threads, optimize_peak_ram) in [(false, 1, false), (true, 3, false), (false, 3, true)] {
+            let case = format!("{case}, k = {k}, group starts given: {given_groups}, {n_threads} threads, low RAM: {optimize_peak_ram}");
+            let groups = given_groups.then(|| group_starts.clone());
+            let plain = filter(Arc::new(index.clone()), keep.clone(), groups.clone(), 0, optimize_peak_ram, n_threads).unwrap();
+            assert_eq!(index_fingerprint(&plain), truth, "{case}");
+
+            let (mut result, plan, removed) = filter_with_removed_positions(Arc::new(index.clone()), keep.clone(), groups, 0, optimize_peak_ram, n_threads).unwrap();
+            assert_eq!(index_fingerprint(&result), truth, "{case}");
+            result.build_select();
+            assert_eq!(removed.len(), plan.s1.len(), "{case}");
+            assert_eq!(removed.count_zeros(), result.n_sets(), "{case}");
+            assert_eq!(result_k_minus_1_marks(&plan.is_leader, Some(&removed), n_threads), result.mark_k_minus_1_mers(1), "{case}: groups of the result");
+            let mut c1 = 0;
+            let mut result_colex = 0;
+            for p in 0..removed.len() {
+                if !removed[p] {
+                    let kmer = result.access_kmer(result_colex);
+                    if plan.s1[p] {
+                        assert_eq!(kmer, index.access_kmer(c1), "{case}: position {p}");
+                    } else {
+                        assert!(plan.s3[p], "{case}: position {p} is in no input");
+                        assert!(kmer.contains(&b'$'), "{case}: new node {} is not a dummy", String::from_utf8_lossy(&kmer));
+                    }
+                    result_colex += 1;
+                }
+                c1 += plan.s1[p] as usize;
+            }
+        }
+    }
+
+    /// A deterministic pseudo-random choice of about `percent` % of the k-mers.
+    fn random_choice(kmer: &[u8], seed: u64, percent: u64) -> bool {
+        let mut h: u64 = 0xcbf29ce484222325 ^ seed;
+        for &b in kmer {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+        h % 100 < percent
+    }
+
+    #[test]
+    fn test_filter_random() {
+        for k in [3, 5, 8, 11] {
+            let genome = crate::util::gen_random_dna_string(300, 300 + k as u64);
+            let other = crate::util::gen_random_dna_string(150, 400 + k as u64);
+            let kmers = kmers_of_set(&[kmers_of(&genome, k), kmers_of(&other, k)].concat());
+            for percent in [0, 10, 50, 90, 100] {
+                for seed in [1, 2] {
+                    check_filter(&kmers, k, |x| random_choice(x, seed, percent), &format!("{percent} % random"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_substring() {
+        // Keeping the k-mers of a part of a sequence, which cuts it at both ends
+        let k = 7;
+        let genome = crate::util::gen_random_dna_string(400, 77);
+        let kmers = kmers_of(&genome, k);
+        let part = kmers_of(&genome[100..250], k);
+        check_filter(&kmers, k, |x| part.iter().any(|y| y == x), "middle part");
+        check_filter(&kmers, k, |x| !part.iter().any(|y| y == x), "without the middle part");
+    }
+
+    #[test]
+    fn test_filter_cycle() {
+        // A cycle needs no dummy chains beyond the root, which takes the direct pass when all of
+        // it is kept
+        for k in [3, 5, 8] {
+            let periodic: Vec<u8> = b"ACG".iter().cycle().take(k + 32).copied().collect();
+            let kmers = kmers_of(&periodic, k);
+            check_filter(&kmers, k, |_| true, "whole cycle");
+            check_filter(&kmers, k, |_| false, "nothing of a cycle");
+            check_filter(&kmers, k, |x| x[0] != b'A', "cycle cut");
+        }
+    }
+
+    // ── Dummy chains of the repair ──────────────────────────────────────────
+
+    /// Checks needed_dummies against the definition: the dummy chains of the sources as strings,
+    /// each at its position among all nodes of the inputs in colex order (where `$` is the smallest
+    /// character), or before the first larger node if it is new. Without kmers2, the merge plan is
+    /// index1 with itself, as for a filter.
+    fn check_needed_dummies(kmers1: &[Vec<u8>], kmers2: Option<&[Vec<u8>]>, k: usize, sources: &[Vec<u8>], case: &str) -> (usize, usize) {
+        let index1 = build_from_kmer_set(kmers1, k, true);
+        let index2 = kmers2.map(|kmers2| build_from_kmer_set(kmers2, k, true));
+        let (s1, s2) = match &index2 {
+            Some(index2) => {
+                let plan = MergeInterleaving::new(&index1, index2, false, 1);
+                (plan.s1, Some(plan.s2))
+            },
+            None => (bitvec![u64, Lsb0; 1; index1.n_sets()], None),
+        };
+        // The nodes of the inputs as strings, in the order of the merge plan
+        let (mut c1, mut c2) = (0, 0);
+        let nodes: Vec<Vec<u8>> = (0..s1.len()).map(|p| {
+            let node = if s1[p] { index1.access_kmer(c1) } else { index2.as_ref().unwrap().access_kmer(c2) };
+            c1 += s1[p] as usize;
+            c2 += s2.as_ref().is_some_and(|s2| s2[p]) as usize;
+            node
+        }).collect();
+        let colex_less = |a: &[u8], b: &[u8]| a.iter().rev().lt(b.iter().rev());
+        assert!(nodes.windows(2).all(|w| colex_less(&w[0], &w[1])), "{case}: the merge plan is not in colex order");
+
+        // Sources can be dummy nodes: some of them, as in a difference or a filter
+        let mut sources = sources.to_vec();
+        sources.extend((0..index1.n_sets()).map(|i| index1.access_kmer(i)).filter(|x| x.contains(&b'$') && x[k - 1] != b'$').step_by(3));
+        // The expected dummy nodes, with the edges of all sources through them
+        let mut expected_edges = std::collections::BTreeMap::<Vec<u8>, u8>::new();
+        for source in &sources {
+            let real: Vec<u8> = source.iter().copied().skip_while(|&c| c == b'$').collect();
+            for m in 0..real.len() {
+                let node: Vec<u8> = std::iter::repeat_n(b'$', k - m).chain(real[..m].iter().copied()).collect();
+                *expected_edges.entry(node).or_insert(0) |= 1 << crate::util::ACGT_TO_0123[real[m] as usize];
+            }
+        }
+        // New nodes with their position before the first larger node, existing ones by position
+        let mut expected_new = Vec::<super::dummy_chains::NewDummy>::new();
+        let mut expected_existing = std::collections::BTreeMap::<usize, u8>::from([(0, 0)]); // The root is always needed
+        for (node, edges) in expected_edges {
+            match nodes.iter().position(|x| *x == node) {
+                Some(pos) => *expected_existing.entry(pos).or_insert(0) |= edges,
+                None => {
+                    let n_dollars = node.iter().take_while(|&&c| c == b'$').count() as u32;
+                    expected_new.push(super::dummy_chains::NewDummy { pos: nodes.iter().filter(|x| colex_less(x, &node)).count(), n_dollars, edges });
+                },
+            }
+        }
+        expected_new.sort_by_key(|d| (d.pos, std::cmp::Reverse(d.n_dollars)));
+
+        let needed = super::dummy_chains::needed_dummies(&index1, index2.as_ref(), &s1, s2.as_ref(), &sources);
+        assert_eq!(needed.new, expected_new, "{case}");
+        // Sorted by position, each node once, with the edges of all sources through it
+        assert!(needed.existing.windows(2).all(|w| w[0].pos < w[1].pos), "{case}: existing nodes not sorted, or twice");
+        let existing: std::collections::BTreeMap<usize, u8> = needed.existing.iter().map(|e| (e.pos, e.edges)).collect();
+        assert_eq!(existing, expected_existing, "{case}");
+        (expected_new.len(), expected_existing.len())
+    }
+
+    #[test]
+    fn test_needed_dummies() {
+        use rand_chacha::rand_core::{RngCore, SeedableRng};
+        let (mut n_new, mut n_existing) = (0, 0);
+        let mut count = |(new, existing): (usize, usize)| { n_new += new; n_existing += existing; };
+        for k in [3, 5, 8, 11] {
+            for seed in 0..4_u64 {
+                let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(100 * k as u64 + seed);
+                let genome = crate::util::gen_random_dna_string(200, 500 + 10 * k as u64 + seed);
+                let mut piece = |len: usize| {
+                    let start = rng.next_u64() as usize % (genome.len() - len);
+                    genome[start..start + len].to_vec()
+                };
+                // Overlapping pieces of one genome, so that the chains of the sources share
+                // prefixes, and some of their dummy nodes exist in one input or both
+                let seqs1: Vec<Vec<u8>> = (0..6).map(|_| piece(k + 20)).collect();
+                let seqs2: Vec<Vec<u8>> = (0..6).map(|_| piece(k + 20)).collect();
+                let kmers1 = kmers_of_set(&seqs1.iter().flat_map(|s| kmers_of(s, k)).collect::<Vec<_>>());
+                let kmers2 = kmers_of_set(&seqs2.iter().flat_map(|s| kmers_of(s, k)).collect::<Vec<_>>());
+                let sources: Vec<Vec<u8>> = kmers1.iter().filter(|_| rng.next_u64() % 3 == 0).cloned().collect();
+                let case = format!("k = {k}, seed {seed}");
+                count(check_needed_dummies(&kmers1, Some(&kmers2), k, &sources, &format!("{case}, two inputs")));
+                count(check_needed_dummies(&kmers1, None, k, &sources, &format!("{case}, one input")));
+                count(check_needed_dummies(&kmers1, Some(&kmers2), k, &kmers1, &format!("{case}, all k-mers as sources")));
+            }
+        }
+        eprintln!("needed dummies checked: {n_new} new, {n_existing} existing");
+        assert!(n_new > 0 && n_existing > 0, "both new and existing dummy nodes must be covered");
     }
 }
