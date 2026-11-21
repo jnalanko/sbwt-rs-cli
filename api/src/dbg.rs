@@ -339,8 +339,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                     .filter(|&colex| !self.dummy_marks[colex])
                     .filter(|&colex| self.is_first_kmer_of_unitig(Node{id: colex}))
                     .for_each(|colex| {
-                        let mut out_labels_buf = Vec::<u8>::new();
-                        let nodes = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
+                        let nodes = self.walk_unitig_from(Node{id: colex});
                         callback(&nodes);
 
                         // Mark the nodes as visited
@@ -356,8 +355,6 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
 
                     let mut visited = visited.into_bitvec(); // Non-atomic
 
-                    let mut out_labels_buf = Vec::<u8>::new();
-
                     // Only disjoint cyclic unitigs remain. There are probably very few of these,
                     // so single-threaded iteration is ok.
                     let mut colex = 0_usize;
@@ -367,8 +364,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
                             None => break,
                         }
                         if !self.dummy_marks[colex] {
-                            out_labels_buf.clear();
-                            let nodes = self.walk_unitig_from(Node{id: colex}, &mut out_labels_buf);
+                            let nodes = self.walk_unitig_from(Node{id: colex});
                             callback(&nodes);
                             for u in nodes {
                                 assert!(!visited[u.id]);
@@ -446,7 +442,7 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
     /// `_out_labels_buf` is not used: the labels follow from the returned nodes.
     ///
     /// Panics if `v` is a dummy node.
-    pub fn walk_unitig_from(&self, v: Node, _out_labels_buf: &mut Vec<u8>) -> Vec<Node> {
+    pub fn walk_unitig_from(&self, v: Node) -> Vec<Node> {
         // Each step looks at the (k-1)-suffix group of the current node v only once:
         // - the outgoing edges of v are those of the group start (the group's set in the SBWT),
         // - the next node u is lf_step(group start, c), and
@@ -548,9 +544,8 @@ mod tests {
     fn check_walk_unitig_from<SS: SubsetSeq + Send + Sync>(sbwt: &SbwtIndex<SS>, case: &str) {
         let lcs = LcsArray::from_sbwt(sbwt, 2, false);
         let dbg = Dbg::new(sbwt, Some(&lcs), 2);
-        let mut buf = Vec::new();
         for v in dbg.node_iterator() {
-            assert_eq!(dbg.walk_unitig_from(v, &mut buf), walk_unitig_from_reference(&dbg, v), "{case}: node {}", v.id);
+            assert_eq!(dbg.walk_unitig_from(v), walk_unitig_from_reference(&dbg, v), "{case}: node {}", v.id);
         }
     }
 
