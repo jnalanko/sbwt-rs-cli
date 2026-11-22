@@ -499,6 +499,18 @@ impl<'a, SS: SubsetSeq + Send + Sync> Dbg<'a, SS> {
         &self.dummy_marks
     }
 
+    /// The SBWT of the graph.
+    pub fn sbwt(&self) -> &'a SbwtIndex<SS> {
+        self.sbwt
+    }
+
+    /// Takes the graph apart into its [(k-1)-suffix group marks](Dbg::k_minus_1_marks) and
+    /// [dummy marks](Dbg::dummy_marks), releasing the borrow of the SBWT. [Dbg::from_marks] puts
+    /// it back together.
+    pub fn into_marks(self) -> (bitvec::vec::BitVec, bitvec::vec::BitVec) {
+        (self.k_minus_1_marks, self.dummy_marks)
+    }
+
     /// Like [Dbg::new_with_k_minus_1_marks], with the dummy marks given too: both as
     /// [Dbg::k_minus_1_marks] and [Dbg::dummy_marks] return them for `sbwt`, e.g. stored from an
     /// earlier DBG of the same SBWT. Nothing is computed, so nothing checks that they are right.
