@@ -163,6 +163,9 @@ fn debug_assert_sbwt_invariant<SS: SubsetSeq>(index: &SbwtIndex<SS>, label: &str
 /// makes it unnecessary. This includes redundant dummy nodes that were already in the inputs, e.g. in the
 /// output of [merge_without_cleanup], so the result is the same as an index built from scratch. See
 /// [merge_without_cleanup] to keep them.
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them, so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn merge<SS: SubsetSeq + Send + Sync>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -176,6 +179,9 @@ pub fn merge<SS: SubsetSeq + Send + Sync>(
 /// Like [merge], but keeps the redundant dummy nodes introduced by the merge. The result is still
 /// a valid SBWT with the same k-mers, but may have more dummy nodes. Colex position `i` of the
 /// merged index corresponds exactly to position `i` of `interleaving`.
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them, so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn merge_without_cleanup<SS: SubsetSeq + Send + Sync>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -190,6 +196,9 @@ pub fn merge_without_cleanup<SS: SubsetSeq + Send + Sync>(
 /// bit per position of `interleaving`, set for the removed positions. Only dummy nodes are ever removed,
 /// and the remaining positions keep their order: colex position `j` of the merged index corresponds to
 /// the `j`-th unset bit.
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them, so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn merge_with_removed_positions<SS: SubsetSeq + Send + Sync>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,

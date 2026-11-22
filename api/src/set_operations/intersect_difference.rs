@@ -841,6 +841,9 @@ fn with_removed_positions<SS: SubsetSeq>((index, positions): (SbwtIndex<SS>, Opt
 /// dead-end chains.
 ///
 /// `optimize_peak_ram` has no effect: the interleaving is given, and the repair computes none.
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them (also on error), so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -865,6 +868,9 @@ pub fn intersect<SS: SubsetSeq + Send + Sync + Clone>(
 /// copied otherwise. If dummy chains are repaired, it is `interleaving` with the new dummy nodes of
 /// the chains inserted, and s3 marks the dummy nodes of the chains: a position that is only in s3
 /// is a new dummy node, in neither input.
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them (also on error), so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn intersect_with_removed_positions<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -895,6 +901,9 @@ pub fn intersect_with_removed_positions<SS: SubsetSeq + Send + Sync + Clone>(
 /// `s3_or[c] || (s1_or[c] && !s2_or[c])`, where `s3_or` are the edges of the dummy chains.
 ///
 /// `optimize_peak_ram` has no effect, as for [intersect].
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them (also on error), so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -911,6 +920,9 @@ pub fn difference<SS: SubsetSeq + Send + Sync + Clone>(
 /// Like [difference], but also returns the interleaving that the result consists of, and which of
 /// its positions are not in the result, as [intersect_with_removed_positions] does for the
 /// intersection. The root (position 0) is in the result although it is in both inputs.
+///
+/// The Arcs are freed by the time this function returns: it drops them and every clone it makes of
+/// them (also on error), so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn difference_with_removed_positions<SS: SubsetSeq + Send + Sync + Clone>(
     index1: Arc<SbwtIndex<SS>>,
     index2: Arc<SbwtIndex<SS>>,
@@ -938,6 +950,9 @@ pub fn difference_with_removed_positions<SS: SubsetSeq + Send + Sync + Clone>(
 /// `group_starts` are taken over, so that they are freed as soon as they are no longer needed.
 ///
 /// `optimize_peak_ram` has no effect, as for [intersect].
+///
+/// The Arc is freed by the time this function returns: it drops it and every clone it makes of it (also on error),
+/// so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn filter<SS: SubsetSeq + Send + Sync + Clone>(
     index: Arc<SbwtIndex<SS>>,
     keep: BitVec,
@@ -954,6 +969,9 @@ pub fn filter<SS: SubsetSeq + Send + Sync + Clone>(
 /// Like [filter], but also returns the merge plan that the result consists of, and which of its
 /// positions are not in the result, as [intersect_with_removed_positions] does. Its s1 are the
 /// nodes of `index`, and its s2 are the kept nodes, dummy nodes included.
+///
+/// The Arc is freed by the time this function returns: it drops it and every clone it makes of it (also on error),
+/// so `Arc::try_unwrap` on a reference that the caller kept succeeds afterwards.
 pub fn filter_with_removed_positions<SS: SubsetSeq + Send + Sync + Clone>(
     index: Arc<SbwtIndex<SS>>,
     keep: BitVec,
