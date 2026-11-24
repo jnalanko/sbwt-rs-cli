@@ -500,6 +500,101 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         Some(left..right)
     }
 
+    /// Like [SbwtIndex::search], but searches a mini batch of `BATCH_SIZE` patterns in lockstep,
+    /// which lets the CPU overlap the memory accesses of the independent searches: one pattern
+    /// column at a time, one LF step for every pattern still found, with the memory of each
+    /// pattern's next step prefetched as soon as its current step is taken. All patterns must have
+    /// the same length. Requires `BATCH_SIZE <= 64`.
+    pub fn search_mini_batch<const BATCH_SIZE: usize>(
+        &self,
+        patterns: &[&[u8]; BATCH_SIZE],
+    ) -> [Option<std::ops::Range<usize>>; BATCH_SIZE] {
+        let l = self.prefix_lookup_table.prefix_length;
+        match patterns[0].len() >= l {
+            true => {
+                // Initialize the searches from the lookup table
+                let intervals = std::array::from_fn(|q| self.prefix_lookup_table.lookup(&patterns[q][..l]));
+                let suffixes = std::array::from_fn(|q| &patterns[q][l..]);
+                self.search_mini_batch_from(intervals, &suffixes)
+            }
+            false => {
+                // Search from scratch
+                let intervals = std::array::from_fn(|_| 0..self.sbwt.len());
+                self.search_mini_batch_from(intervals, patterns)
+            }
+        }
+    }
+
+    /// Like [SbwtIndex::search_from], but for a mini batch of patterns as in
+    /// [SbwtIndex::search_mini_batch]: pattern `q` is searched starting from `intervals[q]`. All
+    /// patterns must have the same length. Requires `BATCH_SIZE <= 64`.
+    pub fn search_mini_batch_from<const BATCH_SIZE: usize>(
+        &self,
+        intervals: [std::ops::Range<usize>; BATCH_SIZE],
+        patterns: &[&[u8]; BATCH_SIZE],
+    ) -> [Option<std::ops::Range<usize>>; BATCH_SIZE] {
+        self.search_mini_batch_from_len(intervals, patterns).map(Result::ok)
+    }
+
+    // search_mini_batch_from, also returning for a pattern that is not found how many of its
+    // characters were consumed, including the one whose step failed (0 if the starting interval
+    // is empty): `Err(n)` means that `pattern[..n]` extends the starting interval to nothing.
+    // Both ends of an interval are ranked with one rank_pair query and prefetched with one
+    // prefetch_rank_pair call.
+    pub(crate) fn search_mini_batch_from_len<const BATCH_SIZE: usize>(
+        &self,
+        mut intervals: [std::ops::Range<usize>; BATCH_SIZE],
+        patterns: &[&[u8]; BATCH_SIZE],
+    ) -> [Result<std::ops::Range<usize>, usize>; BATCH_SIZE] {
+        assert!(BATCH_SIZE <= 64, "the mini batch is tracked with a 64-bit mask");
+        let len = patterns[0].len();
+        debug_assert!(patterns.iter().all(|p| p.len() == len));
+        // Prefetches the memory of the step of `pattern` in column `col` from `interval`
+        let prefetch = |pattern: &[u8], interval: &std::ops::Range<usize>, col: usize| {
+            if let Some(&chr) = pattern.get(col) {
+                let c = ACGT_TO_0123[chr as usize] as usize;
+                if c < DNA_ALPHABET.len() {
+                    self.prefetch_lf_step_interval(interval, c);
+                }
+            }
+        };
+        let mut consumed = [0_usize; BATCH_SIZE];
+        // Bit q is set iff the interval of pattern q is non-empty so far.
+        let mut alive = 0_u64;
+        for (q, interval) in intervals.iter().enumerate() {
+            alive |= (!interval.is_empty() as u64) << q;
+        }
+        let mut to_visit = alive;
+        while to_visit != 0 {
+            let q = to_visit.trailing_zeros() as usize;
+            to_visit &= to_visit - 1; // Clear the lowest set bit
+            prefetch(patterns[q], &intervals[q], 0);
+        }
+        for col in 0..len {
+            if alive == 0 {
+                break;
+            }
+            let mut to_visit = alive;
+            while to_visit != 0 {
+                let q = to_visit.trailing_zeros() as usize;
+                to_visit &= to_visit - 1;
+                consumed[q] = col + 1;
+                let c = ACGT_TO_0123[patterns[q][col] as usize] as usize;
+                if c >= DNA_ALPHABET.len() {
+                    alive &= !(1 << q); // Character does not exist in index
+                    continue;
+                }
+                let interval = &mut intervals[q];
+                *interval = self.lf_step_interval(interval, c);
+                // Clear the bit without branching on the result of the rank queries, so that the
+                // CPU can run ahead to the next pattern before the ranks are known.
+                alive &= !(((interval.start >= interval.end) as u64) << q);
+                prefetch(patterns[q], interval, col + 1);
+            }
+        }
+        std::array::from_fn(|q| if (alive >> q) & 1 == 1 { Ok(intervals[q].clone()) } else { Err(consumed[q]) })
+    }
+
     /// Reconstruct all k-mers in the [padded k-spectrum](#sbwt-graph) in the data structure.
     /// The reconstructed k-mers concatenated into a single ascii string in colexicographic order.
     /// The i-th k-mer starts at position i*k in the string.
@@ -996,6 +1091,71 @@ mod tests {
 
     use crate::builder::BitPackedKmerSortingMem;
     use super::*;
+
+    // search_mini_batch and search_mini_batch_from agree with search and search_from, and the
+    // characters consumed by search_mini_batch_from_len are where the search fails.
+    fn check_search_mini_batch<SS: SubsetSeq + Send, const B: usize>(sbwt: &SbwtIndex<SS>, patterns: &[Vec<u8>]) {
+        for chunk in patterns.chunks_exact(B) {
+            let batch: [&[u8]; B] = std::array::from_fn(|q| chunk[q].as_slice());
+            let found = sbwt.search_mini_batch(&batch);
+            let full = std::array::from_fn(|_| 0..sbwt.n_sets());
+            let from = sbwt.search_mini_batch_from(full.clone(), &batch);
+            let with_len = sbwt.search_mini_batch_from_len(full, &batch);
+            for q in 0..B {
+                let expected = sbwt.search(batch[q]);
+                assert_eq!(found[q], expected, "{}", String::from_utf8_lossy(batch[q]));
+                assert_eq!(from[q], sbwt.search_from(0..sbwt.n_sets(), batch[q]));
+                match &with_len[q] {
+                    Ok(interval) => assert_eq!(Some(interval.clone()), from[q]),
+                    Err(n) => {
+                        assert!(from[q].is_none());
+                        assert!(*n >= 1);
+                        // The first n characters are not found, the first n - 1 are
+                        assert!(sbwt.search_from(0..sbwt.n_sets(), &batch[q][..*n]).is_none());
+                        assert!(sbwt.search_from(0..sbwt.n_sets(), &batch[q][..*n - 1]).is_some());
+                    }
+                }
+            }
+        }
+        // An empty starting interval consumes nothing
+        let batch: [&[u8]; B] = std::array::from_fn(|q| patterns[q].as_slice());
+        let empty = std::array::from_fn(|_| 0..0);
+        assert!(sbwt.search_mini_batch_from_len(empty, &batch).iter().all(|r| *r == Err(0)));
+    }
+
+    #[test]
+    fn search_mini_batch_matches_search() {
+        use crate::{SubsetInterleavedMatrix, SubsetCorrectionSets};
+        let seqs: Vec<Vec<u8>> = (0..6_u64).map(|i| crate::util::gen_random_dna_string(200 + 31 * i as usize, 77 + i)).collect();
+        for len in [5, 9, 31] { // Shorter and longer than the lookup table (8)
+            let k = 31;
+            let (matrix, _) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true).run();
+            // Patterns found (substrings of the input), random, and with an N
+            let mut patterns: Vec<Vec<u8>> = vec![];
+            for (i, seq) in seqs.iter().enumerate() {
+                for start in (0..seq.len() - len).step_by(7) {
+                    patterns.push(seq[start..start + len].to_vec());
+                }
+                patterns.push(crate::util::gen_random_dna_string(len, 1000 + i as u64));
+                let mut with_n = seq[..len].to_vec();
+                with_n[len / 2] = b'N';
+                patterns.push(with_n);
+            }
+            while patterns.len() % 64 != 0 {
+                patterns.push(crate::util::gen_random_dna_string(len, patterns.len() as u64));
+            }
+            let interleaved = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true)
+                .subset_seq::<SubsetInterleavedMatrix>().run().0;
+            let correction_sets = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true)
+                .subset_seq::<SubsetCorrectionSets>().run().0;
+            check_search_mini_batch::<_, 1>(&matrix, &patterns);
+            check_search_mini_batch::<_, 16>(&matrix, &patterns); // The default mini batch (32:16)
+            check_search_mini_batch::<_, 32>(&matrix, &patterns);
+            check_search_mini_batch::<_, 64>(&matrix, &patterns);
+            check_search_mini_batch::<_, 16>(&interleaved, &patterns);
+            check_search_mini_batch::<_, 16>(&correction_sets, &patterns);
+        }
+    }
 
     #[allow(non_snake_case)]
     fn ACGT_to_0123(c: u8) -> u8 {
