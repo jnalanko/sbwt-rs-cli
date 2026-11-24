@@ -1206,7 +1206,12 @@ fn transform_index_command(matches: &clap::ArgMatches) {
         (SbwtIndexVariant::SubsetMatrix(sbwt), "interleaved_matrix") => {
             log::info!("Transform bit matrix -> interleaved matrix");
             let (sbwt_subsetseq, n_kmers, k, c_array, prefix_lookup_table) = sbwt.into_parts();
-            let ss_new = SubsetInterleavedMatrix::new_from_bit_vectors(sbwt_subsetseq.into_bitvectors());
+            let had_select = sbwt_subsetseq.has_select_support();
+            let mut ss_new = SubsetInterleavedMatrix::new_from_bit_vectors(sbwt_subsetseq.into_bitvectors());
+            if had_select {
+                // Keep the select support of the input, as the file of the input had it
+                ss_new.build_select();
+            }
             SbwtIndexVariant::SubsetInterleavedMatrix(SbwtIndex::<SubsetInterleavedMatrix>::from_parts(ss_new, n_kmers, k, c_array, prefix_lookup_table))
         },
         (SbwtIndexVariant::SubsetCorrectionSets(sbwt), "interleaved_matrix") => {

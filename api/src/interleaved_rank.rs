@@ -15,12 +15,14 @@ use std::ops::Range;
 
 use crate::subsetseq::{SubsetMatrix, SubsetSeq};
 use bitvec::order::Lsb0;
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 
 /// Number of bits of the vector stored in one block.
 pub const BITS_PER_LINE: usize = 416;
 
 /// [InterleavedRank::select] keeps the block of every `SELECT_SAMPLE`-th one, so that it searches
-/// only the blocks between two samples (computed when the vector is built or loaded, not stored).
+/// only the blocks between two samples. The samples are built by [InterleavedRank::build_select] and,
+/// like the select support of [SubsetMatrix], stored in the file if they have been built.
 const SELECT_SAMPLE: usize = 4096;
 
 // Bits of a block before the data: the header.
@@ -112,8 +114,8 @@ pub struct InterleavedRank {
     lines: Vec<Line>,
     len: usize,
     ones: usize,
-    // The block of the one of rank j * SELECT_SAMPLE, for every j.
-    select_samples: Vec<u32>,
+    // The block of the one of rank j * SELECT_SAMPLE, for every j; None until build_select.
+    select_samples: Option<Vec<u32>>,
 }
 
 // The block of the one of rank j * SELECT_SAMPLE for every j (see InterleavedRank::select).
@@ -156,8 +158,20 @@ impl InterleavedRank {
             }
             ones += before_word as usize;
         }
-        let select_samples = select_samples(&lines, ones);
-        InterleavedRank { lines, len, ones, select_samples }
+        InterleavedRank { lines, len, ones, select_samples: None }
+    }
+
+    /// Builds the select support (the select samples), if it is not built yet. Construction does
+    /// not build it; loading brings it back if it was there when the vector was saved.
+    pub fn build_select(&mut self) {
+        if self.select_samples.is_none() {
+            self.select_samples = Some(select_samples(&self.lines, self.ones));
+        }
+    }
+
+    /// Whether the select support has been built (see [InterleavedRank::build_select]).
+    pub fn has_select(&self) -> bool {
+        self.select_samples.is_some()
     }
 
     /// Number of bits in the vector.
@@ -212,15 +226,17 @@ impl InterleavedRank {
 
     /// Position of the one of rank `r` (the (r+1)-th one), or None if there are at most `r` ones:
     /// a binary search over the counts in the headers of the blocks between the two select
-    /// samples around `r`, then a scan of the block.
+    /// samples around `r`, then a scan of the block. Requires the select support
+    /// ([InterleavedRank::build_select]).
     pub fn select(&self, r: usize) -> Option<usize> {
+        let samples = self.select_samples.as_ref().expect("select support not built: call build_select first");
         if r >= self.ones {
             return None;
         }
         // The last block with at most r ones before it, between the samples around r.
         let j = r / SELECT_SAMPLE;
-        let lo = self.select_samples[j] as usize;
-        let hi = self.select_samples.get(j + 1).map_or(self.lines.len(), |&s| s as usize + 1);
+        let lo = samples[j] as usize;
+        let hi = samples.get(j + 1).map_or(self.lines.len(), |&s| s as usize + 1);
         let l = lo + self.lines[lo..hi].partition_point(|line| line.absolute() <= r) - 1;
         let line = &self.lines[l];
         let mut left = r - line.absolute();
@@ -296,50 +312,79 @@ impl InterleavedRank {
         }
     }
 
-    /// Size of the structure in memory in bytes: the blocks and the select samples (the samples
-    /// are not stored in the file).
+    /// Size of the structure in memory in bytes: the blocks and, if built, the select samples.
     pub fn size_in_bytes(&self) -> usize {
-        self.lines.len() * std::mem::size_of::<Line>() + self.select_samples.len() * 4
+        self.lines.len() * std::mem::size_of::<Line>() + self.select_samples.as_ref().map_or(0, |s| s.len() * 4)
     }
 
     fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
         out.write_all(&(self.len as u64).to_le_bytes())?;
         out.write_all(&(self.ones as u64).to_le_bytes())?;
         out.write_all(&(self.lines.len() as u64).to_le_bytes())?;
-        let blocks: &[u8] = bytemuck::cast_slice(self.lines.as_slice());
-        out.write_all(blocks)?;
-        Ok(24 + blocks.len())
+        // The lines as little-endian words, converted 64 KiB at a time.
+        let words: &[u64] = bytemuck::cast_slice(self.lines.as_slice());
+        let mut buf = vec![0_u8; 1 << 16];
+        for chunk in words.chunks(buf.len() / 8) {
+            let bytes = &mut buf[..chunk.len() * 8];
+            LittleEndian::write_u64_into(chunk, bytes);
+            out.write_all(bytes)?;
+        }
+        let mut written = 24 + words.len() * 8;
+        // The select support: a flag, then the number of samples and the samples.
+        match &self.select_samples {
+            None => {
+                out.write_all(&0_u64.to_le_bytes())?;
+                written += 8;
+            }
+            Some(samples) => {
+                out.write_all(&1_u64.to_le_bytes())?;
+                out.write_all(&(samples.len() as u64).to_le_bytes())?;
+                for &sample in samples {
+                    out.write_u32::<LittleEndian>(sample)?;
+                }
+                written += 16 + samples.len() * 4;
+            }
+        }
+        Ok(written)
     }
 
     fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
-        let len = read_u64(input)? as usize;
-        let ones = read_u64(input)? as usize;
-        let n_lines = read_u64(input)? as usize;
+        let len = input.read_u64::<LittleEndian>()? as usize;
+        let ones = input.read_u64::<LittleEndian>()? as usize;
+        let n_lines = input.read_u64::<LittleEndian>()? as usize;
         if n_lines != len / BITS_PER_LINE + 1 {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "interleaved rank: wrong number of blocks"));
         }
         // Read straight into the aligned blocks, without a second copy.
         let mut lines = vec![Line::default(); n_lines];
-        input.read_exact(bytemuck::cast_slice_mut(lines.as_mut_slice()))?;
-        let select_samples = select_samples(&lines, ones);
+        input.read_u64_into::<LittleEndian>(bytemuck::cast_slice_mut(lines.as_mut_slice()))?;
+        let select_samples = match input.read_u64::<LittleEndian>()? {
+            0 => None,
+            1 => {
+                let n = input.read_u64::<LittleEndian>()? as usize;
+                if n != ones.div_ceil(SELECT_SAMPLE) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "interleaved rank: wrong number of select samples"));
+                }
+                let mut samples = vec![0_u32; n];
+                input.read_u32_into::<LittleEndian>(&mut samples)?;
+                Some(samples)
+            }
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "interleaved rank: invalid select support flag")),
+        };
         Ok(InterleavedRank { lines, len, ones, select_samples })
     }
 }
 
-fn read_u64<R: std::io::Read>(input: &mut R) -> std::io::Result<u64> {
-    let mut buf = [0u8; 8];
-    input.read_exact(&mut buf)?;
-    Ok(u64::from_le_bytes(buf))
-}
 
 //-----------------------------------------------------------------------------
 
-// Version of the file format of SubsetInterleavedMatrix.
-const FORMAT: u64 = 1;
+// Version of the file format of SubsetInterleavedMatrix (2: with the select support, if built).
+const FORMAT: u64 = 2;
 
 /// A [SubsetSeq] with one [InterleavedRank] bit vector per character: the i-th bit of the c-th
 /// vector is 1 if and only if the i-th subset contains c, as in [SubsetMatrix], but each rank
-/// query reads one cache line. Rank and select support are always there. See the
+/// query reads one cache line. Rank support is always there; select support is built by
+/// [SubsetSeq::build_select], as for [SubsetMatrix]. See the
 /// [module documentation](self).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubsetInterleavedMatrix {
@@ -374,13 +419,17 @@ impl SubsetSeq for SubsetInterleavedMatrix {
         self.len
     }
 
-    // Rank and select support are always there.
+    // Rank support is always there.
     fn build_rank(&mut self) {}
 
-    fn build_select(&mut self) {}
+    fn build_select(&mut self) {
+        for row in self.rows.iter_mut() {
+            row.build_select();
+        }
+    }
 
     fn has_select_support(&self) -> bool {
-        true
+        self.rows.iter().all(|row| row.has_select())
     }
 
     fn has_rank_support(&self) -> bool {
@@ -450,13 +499,13 @@ impl SubsetSeq for SubsetInterleavedMatrix {
     }
 
     fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
-        let format = read_u64(input)?;
+        let format = input.read_u64::<LittleEndian>()?;
         if format != FORMAT {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
                 "interleaved matrix of another format version: convert the index again (transform-index --type interleaved_matrix)"));
         }
-        let len = read_u64(input)? as usize;
-        let n_rows = read_u64(input)? as usize;
+        let len = input.read_u64::<LittleEndian>()? as usize;
+        let n_rows = input.read_u64::<LittleEndian>()? as usize;
         let rows = (0..n_rows).map(|_| InterleavedRank::load(input)).collect::<std::io::Result<Vec<_>>>()?;
         if rows.iter().any(|row| row.len() != len) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "interleaved matrix: rows of different lengths"));
@@ -497,7 +546,10 @@ mod tests {
     }
 
     fn check(words: &[u64], len: usize) {
-        let v = InterleavedRank::new(words, len);
+        let mut v = InterleavedRank::new(words, len);
+        assert!(!v.has_select());
+        v.build_select();
+        assert!(v.has_select());
         let ranks = naive_ranks(words, len);
         let bit = |i: usize| (words[i / 64] >> (i % 64)) & 1 == 1;
         let ones: Vec<usize> = (0..len).filter(|&i| bit(i)).collect();
@@ -541,7 +593,9 @@ mod tests {
         let mut buf = vec![];
         let written = v.serialize(&mut buf).unwrap();
         assert_eq!(written, buf.len());
-        assert_eq!(InterleavedRank::load(&mut buf.as_slice()).unwrap(), v);
+        let loaded = InterleavedRank::load(&mut buf.as_slice()).unwrap();
+        assert!(loaded.has_select());
+        assert_eq!(loaded, v);
     }
 
     #[test]
@@ -561,7 +615,7 @@ mod tests {
 
     // select over many select samples, with long stretches of zeros between dense parts (so that
     // samples are many blocks apart), and after a serialization round trip (the samples are
-    // computed again when loading).
+    // loaded from the file).
     #[test]
     fn select_with_samples() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(3);
@@ -573,17 +627,80 @@ mod tests {
                 words[i / 64] |= 1 << (i % 64);
             }
         }
-        let v = InterleavedRank::new(&words, len);
+        let mut v = InterleavedRank::new(&words, len);
+        v.build_select();
         let ones: Vec<usize> = (0..len).filter(|&i| (words[i / 64] >> (i % 64)) & 1 == 1).collect();
         assert!(ones.len() > 50 * SELECT_SAMPLE);
         let mut buf = vec![];
         v.serialize(&mut buf).unwrap();
         let loaded = InterleavedRank::load(&mut buf.as_slice()).unwrap();
+        assert!(loaded.has_select());
         assert_eq!(loaded, v);
         for (r, &i) in ones.iter().enumerate() {
-            assert_eq!(v.select(r), Some(i), "select({})", r);
+            assert_eq!(loaded.select(r), Some(i), "select({})", r);
         }
-        assert_eq!(v.select(ones.len()), None);
+        assert_eq!(loaded.select(ones.len()), None);
+    }
+
+    // The file is little-endian throughout, as the rest of the index: compare with the bytes
+    // written value by value with to_le_bytes.
+    #[test]
+    fn file_is_little_endian() {
+        let words: Vec<u64> = (0..300).map(|i| 0x0123_4567_89ab_cdef_u64.rotate_left(i) ^ i as u64).collect();
+        let len = 300 * 64 - 5;
+        let mut v = InterleavedRank::new(&words, len);
+        v.build_select();
+        let mut expected = vec![];
+        for x in [v.len as u64, v.ones as u64, v.lines.len() as u64] {
+            expected.extend(x.to_le_bytes());
+        }
+        for line in &v.lines {
+            for w in line.words {
+                expected.extend(w.to_le_bytes());
+            }
+        }
+        let samples = v.select_samples.as_ref().unwrap();
+        expected.extend(1_u64.to_le_bytes());
+        expected.extend((samples.len() as u64).to_le_bytes());
+        for &s in samples {
+            expected.extend(s.to_le_bytes());
+        }
+        let mut buf = vec![];
+        assert_eq!(v.serialize(&mut buf).unwrap(), buf.len());
+        assert_eq!(buf, expected);
+        assert_eq!(InterleavedRank::load(&mut buf.as_slice()).unwrap(), v);
+    }
+
+    #[test]
+    #[should_panic(expected = "select support not built")]
+    fn select_without_support_panics() {
+        InterleavedRank::new(&[0b1011], 4).select(0);
+    }
+
+    // As for SubsetMatrix: construction leaves the select support out, build_select adds it to
+    // every row, and a saved matrix loads with select support exactly when it had it.
+    #[test]
+    fn select_support_only_on_request() {
+        let sets: Vec<Vec<u8>> = (0..5000_usize).map(|i| (0..4_u8).filter(|&c| (i + c as usize) % 3 == 0).collect()).collect();
+        let mut m = SubsetInterleavedMatrix::new(sets, 4);
+        let size_without = m.size_in_bytes();
+        assert!(!m.has_select_support());
+        let mut without = vec![];
+        m.serialize(&mut without).unwrap();
+        let loaded = SubsetInterleavedMatrix::load(&mut without.as_slice()).unwrap();
+        assert!(!loaded.has_select_support());
+        assert_eq!(loaded, m);
+
+        m.build_select();
+        assert!(m.has_select_support());
+        assert!(m.size_in_bytes() > size_without);
+        let mut with = vec![];
+        let written = m.serialize(&mut with).unwrap();
+        assert_eq!(written, with.len());
+        assert!(with.len() > without.len());
+        let loaded = SubsetInterleavedMatrix::load(&mut with.as_slice()).unwrap();
+        assert!(loaded.has_select_support());
+        assert_eq!(loaded, m);
     }
 
     #[test]
@@ -599,7 +716,8 @@ mod tests {
         let mut plain = SubsetMatrix::new(sets.clone(), 4);
         plain.build_rank();
         plain.build_select();
-        let interleaved = SubsetInterleavedMatrix::new(sets, 4);
+        let mut interleaved = SubsetInterleavedMatrix::new(sets, 4);
+        interleaved.build_select();
         let n = plain.len();
         assert_eq!(interleaved.len(), n);
         for c in 0..4 {
@@ -630,7 +748,9 @@ mod tests {
         plain.push_labels_forward(&labels, range, out_b.iter_mut().map(|v| v.as_mut_slice()).collect());
         assert_eq!(out_a, out_b);
         // Bit vectors and serialization round trip.
-        assert_eq!(SubsetInterleavedMatrix::new_from_bit_vectors(plain.clone().into_bitvectors()), interleaved);
+        let mut rebuilt = SubsetInterleavedMatrix::new_from_bit_vectors(plain.clone().into_bitvectors());
+        rebuilt.build_select();
+        assert_eq!(rebuilt, interleaved);
         let mut buf = vec![];
         let written = interleaved.serialize(&mut buf).unwrap();
         assert_eq!(written, buf.len());
