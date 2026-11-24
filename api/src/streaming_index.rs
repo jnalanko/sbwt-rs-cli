@@ -218,80 +218,6 @@ impl LcsArray {
 
 }
 
-/// The (k-1)-suffix group marks of an SBWT: one bit per node, set for the first node of each group
-/// of nodes whose k-mers have the same last k-1 characters (the marks of
-/// [Dbg::k_minus_1_marks](crate::dbg::Dbg::k_minus_1_marks)). Built with the construction by
-/// e.g. [run_with_sufgroups](crate::BitPackedKmerSortingMem::run_with_sufgroups).
-///
-/// The file format is that of the suffix group marks of Themisto 2 (`kmers.sufgroups`): the number
-/// of bits as a little-endian u64, then the bits in 64-bit words, little-endian.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Sufgroups {
-    marks: bitvec::vec::BitVec,
-}
-
-impl Sufgroups {
-
-    /// Construct from the marks, one bit per node of the SBWT.
-    pub fn new(marks: bitvec::vec::BitVec) -> Self {
-        Self{marks}
-    }
-
-    /// The marks, one bit per node of the SBWT.
-    pub fn marks(&self) -> &bitvec::vec::BitVec {
-        &self.marks
-    }
-
-    /// The marks, one bit per node of the SBWT, e.g. for
-    /// [Dbg::new_with_k_minus_1_marks](crate::dbg::Dbg::new_with_k_minus_1_marks).
-    pub fn into_marks(self) -> bitvec::vec::BitVec {
-        self.marks
-    }
-
-    /// Returns the number of marks (the number of nodes of the SBWT).
-    pub fn len(&self) -> usize {
-        self.marks.len()
-    }
-
-    /// Returns true iff there are no marks.
-    pub fn is_empty(&self) -> bool {
-        self.marks.is_empty()
-    }
-
-    /// Returns the number of bytes used by the marks.
-    pub fn size_in_bytes(&self) -> usize {
-        self.marks.as_raw_slice().len() * std::mem::size_of::<usize>()
-    }
-
-    /// Serialize the marks to the given writer.
-    /// They can then later be loaded with [Sufgroups::load].
-    /// Returns number of bytes written.
-    pub fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
-        out.write_all(&(self.marks.len() as u64).to_le_bytes())?;
-        let n_words = self.marks.len().div_ceil(64);
-        for word in self.marks.as_raw_slice()[..n_words].iter() {
-            out.write_all(&(*word as u64).to_le_bytes())?;
-        }
-        Ok(8 + 8 * n_words)
-    }
-
-    /// Load marks that were previously serialized with [Sufgroups::serialize].
-    pub fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
-        let mut buf = [0_u8; 8];
-        input.read_exact(&mut buf)?;
-        let len = u64::from_le_bytes(buf) as usize;
-        let n_words = len.div_ceil(64);
-        let mut words = Vec::<usize>::with_capacity(n_words);
-        for _ in 0..n_words {
-            input.read_exact(&mut buf)?;
-            words.push(u64::from_le_bytes(buf) as usize);
-        }
-        let mut marks = bitvec::vec::BitVec::from_vec(words);
-        marks.truncate(len);
-        Ok(Self{marks})
-    }
-}
-
 
 impl<'index, E: ExtendRight, C: ContractLeft> StreamingIndex<'index, E, C>{
 
@@ -456,29 +382,6 @@ impl<E: ExtendRight, C: ContractLeft> Iterator for MatchingStatisticsIterator<'_
 mod tests {
 
     use crate::BitPackedKmerSortingMem;
-
-    // The file of Sufgroups is that of the suffix group marks of Themisto 2: the number of bits as a
-    // little-endian u64, then the bits in 64-bit words, little-endian (bit i in bit i % 64 of word
-    // i / 64); and it loads back to the same marks.
-    #[test]
-    fn sufgroups_file_format() {
-        for len in [0_usize, 1, 63, 64, 65, 130] {
-            let marks: bitvec::vec::BitVec = (0..len).map(|i| i % 3 == 0 || i % 7 == 1).collect();
-            let sufgroups = Sufgroups::new(marks.clone());
-            let mut expected = (len as u64).to_le_bytes().to_vec();
-            for w in 0..len.div_ceil(64) {
-                let word = (w * 64..std::cmp::min(len, (w + 1) * 64)).filter(|&i| marks[i]).fold(0_u64, |word, i| word | 1 << (i % 64));
-                expected.extend(word.to_le_bytes());
-            }
-            let mut buf = vec![];
-            assert_eq!(sufgroups.serialize(&mut buf).unwrap(), buf.len());
-            assert_eq!(buf, expected, "len {}", len);
-            let loaded = Sufgroups::load(&mut buf.as_slice()).unwrap();
-            assert_eq!(loaded, sufgroups);
-            assert_eq!(loaded.len(), len);
-            assert_eq!(loaded.size_in_bytes(), 8 * len.div_ceil(64));
-        }
-    }
 
     use super::*;
 

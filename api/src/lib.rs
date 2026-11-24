@@ -197,7 +197,9 @@ mod builder;
 pub use builder::*;
 
 mod streaming_index;
-pub use streaming_index::{StreamingIndex, LcsArray, Sufgroups, MatchingStatisticsIterator, ContractLeft, ExtendRight};
+pub use streaming_index::{StreamingIndex, LcsArray, MatchingStatisticsIterator, ContractLeft, ExtendRight};
+mod kmer_lookup_index;
+pub use kmer_lookup_index::{KmerLookupIndex, Sufgroups};
 
 mod subsetseq;
 pub use subsetseq::*;
