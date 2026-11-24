@@ -4,17 +4,17 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::tempfile::TempFileManager;
-use crate::{subsetseq::SubsetMatrix, SeqStream};
+use crate::{subsetseq::SubsetMatrix, SeqStream, SubsetSeq};
 use crate::sbwt::{PrefixLookupTable, SbwtIndex};
 use crate::streaming_index::LcsArray;
 use crate::util::SeqStreamWithPossiblyRevComp;
 /// A construction algorithm based on sorting of bit-packed k-mers using temporary disk space.
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct BitPackedKmerSortingDisk<SS: SeqStream + Send> {
+pub struct BitPackedKmerSortingDisk<IN: SeqStream + Send, SS: SubsetSeq = SubsetMatrix> {
     mem_gb: usize,
     dedup_batches: bool,
     temp_dir: std::path::PathBuf,
-    input: SS,
+    input: IN,
 
     k: usize,
     n_threads: usize,
@@ -23,9 +23,10 @@ pub struct BitPackedKmerSortingDisk<SS: SeqStream + Send> {
     build_select_support: bool,
     precalc_length: usize,
     add_all_dummy_paths: bool,
+    _phantom: std::marker::PhantomData<SS>,
 }
 
-impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
+impl<IN: SeqStream + Send> BitPackedKmerSortingDisk<IN, SubsetMatrix> {
 
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
     /// - Use the current directory as the temporary directory.
@@ -37,8 +38,16 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
     /// - dedup_batches = false
-    pub fn new(input: SS, k: usize) -> Self {
-        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, temp_dir: std::path::PathBuf::from_str(".").unwrap()}
+    pub fn new(input: IN, k: usize) -> Self {
+        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, temp_dir: std::path::PathBuf::from_str(".").unwrap(), _phantom: std::marker::PhantomData}
+    }
+}
+
+impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BitPackedKmerSortingDisk<IN, SS> {
+
+    /// Builds the index with the subset sequence type `T` instead (the default is [SubsetMatrix]).
+    pub fn subset_seq<T: SubsetSeq + Send>(self) -> BitPackedKmerSortingDisk<IN, T> {
+        BitPackedKmerSortingDisk{mem_gb: self.mem_gb, dedup_batches: self.dedup_batches, temp_dir: self.temp_dir, input: self.input, k: self.k, n_threads: self.n_threads, build_lcs: self.build_lcs, add_rev_comp: self.add_rev_comp, build_select_support: self.build_select_support, precalc_length: self.precalc_length, add_all_dummy_paths: self.add_all_dummy_paths, _phantom: std::marker::PhantomData}
     }
 
     /// Set the amount of memory to use in gigabytes. This is not strictly enforced, but the algorithm will try to stay within this limit.
@@ -106,24 +115,24 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingDisk<SS> {
     /// the LCS array if [build_lcs](BitPackedKmerSortingDisk::build_lcs) was set, otherwise `None`.
     ///
     /// Panics if k > 256.
-    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let (mut sbwt, lcs) = match self.k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             _ => {
                 panic!("k > 256 not supported with a bitpacked sorting algorithm.");
@@ -179,10 +188,10 @@ impl BitPackedKmerSortingDisk<crate::util::FastXReader> {
 /// Faster and scales better with parallelism than [BitPackedKmerSortingDisk], but takes
 /// more RAM.
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct BitPackedKmerSortingMem<SS: SeqStream + Send>{
+pub struct BitPackedKmerSortingMem<IN: SeqStream + Send, SS: SubsetSeq = SubsetMatrix> {
     dedup_batches: bool,
     mem_gb: usize,
-    input: SS,
+    input: IN,
 
     k: usize,
     n_threads: usize,
@@ -191,9 +200,10 @@ pub struct BitPackedKmerSortingMem<SS: SeqStream + Send>{
     build_select_support: bool,
     precalc_length: usize,
     add_all_dummy_paths: bool,
+    _phantom: std::marker::PhantomData<SS>,
 }
 
-impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
+impl<IN: SeqStream + Send> BitPackedKmerSortingMem<IN, SubsetMatrix> {
 
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
     /// - 8 GiB memory
@@ -204,8 +214,16 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
     /// - dedup_batches = false
-    pub fn new(input: SS, k: usize) -> Self {
-        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+    pub fn new(input: IN, k: usize) -> Self {
+        Self{input, dedup_batches: false, mem_gb: 8, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, _phantom: std::marker::PhantomData}
+    }
+}
+
+impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BitPackedKmerSortingMem<IN, SS> {
+
+    /// Builds the index with the subset sequence type `T` instead (the default is [SubsetMatrix]).
+    pub fn subset_seq<T: SubsetSeq + Send>(self) -> BitPackedKmerSortingMem<IN, T> {
+        BitPackedKmerSortingMem{dedup_batches: self.dedup_batches, mem_gb: self.mem_gb, input: self.input, k: self.k, n_threads: self.n_threads, build_lcs: self.build_lcs, add_rev_comp: self.add_rev_comp, build_select_support: self.build_select_support, precalc_length: self.precalc_length, add_all_dummy_paths: self.add_all_dummy_paths, _phantom: std::marker::PhantomData}
     }
 
     /// Whether to deduplicate k-mer batches before sorting. If the input has many duplicate k-mers, this will reduce the disk space required by the algorithm.
@@ -267,23 +285,23 @@ impl<SS: SeqStream + Send> BitPackedKmerSortingMem<SS> {
     /// the LCS array if [build_lcs](BitPackedKmerSortingMem::build_lcs) was set, otherwise `None`.
     ///
     /// Panics if k > 256.
-    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let (mut sbwt, lcs) = match self.k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SubsetMatrix>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
             }
             _ => {
                 panic!("k > 256 not supported with a bitpacked sorting algorithm.");
@@ -338,12 +356,12 @@ impl BitPackedKmerSortingMem<crate::util::FastXReader> {
 /// Wraps a [SeqStream] so that each sequence is sanitized (characters outside of the DNA
 /// alphabet are replaced with the separator `$`) and reversed, which is the form the
 /// bounded suffix sorting construction expects the concatenation to be in.
-struct SanitizedReversedSeqStream<SS: SeqStream + Send> {
-    inner: SS,
+struct SanitizedReversedSeqStream<IN: SeqStream + Send> {
+    inner: IN,
     buf: Vec<u8>,
 }
 
-impl<SS: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<SS> {
+impl<IN: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<IN> {
     fn stream_next(&mut self) -> Option<&[u8]> {
         // `self.inner` and `self.buf` are disjoint fields, so the borrow of the former
         // does not prevent us from writing to the latter.
@@ -361,8 +379,8 @@ impl<SS: SeqStream + Send> crate::SeqStream for SanitizedReversedSeqStream<SS> {
 /// concatenation of the input sequences in memory, and is not limited to k <= 256. Runs in
 /// time O(nk), where n is the length of the input.
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct BuildByBoundedSuffixSort<SS: SeqStream + Send> {
-    input: SS,
+pub struct BuildByBoundedSuffixSort<IN: SeqStream + Send, SS: SubsetSeq = SubsetMatrix> {
+    input: IN,
     prefix_length_for_bucket_sort: usize,
     stream_suffix_array_from_disk: bool,
     temp_dir: std::path::PathBuf,
@@ -374,9 +392,10 @@ pub struct BuildByBoundedSuffixSort<SS: SeqStream + Send> {
     build_select_support: bool,
     precalc_length: usize,
     add_all_dummy_paths: bool,
+    _phantom: std::marker::PhantomData<SS>,
 }
 
-impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
+impl<IN: SeqStream + Send> BuildByBoundedSuffixSort<IN, SubsetMatrix> {
 
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
     /// - don't stream suffix array from disk
@@ -388,8 +407,16 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
     /// - bucket sort prefix length 4
-    pub fn new(input: SS, k: usize) -> Self {
-        Self{input, stream_suffix_array_from_disk: false, temp_dir: std::path::PathBuf::from("."), prefix_length_for_bucket_sort: 4, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+    pub fn new(input: IN, k: usize) -> Self {
+        Self{input, stream_suffix_array_from_disk: false, temp_dir: std::path::PathBuf::from("."), prefix_length_for_bucket_sort: 4, k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, _phantom: std::marker::PhantomData}
+    }
+}
+
+impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByBoundedSuffixSort<IN, SS> {
+
+    /// Builds the index with the subset sequence type `T` instead (the default is [SubsetMatrix]).
+    pub fn subset_seq<T: SubsetSeq + Send>(self) -> BuildByBoundedSuffixSort<IN, T> {
+        BuildByBoundedSuffixSort{input: self.input, prefix_length_for_bucket_sort: self.prefix_length_for_bucket_sort, stream_suffix_array_from_disk: self.stream_suffix_array_from_disk, temp_dir: self.temp_dir, k: self.k, n_threads: self.n_threads, build_lcs: self.build_lcs, add_rev_comp: self.add_rev_comp, build_select_support: self.build_select_support, precalc_length: self.precalc_length, add_all_dummy_paths: self.add_all_dummy_paths, _phantom: std::marker::PhantomData}
     }
 
     /// Set the length of the prefix used to bucket the contexts before sorting them.
@@ -458,7 +485,7 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
     ///
     /// The input sequences are first read into a single concatenation in memory, separated by
     /// the `$` character and preceded by the sentinel `#`.
-    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
@@ -467,7 +494,7 @@ impl<SS: SeqStream + Send> BuildByBoundedSuffixSort<SS> {
 
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
-            crate::build_by_suffix_sorting::build_with_bounded_suffix_array::<SubsetMatrix>(
+            crate::build_by_suffix_sorting::build_with_bounded_suffix_array::<SS>(
                 self.n_threads,
                 concatenation,
                 self.k,
@@ -534,8 +561,8 @@ impl BuildByBoundedSuffixSort<crate::util::FastXReader> {
 /// `libsais` crate as a dependency. The other construction algorithms are always available.
 #[cfg(feature = "libsais")]
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub struct BuildByLibsais<SS: SeqStream + Send> {
-    input: SS,
+pub struct BuildByLibsais<IN: SeqStream + Send, SS: SubsetSeq = SubsetMatrix> {
+    input: IN,
     stream_suffix_array_from_disk: bool,
     temp_dir: std::path::PathBuf,
 
@@ -546,10 +573,11 @@ pub struct BuildByLibsais<SS: SeqStream + Send> {
     build_select_support: bool,
     precalc_length: usize,
     add_all_dummy_paths: bool,
+    _phantom: std::marker::PhantomData<SS>,
 }
 
 #[cfg(feature = "libsais")]
-impl<SS: SeqStream + Send> BuildByLibsais<SS> {
+impl<IN: SeqStream + Send> BuildByLibsais<IN, SubsetMatrix> {
 
     /// Initializes the algorithm for a [crate::SeqStream] with a given k and default settings.
     /// - 4 threads
@@ -558,8 +586,17 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
     /// - no select support
     /// - precalc length min(8,k)
     /// - add_all_dummy_paths = false
-    pub fn new(input: SS, k: usize) -> Self {
-        Self{input, stream_suffix_array_from_disk: false, temp_dir: std::path::PathBuf::from("."), k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false}
+    pub fn new(input: IN, k: usize) -> Self {
+        Self{input, stream_suffix_array_from_disk: false, temp_dir: std::path::PathBuf::from("."), k, n_threads: 4, build_lcs: false, add_rev_comp: false, build_select_support: false, precalc_length: std::cmp::min(8, k), add_all_dummy_paths: false, _phantom: std::marker::PhantomData}
+    }
+}
+
+#[cfg(feature = "libsais")]
+impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByLibsais<IN, SS> {
+
+    /// Builds the index with the subset sequence type `T` instead (the default is [SubsetMatrix]).
+    pub fn subset_seq<T: SubsetSeq + Send>(self) -> BuildByLibsais<IN, T> {
+        BuildByLibsais{input: self.input, stream_suffix_array_from_disk: self.stream_suffix_array_from_disk, temp_dir: self.temp_dir, k: self.k, n_threads: self.n_threads, build_lcs: self.build_lcs, add_rev_comp: self.add_rev_comp, build_select_support: self.build_select_support, precalc_length: self.precalc_length, add_all_dummy_paths: self.add_all_dummy_paths, _phantom: std::marker::PhantomData}
     }
 
     /// Whether to stream the suffix array from disk.
@@ -623,7 +660,7 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
     /// The input sequences are first read into a single concatenation in memory, separated by
     /// the `$` character and preceded by the sentinel `#`. A suffix array of the concatenation is
     /// then built with `libsais` and passed to [crate::build_by_suffix_sorting::build].
-    pub fn run(self) -> (SbwtIndex<SubsetMatrix>, Option<LcsArray>) {
+    pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
@@ -635,7 +672,7 @@ impl<SS: SeqStream + Send> BuildByLibsais<SS> {
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
 
         let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
-            crate::build_by_suffix_sorting::build::<SubsetMatrix>(
+            crate::build_by_suffix_sorting::build::<SS>(
                 self.n_threads,
                 concatenation,
                 length,
@@ -774,6 +811,56 @@ mod tests {
                     .run();
                 assert_eq!(mem_sbwt, libsais_sbwt);
                 assert_eq!(mem_lcs, libsais_lcs);
+            }
+        }
+    }
+
+    /// Building with another subset sequence type (here the interleaved matrix) must give the
+    /// index that converting the bit matrix gives, as transform-index does, with and without
+    /// select support.
+    #[test]
+    fn subset_seq_type_matches_conversion() {
+        use crate::SubsetInterleavedMatrix;
+        let k = 5;
+        let seqs: Vec<Vec<u8>> = (0..8_u64).map(|i| {
+            crate::util::gen_random_dna_string(50 + 7 * i as usize, 4321 + i)
+        }).collect();
+
+        // The bit matrix index converted to the interleaved matrix.
+        fn convert(sbwt: SbwtIndex<SubsetMatrix>) -> SbwtIndex<SubsetInterleavedMatrix> {
+            let had_select = sbwt.sbwt().has_select_support();
+            let (ss, n_kmers, k, c, lut) = sbwt.into_parts();
+            let mut ss = SubsetInterleavedMatrix::new_from_bit_vectors(ss.into_bitvectors());
+            if had_select {
+                ss.build_select();
+            }
+            SbwtIndex::from_parts(ss, n_kmers, k, c, lut)
+        }
+
+        for select in [false, true] {
+            let (matrix, matrix_lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).build_lcs(true).build_select_support(select).run();
+            let expected = convert(matrix);
+
+            let (mem, mem_lcs) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k)
+                .subset_seq::<SubsetInterleavedMatrix>().build_lcs(true).build_select_support(select).run();
+            let (disk, disk_lcs) = BitPackedKmerSortingDisk::new_from_vecs(&seqs, k)
+                .subset_seq::<SubsetInterleavedMatrix>().build_lcs(true).build_select_support(select)
+                .temp_dir(&std::env::temp_dir()).run();
+            let (bounded, bounded_lcs) = BuildByBoundedSuffixSort::new_from_vecs(&seqs, k)
+                .subset_seq::<SubsetInterleavedMatrix>().build_lcs(true).build_select_support(select).run();
+
+            for (built, lcs) in [(&mem, &mem_lcs), (&disk, &disk_lcs), (&bounded, &bounded_lcs)] {
+                assert_eq!(built.sbwt().has_select_support(), select);
+                assert_eq!(*built, expected);
+                assert_eq!(*lcs, matrix_lcs);
+            }
+
+            #[cfg(feature = "libsais")]
+            {
+                let (libsais, libsais_lcs) = BuildByLibsais::new_from_vecs(&seqs, k)
+                    .subset_seq::<SubsetInterleavedMatrix>().build_lcs(true).build_select_support(select).run();
+                assert_eq!(libsais, expected);
+                assert_eq!(libsais_lcs, matrix_lcs);
             }
         }
     }
