@@ -466,6 +466,51 @@ fn build_lcs_command(matches: &clap::ArgMatches) {
 
 }
 
+fn build_sufgroups_command(matches: &clap::ArgMatches) {
+    let n_threads = *matches.get_one::<usize>("threads").unwrap();
+    let indexfile = matches.get_one::<std::path::PathBuf>("index").unwrap();
+    let cpp_format = matches.get_flag("load-cpp-format");
+    let low_ram = matches.get_flag("low-ram");
+    let outfile = match matches.get_one::<std::path::PathBuf>("output") {
+        Some(out) => out.clone(),
+        None => {
+            let mut p = indexfile.clone();
+            p.set_extension("sufgroups");
+            p
+        }
+    };
+
+    log::info!("The suffix group marks will be saved to {}", outfile.display());
+
+    let mut out = BufWriter::new(File::create(&outfile).unwrap());
+
+    // Read sbwt
+    log::info!("Loading the SBWT from {}", indexfile.display());
+    let index = load_index(indexfile, cpp_format);
+
+    // From the LCS array next to the index if there is one, otherwise from the SBWT
+    let sufgroups = match load_lcs_if_exists(&default_lcs_path(indexfile), "computing the marks from the SBWT") {
+        Some(lcs) => {
+            log::info!("Computing the suffix group marks from the LCS array");
+            Sufgroups::from_lcs(&lcs, index.k())
+        }
+        None => {
+            log::info!("Computing the suffix group marks from the SBWT");
+            match &index {
+                SbwtIndexVariant::SubsetMatrix(sbwt) => Sufgroups::from_sbwt(sbwt, n_threads, low_ram),
+                SbwtIndexVariant::SubsetCorrectionSets(sbwt) => Sufgroups::from_sbwt(sbwt, n_threads, low_ram),
+                SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => Sufgroups::from_sbwt(sbwt, n_threads, low_ram),
+            }
+        }
+    };
+    assert_eq!(sufgroups.len(), index.n_sets());
+
+    log::info!("Writing to {}", outfile.display());
+    let n_bytes = sufgroups.serialize(&mut out).unwrap();
+
+    log::info!("{} bytes written", n_bytes);
+}
+
 fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], membership_only: bool){
     // Reporting
     if membership_only {
@@ -1464,6 +1509,33 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
         )
+        .subcommand(clap::Command::new("build-sufgroups")
+            .arg_required_else_help(true)
+            .about("Build the (k-1)-suffix group marks given an existing SBWT, from the LCS array next to it (index.lcs) if there is one, otherwise from the SBWT. The marks are in the format of the suffix group marks of Themisto 2. Note that it's also possible to build the SBWT and the marks at the same time with the build-command.")
+            .arg(clap::Arg::new("index")
+                .help("SBWT index file")
+                .short('i')
+                .long("index")
+                .required(true)
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("load-cpp-format")
+                .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
+                .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("output")
+                .help("The output filename. By default if the input is at index.sbwt, the output will be at index.sufgroups.")
+                .long("output")
+                .short('o')
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("low-ram")
+                .help("When computing the marks from the SBWT: less peak RAM at the expense of slower running time.")
+                .long("low-ram")
+                .action(clap::ArgAction::SetTrue)
+            )
+        )
         .subcommand(clap::Command::new("benchmark")
             .about("Benchmark queries on the index")
             .arg_required_else_help(true)
@@ -2042,6 +2114,7 @@ fn main() {
         Some(("build-list-kmers-on-disk", sub_matches)) => build_list_kmers_on_disk_command(sub_matches),
         Some(("build-from-kmers-on-disk", sub_matches)) => build_from_kmers_on_disk_command(sub_matches),
         Some(("build-lcs", sub_matches)) => build_lcs_command(sub_matches),
+        Some(("build-sufgroups", sub_matches)) => build_sufgroups_command(sub_matches),
         Some(("lookup", sub_matches)) => lookup_query_command(sub_matches),
         Some(("matching-statistics", sub_matches)) => matching_statistics_command(sub_matches),
         Some(("jaccard", sub_matches)) => jaccard_command(sub_matches),
