@@ -851,7 +851,7 @@ fn merge_command(matches: &clap::ArgMatches) {
             log::info!("Finished");
         },
         (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt1), SbwtIndexVariant::SubsetInterleavedMatrix(sbwt2)) => {
-            let merged = run_merge(sbwt1, sbwt2, low_ram, n_threads);
+            let merged = run_merge(sbwt1, sbwt2, low_ram, keep_redundant_dummies, n_threads);
             log::info!("Serializing to {}", sbwt_outfile.display());
             SbwtIndexVariant::SubsetInterleavedMatrix(merged).serialize(&mut out).unwrap();
             log::info!("Finished");
