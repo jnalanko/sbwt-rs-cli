@@ -12,6 +12,9 @@ use crate::subsetseq::SubsetSeq;
 /// plus a small structure that encodes the positions where
 /// set membership deviates from the base encoding. This is more compact than
 /// [SubsetMatrix](crate::subsetseq::SubsetMatrix).
+///
+/// The file is little-endian, and only little-endian machines can write and load it:
+/// [SubsetSeq::serialize] and [SubsetSeq::load] return an error on big-endian machines.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct SubsetCorrectionSets {
     concat: Base4RankVector,
@@ -511,6 +514,7 @@ impl SubsetSeq for SubsetCorrectionSets {
     }
 
     fn serialize<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
+        require_little_endian()?;
         let mut written = 0;
 
         written += self.concat.serialize(&mut *out)?;
@@ -524,6 +528,7 @@ impl SubsetSeq for SubsetCorrectionSets {
     }
 
     fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
+        require_little_endian()?;
         Ok(Self {
             concat: Base4RankVector::load(&mut *input)?,
 
@@ -651,6 +656,15 @@ impl SubsetSeq for SubsetCorrectionSets {
             assert_eq!(output_slice.len(), output_offset);
         }
     }
+}
+
+// The arrays of the structures are written as copies of their memory, which is the
+// little-endian file format only on little-endian machines.
+fn require_little_endian() -> std::io::Result<()> {
+    if cfg!(target_endian = "big") {
+        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "correction sets are not supported on big-endian machines"));
+    }
+    Ok(())
 }
 
 fn serialize_pred<W: std::io::Write>(
