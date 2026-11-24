@@ -178,13 +178,33 @@ pub fn build<SS>(
 ) -> Output<SS>
 where SS: SubsetSeq + Send,
 {
+    build_impl(threads, input, length, suffix_array, k, build_lcs, add_all_dummies, build_counts, false, stream_suffix_array_from_disk, temp_file_manager).0
+}
+
+// build, and the (k-1)-suffix group marks if `build_sufgroups`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_impl<SS>(
+    threads: usize,
+    input: Vec<u8>,
+    length: usize,
+    suffix_array: Vec<usize>,
+    k: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool,
+    build_sufgroups: bool,
+    stream_suffix_array_from_disk: bool,
+    temp_file_manager: &mut crate::tempfile::TempFileManager,
+) -> (Output<SS>, Option<bitvec::vec::BitVec>)
+where SS: SubsetSeq + Send,
+{
     log::info!("[build] begin");
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result = None;
     thread_pool.scope(|scope| {
         scope.spawn(|_| {
             let output = if !stream_suffix_array_from_disk {
-                par_build::<SS, MemoryStream<usize>>(
+                par_build_impl::<SS, MemoryStream<usize>>(
                     threads,
                     input,
                     length,
@@ -193,11 +213,12 @@ where SS: SubsetSeq + Send,
                     build_lcs,
                     add_all_dummies,
                     build_counts,
+                    build_sufgroups,
                     false
                 )
             } else {
                 let suffix_array = DiskStream::new(suffix_array, temp_file_manager);
-                par_build(
+                par_build_impl(
                     threads,
                     input,
                     length,
@@ -206,6 +227,7 @@ where SS: SubsetSeq + Send,
                     build_lcs,
                     add_all_dummies,
                     build_counts,
+                    build_sufgroups,
                     false
                 )
             };
@@ -219,7 +241,7 @@ where SS: SubsetSeq + Send,
 #[allow(clippy::too_many_arguments)]
 pub fn build_with_bounded_suffix_array<SS: SubsetSeq + Send>(
     threads: usize,
-    mut input: Vec<u8>,
+    input: Vec<u8>,
     k: usize,
     prefix_length_for_bucket_sort: usize,
     build_lcs: bool,
@@ -228,6 +250,23 @@ pub fn build_with_bounded_suffix_array<SS: SubsetSeq + Send>(
     stream_suffix_array_from_disk: bool,
     temp_file_manager: &mut crate::tempfile::TempFileManager,
 ) -> Output<SS> {
+    build_with_bounded_suffix_array_impl(threads, input, k, prefix_length_for_bucket_sort, build_lcs, add_all_dummies, build_counts, false, stream_suffix_array_from_disk, temp_file_manager).0
+}
+
+// build_with_bounded_suffix_array, and the (k-1)-suffix group marks if `build_sufgroups`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_with_bounded_suffix_array_impl<SS: SubsetSeq + Send>(
+    threads: usize,
+    mut input: Vec<u8>,
+    k: usize,
+    prefix_length_for_bucket_sort: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool,
+    build_sufgroups: bool,
+    stream_suffix_array_from_disk: bool,
+    temp_file_manager: &mut crate::tempfile::TempFileManager,
+) -> (Output<SS>, Option<bitvec::vec::BitVec>) {
     log::info!("[build_with_bounded_suffix_array] begin");
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     let mut result = None;
@@ -238,7 +277,7 @@ pub fn build_with_bounded_suffix_array<SS: SubsetSeq + Send>(
 
             let output = if !stream_suffix_array_from_disk {
                 let suffix_array = MemoryStream::new(suffix_array);
-                par_build::<SS, _>(
+                par_build_impl::<SS, _>(
                     threads,
                     input,
                     length,
@@ -247,11 +286,12 @@ pub fn build_with_bounded_suffix_array<SS: SubsetSeq + Send>(
                     build_lcs,
                     add_all_dummies,
                     build_counts,
+                    build_sufgroups,
                     true
                 )
             } else {
                 let suffix_array = DiskStream::new(suffix_array, temp_file_manager);
-                par_build::<SS, _>(
+                par_build_impl::<SS, _>(
                     threads,
                     input,
                     length,
@@ -260,6 +300,7 @@ pub fn build_with_bounded_suffix_array<SS: SubsetSeq + Send>(
                     build_lcs,
                     add_all_dummies,
                     build_counts,
+                    build_sufgroups,
                     true
                 )
             };
@@ -286,22 +327,43 @@ pub fn par_build<SS, SB>(
 where SS: SubsetSeq + Send,
       SB: StreamBuilder<usize> + Send + Sync,
 {
+    par_build_impl(threads, input, length, suffix_array, k, build_lcs, add_all_dummies, build_counts, false, is_bounded_suffix_array).0
+}
+
+// par_build, and the (k-1)-suffix group marks if `build_sufgroups`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn par_build_impl<SS, SB>(
+    threads: usize,
+    input: Vec<u8>,
+    length: usize,
+    suffix_array: SB,
+    k: usize,
+    build_lcs: bool,
+    add_all_dummies: bool,
+    build_counts: bool,
+    build_sufgroups: bool,
+    is_bounded_suffix_array: bool,
+) -> (Output<SS>, Option<bitvec::vec::BitVec>)
+where SS: SubsetSeq + Send,
+      SB: StreamBuilder<usize> + Send + Sync,
+{
     log::info!(
         "[par_build] begin [length: {} | build_lcs: {} | add_all_dummies: {} | build_counts {}]",
         input.len(), build_lcs, add_all_dummies, build_counts
     );
     let output = if !add_all_dummies {
-        par_build_without_redundant_dummies(
+        par_build_without_redundant_dummies_impl(
             threads,
             input,
             length,
             suffix_array,
             k,
             build_lcs,
+            build_sufgroups,
             is_bounded_suffix_array
         )
     } else {
-        par_build_with_all_dummies(
+        par_build_with_all_dummies_impl(
             threads,
             input,
             length,
@@ -309,6 +371,7 @@ where SS: SubsetSeq + Send,
             k,
             build_lcs,
             build_counts,
+            build_sufgroups,
             is_bounded_suffix_array
         )
     };
@@ -328,22 +391,41 @@ pub fn par_build_without_redundant_dummies<SS, SB>(
 where SS: SubsetSeq + Send,
       SB: StreamBuilder<usize> + Send + Sync,
 {
+    par_build_without_redundant_dummies_impl(threads, input, length, suffix_array, k, build_lcs, false, is_bounded_suffix_array).0
+}
+
+// par_build_without_redundant_dummies, and the (k-1)-suffix group marks if `build_sufgroups`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn par_build_without_redundant_dummies_impl<SS, SB>(
+    threads: usize,
+    input: Vec<u8>,
+    length: usize,
+    suffix_array: SB,
+    k: usize,
+    build_lcs: bool,
+    build_sufgroups: bool,
+    is_bounded_suffix_array: bool
+) -> (Output<SS>, Option<bitvec::vec::BitVec>)
+where SS: SubsetSeq + Send,
+      SB: StreamBuilder<usize> + Send + Sync,
+{
     log::info!("[par_build_without_redundant_dummies] begin");
     let _ = threads;
     let aux = par_build_full_auxiliary_data(threads, input, length, suffix_array, k, is_bounded_suffix_array);
     let dummy_marks = par_build_dummy_marks(threads, k, &aux);
     let kmer_count = aux.kmer_count;
 
-    let (rows, lcs) = _par_build_without_redundant_dummies(
+    let (rows, lcs, sufgroups) = _par_build_without_redundant_dummies(
         threads,
         k,
         aux,
         dummy_marks,
         build_lcs,
+        build_sufgroups,
     );
     let result = collect_output(k, rows, lcs, None, kmer_count);
     log::info!("[par_build_without_redundant_dummies] done");
-    result
+    (result, sufgroups.map(crate::util::to_usize_words))
 }
 
 #[inline]
@@ -353,7 +435,8 @@ fn _par_build_without_redundant_dummies(
     aux: FullAuxiliaryData,
     dummy_marks: DummyMarks,
     build_lcs: bool,
-) -> (Vec<BitVec<u64>>, Option<IntVector>) {
+    build_sufgroups: bool,
+) -> (Vec<BitVec<u64>>, Option<IntVector>, Option<BitVec<u64>>) {
     log::info!("[_par_build_without_redundant_dummies] begin");
 
     let length = aux.bwt.len();
@@ -391,7 +474,8 @@ fn _par_build_without_redundant_dummies(
                     is_last_thread,
                     aux,
                     dummy_marks,
-                    build_lcs
+                    build_lcs,
+                    build_sufgroups
                 );
                 results.lock().unwrap().push(result);
             });
@@ -426,14 +510,18 @@ fn _par_build_without_redundant_dummies(
         };
         Vec::<(Option<BitVec<u64>>, usize)>::with_capacity(capacity)
     };
+    let mut sufgroups_parts = Vec::<(BitVec<u64>, usize, usize)>::with_capacity(if build_sufgroups { results.len() } else { 0 });
 
     for result in results {
-        let SbwtRegionResult { rows, lcs, last_lcs_value, .. } = result;
+        let SbwtRegionResult { rows, lcs, last_lcs_value, sufgroups, first_lcs_value, .. } = result;
         if rows.is_empty() {
             continue;
         }
         if build_lcs {
             lcs_parts.push((lcs, last_lcs_value));
+        }
+        if build_sufgroups {
+            sufgroups_parts.push((sufgroups.unwrap(), first_lcs_value, last_lcs_value));
         }
         for (row_index, row) in rows.into_iter().enumerate() {
             rows_parts[row_index].push(row);
@@ -443,9 +531,31 @@ fn _par_build_without_redundant_dummies(
     log::info!("[_par_build_without_redundant_dummies] agglomerating result");
     let rows = Arc::new(Mutex::new(Vec::<(usize, BitVec<u64>)>::new()));
     let mut lcs = None;
+    let mut sufgroups = None;
     rayon::scope(|s| {
         let rows = &rows;
         let lcs  = &mut lcs;
+        let sufgroups = &mut sufgroups;
+
+        if build_sufgroups {
+            s.spawn(move |_| {
+                // As for the lcs values: the first mark of a part is that of the minimum of its
+                // first lcs value and the last lcs value of the parts before it.
+                let mut last_lcs_value: usize = 0;
+                let mut parts = vec![];
+                parts.push(bitvec::bitvec![u64, bitvec::order::Lsb0; 1; 1]); // Node 0 (the root dummy) starts the first suffix group
+                for (mut part, first_lcs_value, current_last_lcs_value) in sufgroups_parts {
+                    if part.is_empty() {
+                        last_lcs_value = last_lcs_value.min(current_last_lcs_value);
+                        continue;
+                    }
+                    part.set(0, first_lcs_value.min(last_lcs_value) < k - 1);
+                    parts.push(part);
+                    last_lcs_value = current_last_lcs_value;
+                }
+                *sufgroups = Some(crate::util::parallel_bitvec_concat(parts));
+            });
+        }
 
         if build_lcs {
             s.spawn(move |_| {
@@ -493,7 +603,7 @@ fn _par_build_without_redundant_dummies(
     }
 
     log::info!("[_par_build_without_redundant_dummies] done");
-    (rows, lcs)
+    (rows, lcs, sufgroups)
 }
 
 #[derive(Debug)]
@@ -502,6 +612,8 @@ struct SbwtRegionResult {
     rows: Vec<BitVec<u64>>,
     lcs: Option<BitVec<u64>>,
     last_lcs_value: usize,
+    sufgroups: Option<BitVec<u64>>,
+    first_lcs_value: usize,
 }
 
 fn _build_sbwt_region_without_redundant_dummies(
@@ -512,15 +624,19 @@ fn _build_sbwt_region_without_redundant_dummies(
     aux: &FullAuxiliaryData,
     dummy_marks: &DummyMarks,
     build_lcs: bool,
+    build_sufgroups: bool,
 ) -> SbwtRegionResult {
     let length = aux.bwt.len();
     let capacity = end - start;
+
+    // The suffix group marks are lcs values < k - 1, so the lcs values are also tracked for them
+    let track_lcs = build_lcs || build_sufgroups;
 
     let mut index = start;
     let mut current_lcs_value  = k - 1;
 
     while index < end {
-        if build_lcs {
+        if track_lcs {
             current_lcs_value = current_lcs_value.min(aux.lcp.get(index));
         }
         if aux.k_minus_one_ranges.get(index) {
@@ -534,7 +650,9 @@ fn _build_sbwt_region_without_redundant_dummies(
             start,
             rows: vec![],
             lcs: None,
-            last_lcs_value: current_lcs_value
+            last_lcs_value: current_lcs_value,
+            sufgroups: None,
+            first_lcs_value: k - 1,
         };
     }
 
@@ -552,6 +670,10 @@ fn _build_sbwt_region_without_redundant_dummies(
     } else {
         None
     };
+    // One mark per lcs value: lcs value < k - 1. The first one is corrected when the regions are
+    // joined, as the first lcs value, so its lcs value is kept.
+    let mut sufgroups: Option<BitVec<u64>> = build_sufgroups.then(|| BitVec::with_capacity(capacity));
+    let mut first_lcs_value: Option<usize> = None;
 
     let mut current_set = 0;
     let mut include_dummy_kmer = false;
@@ -579,7 +701,7 @@ fn _build_sbwt_region_without_redundant_dummies(
             }
         }
 
-        if build_lcs {
+        if track_lcs {
             current_lcs_value = current_lcs_value.min(aux.lcp.get(index));
         }
 
@@ -591,11 +713,17 @@ fn _build_sbwt_region_without_redundant_dummies(
         if aux.shorter_than_k.bit(index) {
             has_dummy_kmer = true;
             if dummy_marks.keep_dummy.bit(index) {
-                if build_lcs && !include_dummy_kmer {
-                    let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
-                    let (word, _)   = suffix.split_at_mut(bit_width);
-                    word.store_le(current_lcs_value as u64);
-                    lcs_count += 1;
+                if track_lcs && !include_dummy_kmer {
+                    if build_lcs {
+                        let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
+                        let (word, _)   = suffix.split_at_mut(bit_width);
+                        word.store_le(current_lcs_value as u64);
+                        lcs_count += 1;
+                    }
+                    if let Some(sufgroups) = sufgroups.as_mut() {
+                        first_lcs_value.get_or_insert(current_lcs_value);
+                        sufgroups.push(current_lcs_value < k - 1);
+                    }
                     current_lcs_value = k - 1;
                 }
                 include_dummy_kmer = true;
@@ -604,11 +732,17 @@ fn _build_sbwt_region_without_redundant_dummies(
                 current_set = include_letter(&aux.bwt, index, current_set);
             }
         } else {
-            if build_lcs && is_start_of_k_range {
-                let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
-                let (word, _)   = suffix.split_at_mut(bit_width);
-                word.store_le(current_lcs_value as u64);
-                lcs_count += 1;
+            if track_lcs && is_start_of_k_range {
+                if build_lcs {
+                    let (_, suffix) = lcs.as_mut().unwrap().split_at_mut(lcs_count * bit_width);
+                    let (word, _)   = suffix.split_at_mut(bit_width);
+                    word.store_le(current_lcs_value as u64);
+                    lcs_count += 1;
+                }
+                if let Some(sufgroups) = sufgroups.as_mut() {
+                    first_lcs_value.get_or_insert(current_lcs_value);
+                    sufgroups.push(current_lcs_value < k - 1);
+                }
                 current_lcs_value = k - 1;
             }
             current_set = include_letter(&aux.bwt, index, current_set);
@@ -636,7 +770,9 @@ fn _build_sbwt_region_without_redundant_dummies(
         start,
         rows,
         lcs,
-        last_lcs_value: current_lcs_value
+        last_lcs_value: current_lcs_value,
+        sufgroups,
+        first_lcs_value: first_lcs_value.unwrap_or(k - 1),
     }
 }
 
@@ -1501,7 +1637,7 @@ fn keep_predecessors_atomic(
 #[allow(clippy::too_many_arguments)]
 pub fn par_build_with_all_dummies<SS, SB>(
     threads: usize,
-    mut input: Vec<u8>,
+    input: Vec<u8>,
     length: usize,
     suffix_array: SB,
     k: usize,
@@ -1509,6 +1645,25 @@ pub fn par_build_with_all_dummies<SS, SB>(
     build_counts: bool,
     is_bounded_suffix_array: bool,
 ) -> Output<SS>
+where SS: SubsetSeq + Send,
+      SB: StreamBuilder<usize> + Send + Sync
+{
+    par_build_with_all_dummies_impl(threads, input, length, suffix_array, k, build_lcs, build_counts, false, is_bounded_suffix_array).0
+}
+
+// par_build_with_all_dummies, and the (k-1)-suffix group marks if `build_sufgroups`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn par_build_with_all_dummies_impl<SS, SB>(
+    threads: usize,
+    mut input: Vec<u8>,
+    length: usize,
+    suffix_array: SB,
+    k: usize,
+    build_lcs: bool,
+    build_counts: bool,
+    build_sufgroups: bool,
+    is_bounded_suffix_array: bool,
+) -> (Output<SS>, Option<bitvec::vec::BitVec>)
 where SS: SubsetSeq + Send,
       SB: StreamBuilder<usize> + Send + Sync
 {
@@ -1546,7 +1701,8 @@ where SS: SubsetSeq + Send,
                     lcp,
                     lengths,
                     build_lcs,
-                    build_counts
+                    build_counts,
+                    build_sufgroups
                 );
                 results.lock().unwrap().push(result);
             });
@@ -1586,10 +1742,15 @@ where SS: SubsetSeq + Send,
         Vec::<Option<(Vec<u8>, Vec<u64>)>>::with_capacity(capacity)
     };
 
+    let mut sufgroups_parts = Vec::<BitVec<u64>>::with_capacity(if build_sufgroups { results.len() } else { 0 });
+
     for result in results {
-        let SbwtAllDummiesRegionResult { kmer_count, rows, lcs, counts, .. } = result;
+        let SbwtAllDummiesRegionResult { kmer_count, rows, lcs, counts, sufgroups, .. } = result;
         if rows.is_empty() {
             continue;
+        }
+        if build_sufgroups {
+            sufgroups_parts.push(sufgroups.unwrap());
         }
         total_kmer_count += kmer_count;
         for (row_index, row) in rows.into_iter().enumerate() {
@@ -1607,10 +1768,18 @@ where SS: SubsetSeq + Send,
     let rows = Arc::new(Mutex::new(Vec::<(usize, BitVec<u64>)>::new()));
     let mut lcs = None;
     let mut counts = None;
+    let mut sufgroups = None;
     rayon::scope(|s| {
         let rows   = &rows;
         let lcs    = &mut lcs;
         let counts = &mut counts;
+        let sufgroups = &mut sufgroups;
+
+        if build_sufgroups {
+            s.spawn(move |_| {
+                *sufgroups = Some(crate::util::parallel_bitvec_concat(sufgroups_parts));
+            });
+        }
 
         for (row_index, row_parts) in rows_parts.into_iter().enumerate() {
             s.spawn(move |_| {
@@ -1708,7 +1877,7 @@ where SS: SubsetSeq + Send,
 
     let result = collect_output(k, rows, lcs, counts, total_kmer_count);
     log::info!("[par_build_with_all_dummies] done");
-    result
+    (result, sufgroups.map(crate::util::to_usize_words))
 }
 
 #[derive(Debug)]
@@ -1718,6 +1887,7 @@ struct SbwtAllDummiesRegionResult {
     rows: Vec<BitVec<u64>>,
     lcs: Option<BitVec<u64>>,
     counts: Option<(Vec<u8>, Vec<u64>)>,
+    sufgroups: Option<BitVec<u64>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1733,6 +1903,7 @@ fn _build_sbwt_region_with_all_dummies<SB>(
     lengths: &Lcp,
     build_lcs: bool,
     build_counts: bool,
+    build_sufgroups: bool,
 ) -> SbwtAllDummiesRegionResult
 where SB: StreamBuilder<usize> + Send + Sync
 {
@@ -1768,6 +1939,7 @@ where SB: StreamBuilder<usize> + Send + Sync
                 rows: vec![],
                 lcs: None,
                 counts: None,
+                sufgroups: None,
             }
         }
     }
@@ -1795,6 +1967,8 @@ where SB: StreamBuilder<usize> + Send + Sync
     } else {
         None
     };
+    // One mark per lcs value: lcs value < k - 1
+    let mut sufgroups: Option<BitVec<u64>> = build_sufgroups.then(|| BitVec::with_capacity(capacity));
 
     let mut current_set: u8 = 0;
 
@@ -1805,6 +1979,9 @@ where SB: StreamBuilder<usize> + Send + Sync
 
     if start == 1 {
         lcs_count += 1;
+        if let Some(sufgroups) = sufgroups.as_mut() {
+            sufgroups.push(true); // Node 0 (the root dummy) starts the first suffix group
+        }
         k_range_count = 1;
         if build_counts {
             counts.as_mut().unwrap().0.push(0);
@@ -1841,6 +2018,9 @@ where SB: StreamBuilder<usize> + Send + Sync
                 let (word, _)   = suffix.split_at_mut(bit_width);
                 word.store_le(lcp_value as u64);
                 lcs_count += 1;
+            }
+            if let Some(sufgroups) = sufgroups.as_mut() {
+                sufgroups.push(lcp_value < k - 1);
             }
 
             if build_counts && individual_count > 0 {
@@ -1892,7 +2072,8 @@ where SB: StreamBuilder<usize> + Send + Sync
         kmer_count,
         rows,
         lcs,
-        counts
+        counts,
+        sufgroups,
     }
 }
 

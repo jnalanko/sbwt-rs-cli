@@ -211,6 +211,14 @@ pub(crate) fn log_memory(log_prefix: &str, when: &str, parts: &[(&str, usize)]) 
     log::info!("{} Memory {}: resident {}; {}", log_prefix, when, resident, parts.join(", "));
 }
 
+/// A bit vector with u64 words as one with usize words, the words of a [crate::dbg::Dbg].
+pub(crate) fn to_usize_words(bits: BitVec) -> bitvec::vec::BitVec {
+    let n = bits.len();
+    let mut result = bitvec::vec::BitVec::from_vec(bits.into_vec().into_iter().map(|w| w as usize).collect());
+    result.truncate(n);
+    result
+}
+
 // This function runs in parallel, so a rayon thread pool must be initialized.
 pub(crate) fn parallel_bitvec_concat(bitvecs: Vec<BitVec>) -> BitVec {
     if bitvecs.len() == 1 {

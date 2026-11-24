@@ -8,7 +8,7 @@ use dummies::KmersWithLengths;
 use kmer_splitter::get_bitpacked_sorted_distinct_kmers;
 
 use crate::{sbwt::{PrefixLookupTable, SbwtIndex}, streaming_index::LcsArray, subsetseq::SubsetSeq, util::DNA_ALPHABET};
-/// Build SBWT and optionally the LCS array fully in memory using bitpacked k-mer sorting.
+/// Build SBWT and optionally the LCS array and the (k-1)-suffix group marks fully in memory using bitpacked k-mer sorting.
 ///
 /// See [BitPackedKmerSortingMem](crate::builder::BitPackedKmerSortingMem) for a wrapper with a more
 /// user-friendly interface. B is the number u64 words in a k-mer.
@@ -21,8 +21,9 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
     approx_mem_gb: usize,
     dedup_batches: bool,
     build_lcs: bool,
+    build_sufgroups: bool,
     add_all_dummy_paths: bool,
-) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+) -> (SbwtIndex::<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
 
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(n_threads).build().unwrap();
 
@@ -49,7 +50,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         log::info!("Constructing the sbwt subset sequence");
 
-        let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(rev_kmers, dummies_and_lengths, k, sigma, build_lcs, n_threads);
+        let (rawrows, lcs, sufgroups) = cursors::build_sbwt_bit_vectors::<B>(rev_kmers, dummies_and_lengths, k, sigma, build_lcs, build_sufgroups, n_threads);
 
         // Create the C array
         #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
@@ -69,7 +70,7 @@ pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + 
 
         let lut = PrefixLookupTable::new(&index, 8);
         index.set_lookup_table(lut);
-        (index, lcs)
+        (index, lcs, sufgroups)
 
         })
 
@@ -89,13 +90,14 @@ mod tests {
         let seq2 = b"NNNNNNNNNN";
         let seq3 = b"ACCCCCCCNNNNTACNNN";
         let seqs: Vec<&[u8]> = vec![seq1, seq2, seq3];
-        let (mut sbwt, _lcs) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
+        let (mut sbwt, _lcs, _) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
             crate::SliceSeqStream::new(seqs.as_slice()),
             k,
             3,     // n_threads
             1,     // approx_mem_gb
             false, // dedup_batches
             true, // build_lcs
+            false, // build_sufgroups
             true,  // add_all_dummy_paths
         );
         sbwt.build_select();

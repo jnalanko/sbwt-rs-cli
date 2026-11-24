@@ -131,45 +131,65 @@ pub fn find_first_starting_with<const B: usize>(
 // This first builds the uncompressed LCS array of &[u16], and then compressed it to log(k) bits per element.
 // This means that the peak memory is high, but we have the k-mers in memory anyway, so it's not so bad
 // TODO: compute the compressed LCS directly. 
-pub fn build_lcs_array<const B: usize>(
+// Returns the LCS array only if `build_lcs`, and also the (k-1)-suffix group marks if
+// `build_sufgroups`, from the same pass: mark i is set iff lcs[i] < k-1.
+pub fn build_lcs_and_sufgroups<const B: usize>(
     kmers: &[LongKmer<B>],
     dummies: &KmersWithLengths<B>,
-    k: usize, n_threads: usize
-) -> simple_sds_sbwt::int_vector::IntVector {
+    k: usize, n_threads: usize,
+    build_lcs: bool,
+    build_sufgroups: bool,
+) -> (Option<simple_sds_sbwt::int_vector::IntVector>, Option<bitvec::vec::BitVec>) {
     // LCS values are between 0 and k-1
     assert!(k > 0);
     assert!(k < u16::MAX as usize);
     //assert!(kmers.len() > 0);
 
-    log::info!("Computing LCS values");
+    log::info!("Computing{}{}", if build_lcs { " LCS values" } else { "" }, if build_sufgroups { " suffix group marks" } else { "" });
 
     let full_slice = KmerDummyMergeSlice::new(dummies, kmers, 0..(kmers.len()+dummies.len()), k);
 
     // We start the segmentation from 1 so that we always have a previous k-mer to compare against
     let segments = crate::util::segment_range(1..full_slice.len(), n_threads);
-    let lcs_pieces: Vec<Vec<u16>> = segments.into_par_iter().map(|range| {
+    let pieces: Vec<(Vec<u16>, bitvec::vec::BitVec<u64, Lsb0>)> = segments.into_par_iter().map(|range| {
         let (mut prev_kmer, mut prev_len) = get_ith_merged_kmer(kmers, dummies, range.start - 1, k); // range.start >= 1 so this is ok
         let mut subslice = KmerDummyMergeSlice::new(dummies, kmers, range.clone(), k);
-        let mut lcs_piece = Vec::<u16>::with_capacity(range.len());
+        let mut lcs_piece = Vec::<u16>::with_capacity(if build_lcs { range.len() } else { 0 });
+        let mut marks_piece = bitvec::vec::BitVec::<u64, Lsb0>::with_capacity(if build_sufgroups { range.len() } else { 0 });
         while let Some((kmer, len)) = subslice.next() {
             let lcp_value = LongKmer::<B>::lcp_with_different_lengths((&prev_kmer, prev_len), (&kmer, len));
-            lcs_piece.push(lcp_value as u16);
+            if build_lcs {
+                lcs_piece.push(lcp_value as u16);
+            }
+            if build_sufgroups {
+                marks_piece.push(lcp_value < k - 1);
+            }
             (prev_kmer, prev_len) = (kmer,len);
         }
-        lcs_piece
+        (lcs_piece, marks_piece)
     }).collect();
+    let (lcs_pieces, marks_pieces): (Vec<Vec<u16>>, Vec<bitvec::vec::BitVec<u64, Lsb0>>) = pieces.into_iter().unzip();
 
+    let lcs = build_lcs.then(|| {
+        // Compress into log(k) bits per element
+        log::info!("Compressing LCS array to log(k) bits per element");
+        let bitwidth = 64 - (k as u64 - 1).leading_zeros();
+        let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(full_slice.len(), bitwidth as usize).unwrap();
+        compressed_lcs.push(0); // lcs[0] = 0 by definition
+        for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
+            compressed_lcs.extend(piece);
+        }
+        compressed_lcs
+    });
 
-    // Compress into log(k) bits per element
-    log::info!("Compressing LCS array to log(k) bits per element");
-    let bitwidth = 64 - (k as u64 - 1).leading_zeros();
-    let mut compressed_lcs = simple_sds_sbwt::int_vector::IntVector::with_capacity(full_slice.len(), bitwidth as usize).unwrap();
-    compressed_lcs.push(0); // lcs[0] = 0 by definition
-    for piece in lcs_pieces { // Concatenate pieces. Todo: could this be done in parallel?
-        compressed_lcs.extend(piece);
-    }
+    let sufgroups = build_sufgroups.then(|| {
+        // Mark 0, then the marks of k-mers 1..n
+        let mut first = bitvec::vec::BitVec::<u64, Lsb0>::new();
+        first.push(true); // Node 0 (the root dummy) starts the first suffix group
+        crate::util::to_usize_words(crate::util::parallel_bitvec_concat(std::iter::once(first).chain(marks_pieces).collect()))
+    });
 
-    compressed_lcs
+    (lcs, sufgroups)
 }
 
 /// Assumes both input vector have no duplicates, and any
@@ -232,14 +252,16 @@ fn prepend_c<const B: usize>(kmer: (LongKmer<B>, u8), k: usize, c: usize) -> (Lo
 }
 
 // Returns the SBWT bit vectors and optionally the LCS array
+// and, if `build_sufgroups`, the (k-1)-suffix group marks.
 pub fn build_sbwt_bit_vectors<const B: usize>(
     kmers: Vec<LongKmer<B>>,
     dummies: KmersWithLengths<B>,
     k: usize,
     sigma: usize,
     build_lcs: bool,
+    build_sufgroups: bool,
     n_threads: usize,
-) -> (Vec<bitvec::vec::BitVec::<u64, Lsb0>>, Option<simple_sds_sbwt::int_vector::IntVector>) {
+) -> (Vec<bitvec::vec::BitVec::<u64, Lsb0>>, Option<simple_sds_sbwt::int_vector::IntVector>, Option<bitvec::vec::BitVec>) {
 
     let n = kmers.len() + dummies.len(); // Merged lengths
 
@@ -302,13 +324,13 @@ pub fn build_sbwt_bit_vectors<const B: usize>(
             rows.push(crate::util::parallel_bitvec_concat(row_pieces));
         }
 
-        let lcs = if build_lcs {
+        let (lcs, sufgroups) = if build_lcs || build_sufgroups {
             // LCS values are between 0 and k-1
-            Some(build_lcs_array(&kmers, &dummies, k, n_threads))
+            build_lcs_and_sufgroups(&kmers, &dummies, k, n_threads, build_lcs, build_sufgroups)
         } else {
-            None
+            (None, None)
         };
 
-        (rows, lcs)
+        (rows, lcs, sufgroups)
     })
 }

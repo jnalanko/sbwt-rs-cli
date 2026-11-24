@@ -54,7 +54,8 @@ pub fn sort_and_dedup_kmers_into_file<const B: usize, IN: crate::SeqStream + Sen
     }
 }
 
-pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+#[allow(clippy::too_many_arguments)]
+pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, build_sufgroups: bool, temp_file_manager: &mut TempFileManager, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
 
     let sigma = DNA_ALPHABET.len(); 
     let n_kmers = disk_access::n_kmer_records::<B>(kmers_file);
@@ -74,7 +75,7 @@ pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, 
     log::info!("Temporary disk space peak during dummy construction: {} bytes ({})", dummy_merge_peak, human_bytes(dummy_merge_peak as f64));
 
     log::info!("Constructing the sbwt subset sequence");
-    let (rawrows, lcs) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, n_threads);
+    let (rawrows, lcs, sufgroups) = cursors::build_sbwt_bit_vectors::<B>(&dummy_file.path, kmers_file, n_dummies, n_kmers, k, sigma, build_lcs, build_sufgroups, n_threads);
 
     // Create the C array
     #[allow(non_snake_case)] // C-array is an established convention in BWT indexes
@@ -94,16 +95,17 @@ pub fn build_from_kmers_on_disk<const B: usize, SS: SubsetSeq + Send>(k: usize, 
 
     let lut = PrefixLookupTable::new(&index, 8);
     index.set_lookup_table(lut);
-    (index, lcs)
+    (index, lcs, sufgroups)
 }
 
 /// Build using bitpacked k-mer sorting. See [crate::builder] for a wrapper with a more 
 /// user-friendly interface. B is the number u64 words in a k-mer.
-pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, build_lcs: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (SbwtIndex::<SS>, Option<LcsArray>) {
+#[allow(clippy::too_many_arguments)]
+pub fn build_with_bitpacked_kmer_sorting<const B: usize, IN: crate::SeqStream + Send, SS: SubsetSeq + Send>(seqs: IN, k: usize, mem_gb: usize, n_threads: usize, dedup_batches: bool, build_lcs: bool, build_sufgroups: bool, add_all_dummy_paths: bool, temp_file_manager: &mut TempFileManager) -> (SbwtIndex::<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
     let (kmers_file, first_mers_file) = sort_and_dedup_kmers_into_file::<B, IN, SS>(seqs, k, mem_gb, n_threads, dedup_batches, add_all_dummy_paths, temp_file_manager);
 
     let first_mers_file_path_option: Option<&Path> = first_mers_file.as_ref().map(|f| f.path.as_path());
-    build_from_kmers_on_disk::<B, SS>(k, n_threads, build_lcs, temp_file_manager, &kmers_file.path, first_mers_file_path_option)
+    build_from_kmers_on_disk::<B, SS>(k, n_threads, build_lcs, build_sufgroups, temp_file_manager, &kmers_file.path, first_mers_file_path_option)
 }
 
 #[cfg(test)]
@@ -119,13 +121,14 @@ mod tests {
         let seq3 = b"ACCCCCCCNNNNTACNNN";
         let seqs: Vec<&[u8]> = vec![seq1, seq2, seq3];
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(std::path::Path::new("/tmp"));
-        let (mut sbwt, _lcs) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
+        let (mut sbwt, _lcs, _) = super::build_with_bitpacked_kmer_sorting::<1, _, crate::subsetseq::SubsetMatrix>(
             crate::SliceSeqStream::new(seqs.as_slice()),
             k,
             1,     // mem_gb
             1,     // n_threads
             false, // dedup_batches
             true,  // build_lcs
+            false, // build_sufgroups
             true,  // add_all_dummy_paths
             &mut temp_file_manager,
         );

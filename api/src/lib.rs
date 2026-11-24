@@ -197,7 +197,7 @@ mod builder;
 pub use builder::*;
 
 mod streaming_index;
-pub use streaming_index::{StreamingIndex, LcsArray, MatchingStatisticsIterator, ContractLeft, ExtendRight};
+pub use streaming_index::{StreamingIndex, LcsArray, Sufgroups, MatchingStatisticsIterator, ContractLeft, ExtendRight};
 
 mod subsetseq;
 pub use subsetseq::*;

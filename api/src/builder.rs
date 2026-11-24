@@ -116,23 +116,38 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BitPackedKmerSortingDisk<IN, SS
     ///
     /// Panics if k > 256.
     pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
+        let (sbwt, lcs, _) = self.run_inner(false);
+        (sbwt, lcs)
+    }
+
+    /// Like [run](BitPackedKmerSortingDisk::run), and also returns the (k-1)-suffix group marks of the SBWT
+    /// ([Sufgroups](crate::Sufgroups)). The marks come from the same pass over the sorted k-mers
+    /// as the LCS array, without building it.
+    ///
+    /// Panics if k > 256.
+    pub fn run_with_sufgroups(self) -> (SbwtIndex<SS>, Option<LcsArray>, crate::Sufgroups) {
+        let (sbwt, lcs, sufgroups) = self.run_inner(true);
+        (sbwt, lcs, crate::Sufgroups::new(sufgroups.unwrap())) // Built because build_sufgroups is true
+    }
+
+    fn run_inner(self, build_sufgroups: bool) -> (SbwtIndex<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
-        let (mut sbwt, lcs) = match self.k {
+        let (mut sbwt, lcs, sufgroups) = match self.k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<1,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<2,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<3,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<4,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths, &mut temp_file_manager)
+                crate::bitpacked_kmer_sorting::build_with_bitpacked_kmer_sorting::<8,_,SS>(input, self.k, self.mem_gb, self.n_threads, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths, &mut temp_file_manager)
             }
             _ => {
                 panic!("k > 256 not supported with a bitpacked sorting algorithm.");
@@ -148,7 +163,7 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BitPackedKmerSortingDisk<IN, SS
             sbwt.set_lookup_table(lut);
         }
 
-        (sbwt, lcs)
+        (sbwt, lcs, sufgroups)
     }
 }
 
@@ -286,22 +301,37 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BitPackedKmerSortingMem<IN, SS>
     ///
     /// Panics if k > 256.
     pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
+        let (sbwt, lcs, _) = self.run_inner(false);
+        (sbwt, lcs)
+    }
+
+    /// Like [run](BitPackedKmerSortingMem::run), and also returns the (k-1)-suffix group marks of the SBWT
+    /// ([Sufgroups](crate::Sufgroups)). The marks come from the same pass over the sorted k-mers
+    /// as the LCS array, without building it.
+    ///
+    /// Panics if k > 256.
+    pub fn run_with_sufgroups(self) -> (SbwtIndex<SS>, Option<LcsArray>, crate::Sufgroups) {
+        let (sbwt, lcs, sufgroups) = self.run_inner(true);
+        (sbwt, lcs, crate::Sufgroups::new(sufgroups.unwrap())) // Built because build_sufgroups is true
+    }
+
+    fn run_inner(self, build_sufgroups: bool) -> (SbwtIndex<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
-        let (mut sbwt, lcs) = match self.k {
+        let (mut sbwt, lcs, sufgroups) = match self.k {
             0..=32 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<1,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths)
             }
             33..=64 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<2,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths)
             }
             65..=96 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<3,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths)
             }
             97..=128 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<4,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths)
             }
             129..=256 => {
-                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, self.add_all_dummy_paths)
+                crate::bitpacked_kmer_sorting_mem::build_with_bitpacked_kmer_sorting::<8,_,SS>(input, self.k, self.n_threads, self.mem_gb, self.dedup_batches, self.build_lcs, build_sufgroups, self.add_all_dummy_paths)
             }
             _ => {
                 panic!("k > 256 not supported with a bitpacked sorting algorithm.");
@@ -317,7 +347,7 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BitPackedKmerSortingMem<IN, SS>
             sbwt.set_lookup_table(lut);
         }
 
-        (sbwt, lcs)
+        (sbwt, lcs, sufgroups)
     }
 }
 
@@ -486,6 +516,19 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByBoundedSuffixSort<IN, SS
     /// The input sequences are first read into a single concatenation in memory, separated by
     /// the `$` character and preceded by the sentinel `#`.
     pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
+        let (sbwt, lcs, _) = self.run_inner(false);
+        (sbwt, lcs)
+    }
+
+    /// Like [run](BuildByBoundedSuffixSort::run), and also returns the (k-1)-suffix group marks of the SBWT
+    /// ([Sufgroups](crate::Sufgroups)). The marks come from the same pass as the LCS array,
+    /// without building it.
+    pub fn run_with_sufgroups(self) -> (SbwtIndex<SS>, Option<LcsArray>, crate::Sufgroups) {
+        let (sbwt, lcs, sufgroups) = self.run_inner(true);
+        (sbwt, lcs, crate::Sufgroups::new(sufgroups.unwrap())) // Built because build_sufgroups is true
+    }
+
+    fn run_inner(self, build_sufgroups: bool) -> (SbwtIndex<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
@@ -493,8 +536,8 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByBoundedSuffixSort<IN, SS
         crate::build_by_suffix_sorting::preprocessing::concatenate_sequences(&mut input, &mut concatenation).unwrap();
 
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
-        let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
-            crate::build_by_suffix_sorting::build_with_bounded_suffix_array::<SS>(
+        let (crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _}, sufgroups) =
+            crate::build_by_suffix_sorting::build_with_bounded_suffix_array_impl::<SS>(
                 self.n_threads,
                 concatenation,
                 self.k,
@@ -502,6 +545,7 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByBoundedSuffixSort<IN, SS
                 self.build_lcs,
                 self.add_all_dummy_paths,
                 false, // Counts are not part of the return value of this interface
+                build_sufgroups,
                 self.stream_suffix_array_from_disk,
                 &mut temp_file_manager,
             );
@@ -515,7 +559,7 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByBoundedSuffixSort<IN, SS
             sbwt.set_lookup_table(lut);
         }
 
-        (sbwt, lcs)
+        (sbwt, lcs, sufgroups)
     }
 }
 
@@ -661,6 +705,19 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByLibsais<IN, SS> {
     /// the `$` character and preceded by the sentinel `#`. A suffix array of the concatenation is
     /// then built with `libsais` and passed to [crate::build_by_suffix_sorting::build].
     pub fn run(self) -> (SbwtIndex<SS>, Option<LcsArray>) {
+        let (sbwt, lcs, _) = self.run_inner(false);
+        (sbwt, lcs)
+    }
+
+    /// Like [run](BuildByLibsais::run), and also returns the (k-1)-suffix group marks of the SBWT
+    /// ([Sufgroups](crate::Sufgroups)). The marks come from the same pass as the LCS array,
+    /// without building it.
+    pub fn run_with_sufgroups(self) -> (SbwtIndex<SS>, Option<LcsArray>, crate::Sufgroups) {
+        let (sbwt, lcs, sufgroups) = self.run_inner(true);
+        (sbwt, lcs, crate::Sufgroups::new(sufgroups.unwrap())) // Built because build_sufgroups is true
+    }
+
+    fn run_inner(self, build_sufgroups: bool) -> (SbwtIndex<SS>, Option<LcsArray>, Option<bitvec::vec::BitVec>) {
         let input = SeqStreamWithPossiblyRevComp::new(self.input, self.add_rev_comp);
         let mut input = SanitizedReversedSeqStream{ inner: input, buf: Vec::<u8>::new() };
 
@@ -671,8 +728,8 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByLibsais<IN, SS> {
         let suffix_array = libsais_suffix_array(&concatenation, self.n_threads);
         let mut temp_file_manager = crate::tempfile::TempFileManager::new(&self.temp_dir);
 
-        let crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _} =
-            crate::build_by_suffix_sorting::build::<SS>(
+        let (crate::build_by_suffix_sorting::Output{mut sbwt, lcs, counts: _}, sufgroups) =
+            crate::build_by_suffix_sorting::build_impl::<SS>(
                 self.n_threads,
                 concatenation,
                 length,
@@ -681,6 +738,7 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByLibsais<IN, SS> {
                 self.build_lcs,
                 self.add_all_dummy_paths,
                 false, // Counts are not part of the return value of this interface
+                build_sufgroups,
                 self.stream_suffix_array_from_disk,
                 &mut temp_file_manager,
             );
@@ -694,7 +752,7 @@ impl<IN: SeqStream + Send, SS: SubsetSeq + Send> BuildByLibsais<IN, SS> {
             sbwt.set_lookup_table(lut);
         }
 
-        (sbwt, lcs)
+        (sbwt, lcs, sufgroups)
     }
 }
 
@@ -864,6 +922,85 @@ mod tests {
             }
         }
     }
+
+    /// For every builder: run_with_sufgroups gives the index and the LCS array that run gives with
+    /// the same settings, and the suffix group marks of the de Bruijn graph of that index (computed
+    /// by Dbg from the LCS array and, separately, without it).
+    #[test]
+    fn run_with_sufgroups_matches_dbg() {
+        let seqs: Vec<Vec<u8>> = (0..8_u64).map(|i| {
+            crate::util::gen_random_dna_string(50 + 7 * i as usize, 999 + i)
+        }).collect();
+
+        // The (k-1)-suffix group marks of `sbwt` by Dbg, without and (if given) with the LCS array.
+        fn dbg_marks(sbwt: &SbwtIndex<SubsetMatrix>, lcs: Option<&LcsArray>) -> bitvec::vec::BitVec {
+            let mut sbwt = sbwt.clone();
+            sbwt.build_select();
+            let without_lcs = crate::dbg::Dbg::new(&sbwt, None, 2).k_minus_1_marks().clone();
+            if let Some(lcs) = lcs {
+                assert_eq!(*crate::dbg::Dbg::new(&sbwt, Some(lcs), 2).k_minus_1_marks(), without_lcs);
+            }
+            without_lcs
+        }
+
+        // Builds with `run` and `run_with_sufgroups` with the same settings and compares them.
+        macro_rules! check {
+            ($name:expr, $builder:expr, $case:expr) => {{
+                let (sbwt, lcs) = $builder.run();
+                let (s_sbwt, s_lcs, sufgroups) = $builder.run_with_sufgroups();
+                let case = format!("{}, {}", $name, $case);
+                assert_eq!(s_sbwt, sbwt, "{}", case);
+                assert_eq!(s_lcs, lcs, "{}", case);
+                assert_eq!(*sufgroups.marks(), dbg_marks(&sbwt, lcs.as_ref()), "{}", case);
+            }};
+        }
+
+        for k in [3, 5, 31, 32] { // The k-mer sorting builders need k >= 3
+            for add_all_dummy_paths in [false, true] {
+                // Several thread counts, so that the regions of the threads are joined in
+                // different places
+                for (build_lcs, n_threads) in [(false, 1), (true, 1), (false, 3), (true, 3), (false, 16), (true, 16)] {
+                    let case = format!("k = {}, all dummies = {}, build_lcs = {}, threads = {}", k, add_all_dummy_paths, build_lcs, n_threads);
+                    check!("mem", BitPackedKmerSortingMem::new_from_vecs(&seqs, k).n_threads(n_threads)
+                        .build_lcs(build_lcs).add_all_dummy_paths(add_all_dummy_paths), case);
+                    check!("disk", BitPackedKmerSortingDisk::new_from_vecs(&seqs, k).n_threads(n_threads)
+                        .build_lcs(build_lcs).add_all_dummy_paths(add_all_dummy_paths).temp_dir(&std::env::temp_dir()), case);
+                    // The suffix sorting builders build a wrong SBWT with 16 threads at k = 3 on this
+                    // input (see bounded_suffix_sort_many_threads_small_input), so that case is left out
+                    if !(k == 3 && n_threads == 16) {
+                        check!("bounded", BuildByBoundedSuffixSort::new_from_vecs(&seqs, k).n_threads(n_threads)
+                            .build_lcs(build_lcs).add_all_dummy_paths(add_all_dummy_paths), case);
+                        #[cfg(feature = "libsais")]
+                        check!("libsais", BuildByLibsais::new_from_vecs(&seqs, k).n_threads(n_threads)
+                            .build_lcs(build_lcs).add_all_dummy_paths(add_all_dummy_paths), case);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The suffix sorting builders with many threads on a small input: found 2026-11-24, with 16
+    /// threads at k = 3 BuildByBoundedSuffixSort builds 61 nodes instead of 65 (correct with 1, 3
+    /// and 8 threads, and at k = 5 and 31). Not fixed yet.
+    #[test]
+    #[ignore = "known bug: the suffix sorting builders with 16 threads at k = 3 on a small input build a wrong SBWT"]
+    fn bounded_suffix_sort_many_threads_small_input() {
+        let seqs: Vec<Vec<u8>> = (0..8_u64).map(|i| {
+            crate::util::gen_random_dna_string(50 + 7 * i as usize, 999 + i)
+        }).collect();
+        for k in [3, 5, 31] {
+            let (reference, _) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).run();
+            for n_threads in [1, 3, 8, 16] {
+                let (bounded, _) = BuildByBoundedSuffixSort::new_from_vecs(&seqs, k).n_threads(n_threads).run();
+                assert_eq!(bounded, reference, "bounded, k = {}, threads = {}", k, n_threads);
+                #[cfg(feature = "libsais")]
+                {
+                    let (libsais, _) = BuildByLibsais::new_from_vecs(&seqs, k).n_threads(n_threads).run();
+                    assert_eq!(libsais, reference, "libsais, k = {}, threads = {}", k, n_threads);
+                }
+            }
+        }
+    }
 }
 
 /// Sort and deduplicate the reverse k-mers of the input sequences into a file on disk, to be later
@@ -908,24 +1045,25 @@ pub fn sort_and_dedup_kmers_into_file<SS: crate::SubsetSeq + Send, IN: SeqStream
 /// The input files are not deleted.
 pub fn build_from_kmers_on_disk<SS: crate::SubsetSeq + Send>(k: usize, n_threads: usize, build_lcs: bool, temp_dir: &Path, kmers_file: &Path, first_mers_file: Option<&Path>) -> (SbwtIndex::<SS>, Option<LcsArray>) {
     let mut tfm = TempFileManager::new(temp_dir);
-    match k {
+    let (sbwt, lcs, _) = match k {
         0..=32 => {
-            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<1, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<1, SS>(k, n_threads, build_lcs, false, &mut tfm, kmers_file, first_mers_file)
         }
         33..=64 => {
-            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<2, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<2, SS>(k, n_threads, build_lcs, false, &mut tfm, kmers_file, first_mers_file)
         }
         65..=96 => {
-            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<3, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<3, SS>(k, n_threads, build_lcs, false, &mut tfm, kmers_file, first_mers_file)
         }
         97..=128 => {
-            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<4, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<4, SS>(k, n_threads, build_lcs, false, &mut tfm, kmers_file, first_mers_file)
         }
         129..=256 => {
-            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<8, SS>(k, n_threads, build_lcs, &mut tfm, kmers_file, first_mers_file)
+            crate::bitpacked_kmer_sorting::build_from_kmers_on_disk::<8, SS>(k, n_threads, build_lcs, false, &mut tfm, kmers_file, first_mers_file)
         }
         _ => {
             panic!("k > 256 not supported with bitpacked sorting algorithm.");
         }
-    }
+    };
+    (sbwt, lcs)
 }
