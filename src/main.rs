@@ -207,12 +207,9 @@ fn read_lines(path: &PathBuf) -> Vec<PathBuf> {
 }
 
 #[allow(non_snake_case)]
-fn build_command(matches: &clap::ArgMatches){
-
-    let infile = matches.get_one::<std::path::PathBuf>("input");
-    let in_listfile = matches.get_one::<std::path::PathBuf>("input-list");
-
-    let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
+// Runs the construction algorithm chosen in the arguments of the build command, building
+// subset sequence type SS.
+fn run_builder<SS: SubsetSeq + Send>(matches: &clap::ArgMatches, reader: Box<dyn crate::SeqStream + Send>) -> (SbwtIndex<SS>, Option<LcsArray>) {
     let build_lcs = matches.get_flag("build-lcs");
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
@@ -230,6 +227,36 @@ fn build_command(matches: &clap::ArgMatches){
     let add_all_dummy_paths = matches.get_flag("add-all-dummy-paths");
     let precalc_length = *matches.get_one::<usize>("prefix-precalc-length").unwrap();
     let temp_dir = matches.get_one::<std::path::PathBuf>("temp-dir").unwrap();
+
+    if via_libsais {
+        #[cfg(feature = "libsais")]
+        {
+            let builder = BuildByLibsais::new(reader, k).subset_seq::<SS>().stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+            builder.run()
+        }
+        #[cfg(not(feature = "libsais"))]
+        {
+            panic!("--via-libsais requires sbwt-cli to be built with `--features libsais`");
+        }
+    } else if bounded_suffix_sort {
+        let builder = BuildByBoundedSuffixSort::new(reader, k).subset_seq::<SS>().prefix_length_for_bucket_sort(bucket_sort_prefix_length).stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        builder.run()
+    } else if in_memory {
+        let builder = BitPackedKmerSortingMem::new(reader, k).subset_seq::<SS>().mem_gb(mem_gb).dedup_batches(dedup_batches).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        builder.run()
+    } else {
+        let builder = BitPackedKmerSortingDisk::new(reader, k).subset_seq::<SS>().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
+        builder.run()
+    }
+}
+
+fn build_command(matches: &clap::ArgMatches){
+
+    let infile = matches.get_one::<std::path::PathBuf>("input");
+    let in_listfile = matches.get_one::<std::path::PathBuf>("input-list");
+
+    let out_prefix = matches.get_one::<std::path::PathBuf>("output-prefix").unwrap();
+    let index_type = matches.get_one::<String>("type").unwrap();
 
     let input_mode = if let Some(input) = infile {
         InputMode::SingleFile(input.clone())
@@ -264,25 +291,20 @@ fn build_command(matches: &clap::ArgMatches){
 
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
-    let (sbwt, lcs) = if via_libsais {
-        #[cfg(feature = "libsais")]
-        {
-            let builder = BuildByLibsais::new(reader, k).stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-            builder.run()
-        }
-        #[cfg(not(feature = "libsais"))]
-        {
-            panic!("--via-libsais requires sbwt-cli to be built with `--features libsais`");
-        }
-    } else if bounded_suffix_sort {
-        let builder = BuildByBoundedSuffixSort::new(reader, k).prefix_length_for_bucket_sort(bucket_sort_prefix_length).stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-        builder.run()
-    } else if in_memory {
-        let builder = BitPackedKmerSortingMem::new(reader, k).mem_gb(mem_gb).dedup_batches(dedup_batches).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-        builder.run()
-    } else {
-        let builder = BitPackedKmerSortingDisk::new(reader, k).mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-        builder.run()
+    let (sbwt, lcs) = match index_type.as_str() {
+        "bit_matrix" => {
+            let (sbwt, lcs) = run_builder::<SubsetMatrix>(matches, reader);
+            (SbwtIndexVariant::SubsetMatrix(sbwt), lcs)
+        },
+        "correction_sets" => {
+            let (sbwt, lcs) = run_builder::<SubsetCorrectionSets>(matches, reader);
+            (SbwtIndexVariant::SubsetCorrectionSets(sbwt), lcs)
+        },
+        "interleaved_matrix" => {
+            let (sbwt, lcs) = run_builder::<SubsetInterleavedMatrix>(matches, reader);
+            (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt), lcs)
+        },
+        t => unreachable!("Unknown index type {}", t),
     };
     let end_time = std::time::Instant::now();
     log::info!("Construction finished in {:.2} seconds", (end_time - start_time).as_secs_f64());
@@ -290,7 +312,7 @@ fn build_command(matches: &clap::ArgMatches){
     log::info!("Serializing");
 
     let sbwt_kmers = sbwt.n_kmers();
-    let sbwt_bytes = SbwtIndexVariant::SubsetMatrix(sbwt).serialize(&mut sbwt_out).unwrap();
+    let sbwt_bytes = sbwt.serialize(&mut sbwt_out).unwrap();
     log::info!("Wrote sbwt index: {} bytes ({:.2} bits / k-mer)", sbwt_bytes, sbwt_bytes as f64 * 8.0 / sbwt_kmers as f64);
 
     if let Some(lcs) = lcs{
@@ -1283,6 +1305,12 @@ fn build_subcommand() -> clap::Command {
             .long("temp-dir")
             .default_value(".")
             .value_parser(clap::value_parser!(std::path::PathBuf))
+        )
+        .arg(clap::Arg::new("type")
+            .help("Subset sequence representation of the built index")
+            .long("type")
+            .default_value("bit_matrix")
+            .value_parser(["bit_matrix", "correction_sets", "interleaved_matrix"])
         )
         .arg(clap::Arg::new("in-memory")
             .help("Sort k-mers in memory. Faster, but requires a lot of memory.")
