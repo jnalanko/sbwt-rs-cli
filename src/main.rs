@@ -208,9 +208,22 @@ fn read_lines(path: &PathBuf) -> Vec<PathBuf> {
 
 #[allow(non_snake_case)]
 // Runs the construction algorithm chosen in the arguments of the build command, building
-// subset sequence type SS.
-fn run_builder<SS: SubsetSeq + Send>(matches: &clap::ArgMatches, reader: Box<dyn crate::SeqStream + Send>) -> (SbwtIndex<SS>, Option<LcsArray>) {
+// subset sequence type SS, and the suffix group marks if --build-sufgroups is given.
+fn run_builder<SS: SubsetSeq + Send>(matches: &clap::ArgMatches, reader: Box<dyn crate::SeqStream + Send>) -> (SbwtIndex<SS>, Option<LcsArray>, Option<Sufgroups>) {
     let build_lcs = matches.get_flag("build-lcs");
+    let build_sufgroups = matches.get_flag("build-sufgroups");
+    // run_with_sufgroups if the marks are wanted, run otherwise
+    macro_rules! run {
+        ($builder:expr) => {
+            if build_sufgroups {
+                let (sbwt, lcs, sufgroups) = $builder.run_with_sufgroups();
+                (sbwt, lcs, Some(sufgroups))
+            } else {
+                let (sbwt, lcs) = $builder.run();
+                (sbwt, lcs, None)
+            }
+        };
+    }
     let k = *matches.get_one::<usize>("k").unwrap();
     let mem_gb = *matches.get_one::<usize>("mem-gb").unwrap();
     let n_threads = *matches.get_one::<usize>("threads").unwrap();
@@ -232,7 +245,7 @@ fn run_builder<SS: SubsetSeq + Send>(matches: &clap::ArgMatches, reader: Box<dyn
         #[cfg(feature = "libsais")]
         {
             let builder = BuildByLibsais::new(reader, k).subset_seq::<SS>().stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-            builder.run()
+            run!(builder)
         }
         #[cfg(not(feature = "libsais"))]
         {
@@ -240,13 +253,13 @@ fn run_builder<SS: SubsetSeq + Send>(matches: &clap::ArgMatches, reader: Box<dyn
         }
     } else if bounded_suffix_sort {
         let builder = BuildByBoundedSuffixSort::new(reader, k).subset_seq::<SS>().prefix_length_for_bucket_sort(bucket_sort_prefix_length).stream_suffix_array_from_disk(stream_suffix_array_from_disk).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-        builder.run()
+        run!(builder)
     } else if in_memory {
         let builder = BitPackedKmerSortingMem::new(reader, k).subset_seq::<SS>().mem_gb(mem_gb).dedup_batches(dedup_batches).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-        builder.run()
+        run!(builder)
     } else {
         let builder = BitPackedKmerSortingDisk::new(reader, k).subset_seq::<SS>().mem_gb(mem_gb).dedup_batches(dedup_batches).temp_dir(temp_dir).n_threads(n_threads).add_rev_comp(add_revcomp).build_lcs(build_lcs).precalc_length(precalc_length).add_all_dummy_paths(add_all_dummy_paths);
-        builder.run()
+        run!(builder)
     }
 }
 
@@ -291,18 +304,18 @@ fn build_command(matches: &clap::ArgMatches){
 
     log::info!("Building SBWT");
     let start_time = std::time::Instant::now();
-    let (sbwt, lcs) = match index_type.as_str() {
+    let (sbwt, lcs, sufgroups) = match index_type.as_str() {
         "bit_matrix" => {
-            let (sbwt, lcs) = run_builder::<SubsetMatrix>(matches, reader);
-            (SbwtIndexVariant::SubsetMatrix(sbwt), lcs)
+            let (sbwt, lcs, sufgroups) = run_builder::<SubsetMatrix>(matches, reader);
+            (SbwtIndexVariant::SubsetMatrix(sbwt), lcs, sufgroups)
         },
         "correction_sets" => {
-            let (sbwt, lcs) = run_builder::<SubsetCorrectionSets>(matches, reader);
-            (SbwtIndexVariant::SubsetCorrectionSets(sbwt), lcs)
+            let (sbwt, lcs, sufgroups) = run_builder::<SubsetCorrectionSets>(matches, reader);
+            (SbwtIndexVariant::SubsetCorrectionSets(sbwt), lcs, sufgroups)
         },
         "interleaved_matrix" => {
-            let (sbwt, lcs) = run_builder::<SubsetInterleavedMatrix>(matches, reader);
-            (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt), lcs)
+            let (sbwt, lcs, sufgroups) = run_builder::<SubsetInterleavedMatrix>(matches, reader);
+            (SbwtIndexVariant::SubsetInterleavedMatrix(sbwt), lcs, sufgroups)
         },
         t => unreachable!("Unknown index type {}", t),
     };
@@ -323,6 +336,16 @@ fn build_command(matches: &clap::ArgMatches){
 
         let lcs_bytes = lcs.serialize(&mut lcs_out).unwrap();
         log::info!("Wrote lcs array: {} bytes ({:.2} bits / k-mer)", lcs_bytes, lcs_bytes as f64 * 8.0 / sbwt_kmers as f64);
+    }
+
+    if let Some(sufgroups) = sufgroups {
+        let mut sufgroups_outfile = out_prefix.clone().into_os_string().into_string().unwrap(); // See comment on sbwt_outfile above
+        sufgroups_outfile.push_str(".sufgroups");
+        let mut sufgroups_out = std::io::BufWriter::new(std::fs::File::create(&sufgroups_outfile).unwrap());
+        log::info!("Suffix group marks output file: {}", sufgroups_outfile);
+
+        let sufgroups_bytes = sufgroups.serialize(&mut sufgroups_out).unwrap();
+        log::info!("Wrote suffix group marks: {} bytes ({:.2} bits / k-mer)", sufgroups_bytes, sufgroups_bytes as f64 * 8.0 / sbwt_kmers as f64);
     }
 }
 
@@ -1294,7 +1317,7 @@ fn build_subcommand() -> clap::Command {
             .value_parser(clap::value_parser!(std::path::PathBuf))
         )
         .arg(clap::Arg::new("output-prefix")
-            .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given.")
+            .help("Prefix for the output filenames. Writes to file [prefix].sbwt, and also [prefix].lcs if --build-lcs is given. Also [prefix].sufgroups if --build-sufgroups is given.")
             .short('o')
             .long("output-prefix")
             .required(true)
@@ -1337,6 +1360,11 @@ fn build_subcommand() -> clap::Command {
             .help("Also build the LCS array (costs about log(k) bits per SBWT node)")
             .short('l')
             .long("build-lcs")
+            .action(clap::ArgAction::SetTrue)
+        )
+        .arg(clap::Arg::new("build-sufgroups")
+            .help("Also build the (k-1)-suffix group marks (1 bit per SBWT node), in the format of the suffix group marks of Themisto 2")
+            .long("build-sufgroups")
             .action(clap::ArgAction::SetTrue)
         )
         .arg(clap::Arg::new("k")
