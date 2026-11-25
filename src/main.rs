@@ -525,14 +525,43 @@ fn build_sufgroups_command(matches: &clap::ArgMatches) {
     log::info!("{} bytes written", n_bytes);
 }
 
-// lookup_query with the batched search of KmerLookupIndex: the reads are read and searched in
-// batches of LOOKUP_BATCH_READS, with the same output.
-fn lookup_query_batched<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, sufgroups: &Sufgroups, queryfile: &std::path::Path, outfile: Option<&std::path::Path>, membership_only: bool) {
+// Like non_streaming_search, but for a batch of queries: the k-mers of all the queries are searched
+// from scratch with SbwtIndex::search_refill, NON_STREAMING_IN_FLIGHT searches in flight. Returns
+// the colex ranks of the k-mers of each query.
+#[allow(non_snake_case)]
+fn non_streaming_search_batched<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, queries: &[&[u8]]) -> Vec<Vec<Option<usize>>> {
+    const NON_STREAMING_IN_FLIGHT: usize = 32;
+    let k = sbwt.k();
+    let kmers: Vec<&[u8]> = queries.iter().flat_map(|query| query.windows(k)).collect();
+    let mut colex_ranks = sbwt.search_refill::<NON_STREAMING_IN_FLIGHT>(&kmers).into_iter().map(|r| r.map(|I| {
+        assert!(I.len() == 1);
+        I.start
+    }));
+    // Split the colex ranks by query
+    queries.iter().map(|query| colex_ranks.by_ref().take((query.len() + 1).saturating_sub(k)).collect()).collect()
+}
+
+// lookup_query with a batched search (KmerLookupIndex::streaming_search with the suffix group marks,
+// or non_streaming_search_batched without them): the reads are read and searched in batches of
+// LOOKUP_BATCH_READS, with the same output.
+fn lookup_query_batched<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, sufgroups: Option<&Sufgroups>, queryfile: &std::path::Path, outfile: Option<&std::path::Path>, membership_only: bool) {
     const LOOKUP_BATCH_READS: usize = 10_000;
     log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
-    log::info!("Searching with the suffix group marks, in batches of {} reads", LOOKUP_BATCH_READS);
+    match sufgroups {
+        Some(_) => log::info!("Searching with the suffix group marks, in batches of {} reads", LOOKUP_BATCH_READS),
+        None => {
+            log::info!("Searching each k-mer from scratch, in batches of {} reads", LOOKUP_BATCH_READS);
+            // The cases that SbwtIndex::search_refill searches one k-mer at a time
+            let l = sbwt.get_lookup_table().prefix_length;
+            if sbwt.k() > 64 {
+                log::info!("k = {} > 64 -> the k-mers are searched one at a time, without batching", sbwt.k());
+            } else if l == 0 || l > sbwt.k() {
+                log::info!("Lookup table prefix length {} is not in 1..=k (k = {}) -> the k-mers are searched one at a time, without batching", l, sbwt.k());
+            }
+        }
+    }
 
-    let index = KmerLookupIndex::new(sbwt, sufgroups, false);
+    let index = sufgroups.map(|sufgroups| KmerLookupIndex::new(sbwt, sufgroups, false));
     let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
     let mut out = outfile.map(|f| std::io::BufWriter::new(std::fs::File::create(f).unwrap()));
     let mut stdout = stdout();
@@ -554,7 +583,11 @@ fn lookup_query_batched<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, sufgroups: &Sufgrou
             }
         }
         let queries: Vec<&[u8]> = batch.iter().map(|seq| seq.as_slice()).collect();
-        for colex_ranks in index.streaming_search(&queries) {
+        let results = match &index {
+            Some(index) => index.streaming_search(&queries),
+            None => non_streaming_search_batched(sbwt, &queries),
+        };
+        for colex_ranks in results {
             n_query_kmers += colex_ranks.len();
             n_found += colex_ranks.iter().fold(0_usize, |count, r| count + r.is_some() as usize);
             match out {
@@ -683,85 +716,73 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     let membership_only = matches.get_flag("membership-only");
     let cpp_format = matches.get_flag("load-cpp-format");
     let no_convert = matches.get_flag("no-convert");
-    let no_sufgroups = matches.get_flag("no-sufgroups");
+    let sufgroups_filename = matches.get_one::<std::path::PathBuf>("sufgroups-file");
 
     // Read sbwt
     let index = load_index_for_queries(indexfile, cpp_format, no_convert);
 
-    // With the suffix group marks (from the given path, or index.sufgroups if it exists), the batched
-    // search, without the LCS array.
-    if !no_sufgroups {
-        let sufgroups_path = matches.get_one::<std::path::PathBuf>("sufgroups-file").cloned().unwrap_or_else(|| {
-            let mut p = indexfile.clone();
-            p.set_extension("sufgroups");
-            p
-        });
-        match File::open(&sufgroups_path) {
-            Ok(f) => {
-                log::info!("Loading the suffix group marks from {} (--no-sufgroups to search without them)", sufgroups_path.display());
-                let sufgroups = Sufgroups::load(&mut std::io::BufReader::new(f)).unwrap();
-                if sufgroups.len() != index.n_sets() {
-                    eprintln!("Error: the suffix group marks in {} are for {} SBWT sets, but the index has {}", sufgroups_path.display(), sufgroups.len(), index.n_sets());
-                    std::process::exit(1);
-                }
-                match index {
-                    SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query_batched(&sbwt, &sufgroups, queryfile, outfile.map(|v| &**v), membership_only),
-                    SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query_batched(&sbwt, &sufgroups, queryfile, outfile.map(|v| &**v), membership_only),
-                    SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => lookup_query_batched(&sbwt, &sufgroups, queryfile, outfile.map(|v| &**v), membership_only),
-                }
-                return;
-            }
-            Err(_) => {
-                if matches.get_one::<std::path::PathBuf>("sufgroups-file").is_some() {
-                    eprintln!("Error: could not open the suffix group marks file {}", sufgroups_path.display());
-                    std::process::exit(1);
-                }
-                log::info!("No suffix group marks at {} -> searching without them", sufgroups_path.display());
-            }
+    // Which search runs:
+    // 1. --sufgroups-file given: the batched search with those suffix group marks (also if --lcs-file
+    //    is given).
+    // 2. --lcs-file given: the streaming search with that LCS array, one read at a time.
+    // 3. Neither given: the batched search with the marks of index.sufgroups if it exists, else with
+    //    marks converted from index.lcs if it exists, else each k-mer from scratch, batched.
+    let sufgroups = if let Some(f) = sufgroups_filename {
+        if let Some(lcs_f) = lcs_filename {
+            log::warn!("Both --sufgroups-file and --lcs-file given -> the batched search with the suffix group marks; the LCS array {} is not used", lcs_f.display());
         }
-    }
-
-    // Load the lcs array either from the given path, or by modifying the
-    // file extension of the sbwt file, if available.
-
-    let lcs_reader = match lcs_filename {
-        Some(f) => {
-            log::info!("Loading LCS array from file {}", f.display());
-            Some(std::io::BufReader::new(File::open(f).unwrap()))
-        },
-        None => {
-            // Try reading from the default filename
-            let p = default_lcs_path(indexfile);
-            log::info!("Attempting locate the LCS array file from default filename {} (use --lcs-file to change)", p.display());
-            match File::open(&p) {
-                Ok(f) => {
-                    Some(std::io::BufReader::new(f))
-                },
-                Err(_) => {
-                    log::info!("No file found at {} -> running without LCS support", p.display());
-                    None 
-                }
-            }
+        Some(load_sufgroups_for_lookup(f, &index))
+    } else if let Some(f) = lcs_filename {
+        log::info!("LCS array given with --lcs-file -> the streaming search with the LCS array, one read at a time");
+        log::info!("Loading LCS array from file {}", f.display());
+        let lcs = LcsArray::load(&mut std::io::BufReader::new(File::open(f).unwrap())).unwrap();
+        // We upwrap the enum here already to avoid having to do this every time in a tight inner loop during lookup.
+        match index {
+            SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query(&sbwt, Some(lcs), queryfile, outfile.map(|v| &**v), membership_only),
+            SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query(&sbwt, Some(lcs), queryfile, outfile.map(|v| &**v), membership_only),
+            SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => lookup_query(&sbwt, Some(lcs), queryfile, outfile.map(|v| &**v), membership_only),
         }
-    };
-    
-    let lcs = match lcs_reader {
-        Some(mut r) => {
-            log::info!("Loading LCS array");
-            Some(LcsArray::load(&mut r).unwrap())
-        },
-        None => {
-            log::info!("No LCS array found -> running without LCS support");
+        return;
+    } else {
+        let sufgroups_path = indexfile.with_extension("sufgroups");
+        let lcs_path = default_lcs_path(indexfile);
+        if sufgroups_path.exists() {
+            log::info!("Found the suffix group marks at {} (use --sufgroups-file to change)", sufgroups_path.display());
+            Some(load_sufgroups_for_lookup(&sufgroups_path, &index))
+        } else if lcs_path.exists() {
+            log::info!("No suffix group marks at {}, but found the LCS array at {} -> converting it to suffix group marks for the batched search (use --lcs-file for the streaming search with the LCS array; sbwt build-sufgroups writes the marks to a file)", sufgroups_path.display(), lcs_path.display());
+            let lcs = LcsArray::load(&mut std::io::BufReader::new(File::open(&lcs_path).unwrap())).unwrap();
+            let sufgroups = Sufgroups::from_lcs(&lcs, index.k());
+            drop(lcs);
+            Some(sufgroups)
+        } else {
+            log::info!("No suffix group marks at {} and no LCS array at {} -> searching each k-mer from scratch (sbwt build-sufgroups writes the marks, for a faster search)", sufgroups_path.display(), lcs_path.display());
             None
         }
     };
 
     // We upwrap the enum here already to avoid having to do this every time in a tight inner loop during lookup.
     match index {
-        SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
-        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
-        SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => lookup_query(&sbwt, lcs, queryfile, outfile.map(|v| &**v), membership_only),
+        SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query_batched(&sbwt, sufgroups.as_ref(), queryfile, outfile.map(|v| &**v), membership_only),
+        SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query_batched(&sbwt, sufgroups.as_ref(), queryfile, outfile.map(|v| &**v), membership_only),
+        SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => lookup_query_batched(&sbwt, sufgroups.as_ref(), queryfile, outfile.map(|v| &**v), membership_only),
     }
+}
+
+// Loads the suffix group marks for lookup from `path`, stopping with an error if the file cannot be
+// opened or does not match the index.
+fn load_sufgroups_for_lookup(path: &std::path::Path, index: &SbwtIndexVariant) -> Sufgroups {
+    let f = File::open(path).unwrap_or_else(|_| {
+        eprintln!("Error: could not open the suffix group marks file {}", path.display());
+        std::process::exit(1);
+    });
+    log::info!("Loading the suffix group marks from {}", path.display());
+    let sufgroups = Sufgroups::load(&mut std::io::BufReader::new(f)).unwrap();
+    if sufgroups.len() != index.n_sets() {
+        eprintln!("Error: the suffix group marks in {} are for {} SBWT sets, but the index has {}", path.display(), sufgroups.len(), index.n_sets());
+        std::process::exit(1);
+    }
+    sufgroups
 }
 
 // Return the number of bytes written
@@ -1626,7 +1647,7 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("low-ram")
-                .help("When computing the marks from the SBWT: less peak RAM at the expense of slower running time.")
+                .help("When computing the suffix group marks from the SBWT: less peak RAM at the expense of slower running time.")
                 .long("low-ram")
                 .action(clap::ArgAction::SetTrue)
             )
@@ -1670,7 +1691,7 @@ fn main() {
                 .value_parser(clap::value_parser!(std::path::PathBuf))
             )
             .arg(clap::Arg::new("lcs-file")
-                .help("LCS file (default: if index is at index.sbwt, looks at index.lcs)")
+                .help("LCS file (default: if index is at index.sbwt, looks at index.lcs). Given with this option, the k-mers are searched with the LCS array, one read at a time; found at the default path, the LCS array is converted to suffix group marks for the batched search.")
                 .short('l')
                 .long("lcs-file")
                 .value_parser(clap::value_parser!(std::path::PathBuf))
@@ -1700,14 +1721,9 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("sufgroups-file")
-                .help("Suffix group marks file (default: if index is at index.sbwt, looks at index.sufgroups). With the marks, the k-mers are searched in batches of reads, without the LCS array.")
+                .help("Suffix group marks file (default: if index is at index.sbwt, looks at index.sufgroups). With the marks, the k-mers are searched in batches of reads, without the LCS array. If no marks are found but index.lcs exists, the marks are made from the LCS array.")
                 .long("sufgroups-file")
                 .value_parser(clap::value_parser!(std::path::PathBuf))
-            )
-            .arg(clap::Arg::new("no-sufgroups")
-                .help("Do not use the suffix group marks, even if index.sufgroups exists.")
-                .long("no-sufgroups")
-                .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("no-convert")
                 .help("Search the index as it is stored. By default an index of the bit matrix is converted to the interleaved matrix while it is loaded, which is faster to search.")
