@@ -194,6 +194,9 @@ impl Sufgroups {
     }
 }
 
+// What a slot of restart_kmers_queued_fskip is doing. The phase decides how the result of the
+// slot's pending continuation or search from scratch is used (see the macro `handle`), and which
+// of the windows (`s_`, `t_`, `w_`, ...) it is about.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FskipPhase {
     // A continuation or search from scratch of window `s` (the forward run).
@@ -212,18 +215,37 @@ enum FskipPhase {
 }
 
 // The restart search with the look-ahead skip (fskip), for an index with both orientations of its
-// k-mers, over many reads at once: READS reads are in flight, and their searches from scratch are
-// batched, BATCH_SIZE at a time, with SbwtIndex::search_mini_batch_from_len. A read continues from
-// a found window to the next one with one LF step from its k-mer, or from its suffix group if that
-// fails. After a window that is not found, it looks ahead (a search that fails after l characters
-// shows that the windows w + l - k..=w containing them are absent), searches the windows the
-// look-ahead leaves from right to left, and a window found there starts a gallop to the left end
-// of its run of found windows, which is then covered by continuations. Calls `on_kmer(r, s, x)`
-// for every window s of read r that is in the index (not in order), with its colex rank x.
-// When fewer than BATCH_SIZE searches are waiting and no read can continue (few reads, or the end
-// of the reads), two or more waiting searches go out as one mini batch padded with repeats of its
-// first search (their results are not used), and a single one is searched alone.
-// Requires `BATCH_SIZE <= READS <= 64`.
+// k-mers, over many reads at once. Calls `on_kmer(r, s, x)` for every window (k-mer) s of read r
+// that is in the index, with its colex rank x; the windows are reported in no particular order,
+// and the windows not reported are not in the index. Requires `BATCH_SIZE <= READS <= 64`.
+//
+// The search of one read. A window found is followed by the next window with a continuation: one
+// LF step from the found k-mer with the next character of the read, or, if that fails, from the
+// k-mer's (k-1)-suffix group (all k-mers ending with the same k-1 characters, found with the
+// marks). Otherwise a window is searched from scratch, starting from the prefix lookup table. A
+// search that fails after l characters shows that the windows w + l - k..=w, which all contain
+// those l characters, are absent, so after a window that is not found the read looks ahead
+// (the look-ahead window is chosen from the length at which the last search failed), and the
+// windows the look-ahead leaves undecided are searched from right to left. A window found there
+// starts a gallop to the left end of its run of found windows (probes at growing distances, then
+// a bisection), and the run is then covered by continuations instead of searches from scratch.
+//
+// Many reads at once. READS slots each hold one read and its state, in arrays indexed by slot
+// (`s_`, `phase`, `prev_kmer`, ...) and in bit masks with one bit per slot: `active` (holds a
+// read), `cont` (its next step is a continuation), `group` (that continuation is retried from the
+// suffix group), `waiting` (a search from scratch is queued) and `run_search`. A slot that has
+// finished its read takes the next one. The steps of a slot from one state to the next are the
+// macros below (`run_from`, `probe_from`, `start_gallop`, ...; `handle` decides what a result
+// means): macros rather than closures or methods, because they change many of these local
+// variables and call each other, and measured faster than the same steps as methods of a struct.
+// The main loop alternates two steps until no slot holds a read:
+// - a continuation round: one continuation for every slot that has one, all independent of each
+//   other, so that their memory accesses overlap (and each prefetches the memory of its next one);
+// - the searches from scratch: when BATCH_SIZE are queued, they go out as one mini batch
+//   (SbwtIndex::search_mini_batch_from_len, with prefetching). When fewer are queued and no slot
+//   can continue (few reads, or the end of the reads), two or more go out as one mini batch padded
+//   with repeats of its first search (their results are not used), and a single one is searched
+//   alone.
 #[allow(non_snake_case)]
 fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: usize, const BATCH_SIZE: usize>(
     sbwt: &SbwtIndex<SS>,
@@ -238,6 +260,7 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
     assert!(p <= k, "the prefix lookup table is longer than k");
     let extend = |I: &Range<usize>, c: usize| sbwt.lf_step(I.start, c)..sbwt.lf_step(I.end, c);
 
+    // The state of each slot: its read (and the read's index in `reads`) and what it is doing
     let mut read_of = [0_usize; READS];
     let mut slot_read: [&'a [u8]; READS] = [&[]; READS];
     let mut phase = [FskipPhase::Run; READS];
@@ -249,15 +272,15 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
     let mut resume_run = [false; READS]; // ... or search t + 1 from scratch (after a targeted probe), or look ahead from t + 1
     let mut targeted = [false; READS]; // Probe: of the last window over the base of a failed continuation
     let mut run_search = 0_u64; // Run: the pending step is a search from scratch (not a continuation)
-    let mut l_est = [15.min(k); READS];
-    let mut prev_kmer = [0_usize; READS];
-    let mut active = 0_u64;
-    let mut cont = 0_u64;
-    let mut group = 0_u64;
-    let mut waiting = 0_u64;
+    let mut l_est = [15.min(k); READS]; // The length at which the slot's last search failed (where to look ahead)
+    let mut prev_kmer = [0_usize; READS]; // The colex rank of the k-mer the next continuation starts from
+    let mut active = 0_u64; // Slots that hold a read
+    let mut cont = 0_u64; // Slots whose next step is a continuation
+    let mut group = 0_u64; // Slots whose continuation from the k-mer failed: retried from its suffix group
+    let mut waiting = 0_u64; // Slots with a search from scratch queued, of window search_win[q] ...
     let mut search_win = [0_usize; READS];
-    let mut table_idx: [Option<usize>; READS] = [None; READS];
-    let mut next_read = 0;
+    let mut table_idx: [Option<usize>; READS] = [None; READS]; // ... starting from this entry of the lookup table
+    let mut next_read = 0; // The next read of `reads` to give to a slot
     // The left gallop: the found window whose run is looked for and its rank, the first window
     // of the run found so far and its rank, the first window not known absent left of it, the
     // rightmost failed probe and its length, and the ranges left by a gap in a run.
@@ -270,6 +293,8 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
     let mut absent: [Option<(usize, usize)>; READS] = [None; READS];
     let mut pending: [Vec<(usize, usize)>; READS] = std::array::from_fn(|_| Vec::new());
 
+    // The steps of a slot q from one state to the next.
+    // Slot q queues the search of window win from scratch (and prefetches its lookup table entry).
     macro_rules! enqueue {
         ($q:expr, $win:expr) => {
             let (q, win): (usize, usize) = ($q, $win);
@@ -284,6 +309,8 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
             }
         };
     }
+    // Slot q takes the next read of at least k characters (and queues the search of its first
+    // window), or becomes empty if there is none.
     macro_rules! load {
         ($q:expr) => {
             let q: usize = $q;
@@ -578,11 +605,12 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
         (I, &seq[win + p..win + k])
     }
 
+    // Every slot takes a read, then the main loop until no slot holds one.
     for q in 0..READS {
         load!(q);
     }
     while active != 0 {
-        // One continuation round.
+        // One continuation round: a continuation for every slot that has one.
         let mut to_visit = cont;
         while to_visit != 0 {
             let q = to_visit.trailing_zeros() as usize;
@@ -607,7 +635,7 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
             cont &= !(1 << q);
             handle!(q, if J.is_empty() { Err(k) } else { Ok(J.start) });
         }
-        // Searches from scratch.
+        // Searches from scratch: a full mini batch, ...
         if waiting.count_ones() as usize >= BATCH_SIZE {
             let mut slots = [0_usize; BATCH_SIZE];
             for slot in slots.iter_mut() {
@@ -627,8 +655,8 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
                 handle!(slots[i], result.map(|I| I.start).map_err(|c| p + c));
             }
         } else if cont == 0 && waiting.count_ones() >= 2 {
-            // Fewer than BATCH_SIZE waiting and nothing else to do: one mini batch, padded with
-            // repeats of its first search
+            // ... or, with fewer than BATCH_SIZE waiting and nothing else to do, one mini batch
+            // padded with repeats of its first search, ...
             let count = waiting.count_ones() as usize;
             let mut slots = [0_usize; BATCH_SIZE];
             for slot in slots.iter_mut().take(count) {
@@ -651,7 +679,7 @@ fn restart_kmers_queued_fskip<'a, SS: SubsetSeq, R: AsRef<[u8]>, const READS: us
                 handle!(slots[i], result.map(|I| I.start).map_err(|c| p + c));
             }
         } else if cont == 0 {
-            // A single search waiting: alone
+            // ... or a single search waiting, alone
             let mut to_visit = waiting;
             waiting = 0;
             while to_visit != 0 {
