@@ -85,6 +85,20 @@ fn load_index(path: &std::path::Path, cpp_format: bool) -> SbwtIndexVariant {
     }
 }
 
+// Loads the index for queries: unless `no_convert`, an index of the bit matrix (rank9) is loaded
+// as the interleaved matrix (SbwtIndexVariant::load_optimized). The C++ format is loaded as it is.
+fn load_index_for_queries(path: &std::path::Path, cpp_format: bool, no_convert: bool) -> SbwtIndexVariant {
+    if cpp_format || no_convert {
+        return load_index(path, cpp_format);
+    }
+    let mut reader = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    let index = SbwtIndexVariant::load_optimized(&mut reader).unwrap();
+    if matches!(index, SbwtIndexVariant::SubsetInterleavedMatrix(_)) {
+        log::info!("Searching on the interleaved matrix (an index of the bit matrix is converted while it is loaded; --no-convert to search the index as it is)");
+    }
+    index
+}
+
 /// The default `.lcs` path for the SBWT index file at `indexfile`
 /// (same path with the extension replaced by `.lcs`).
 fn default_lcs_path(indexfile: &std::path::Path) -> PathBuf {
@@ -623,9 +637,10 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     let lcs_filename = matches.get_one::<std::path::PathBuf>("lcs-file");
     let membership_only = matches.get_flag("membership-only");
     let cpp_format = matches.get_flag("load-cpp-format");
+    let no_convert = matches.get_flag("no-convert");
 
     // Read sbwt
-    let index = load_index(indexfile, cpp_format);
+    let index = load_index_for_queries(indexfile, cpp_format, no_convert);
 
     // Load the lcs array either from the given path, or by modifying the
     // file extension of the sbwt file, if available.
@@ -750,7 +765,8 @@ fn matching_statistics_command(matches: &clap::ArgMatches){
 
     // Read sbwt
     log::info!("Loading sbwt index from file {}", indexfile.display());
-    let index = load_index(indexfile, cpp_format);
+    let no_convert = matches.get_flag("no-convert");
+    let index = load_index_for_queries(indexfile, cpp_format, no_convert);
 
     // Load the lcs array either from the given path, or by modifying the
     // file extension of the sbwt file.
@@ -1604,6 +1620,11 @@ fn main() {
                 .long("load-cpp-format")
                 .action(clap::ArgAction::SetTrue)
             )
+            .arg(clap::Arg::new("no-convert")
+                .help("Search the index as it is stored. By default an index of the bit matrix is converted to the interleaved matrix while it is loaded, which is faster to search.")
+                .long("no-convert")
+                .action(clap::ArgAction::SetTrue)
+            )
         )
         .subcommand(clap::Command::new("matching-statistics")
             .about("For each position of the query, compute the longest match ending there, with length up to k, against the index.")
@@ -1637,6 +1658,11 @@ fn main() {
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
                 .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("no-convert")
+                .help("Search the index as it is stored. By default an index of the bit matrix is converted to the interleaved matrix while it is loaded, which is faster to search.")
+                .long("no-convert")
                 .action(clap::ArgAction::SetTrue)
             )
         )
