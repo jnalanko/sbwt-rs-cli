@@ -148,7 +148,28 @@ impl SbwtIndexVariant {
         let type_id_len = byteorder::ReadBytesExt::read_u64::<byteorder::LittleEndian>(input).unwrap();
         let mut type_id = vec![0_u8; type_id_len as usize];
         input.read_exact(&mut type_id)?;
+        Self::load_type(&type_id, input)
+    }
 
+    /// Like [SbwtIndexVariant::load], but an index of the bit matrix ([SubsetMatrix], rank9) is
+    /// loaded as the interleaved matrix ([SubsetInterleavedMatrix]), for faster and batched
+    /// searches: each row is converted a chunk at a time while it is read, and the rank and select
+    /// supports in the file are not kept, so the peak memory is about the interleaved matrix. No
+    /// select support is built: call [SbwtIndex::build_select] if it is needed. Indexes of the
+    /// other types are loaded as with [SbwtIndexVariant::load]. The file is not changed.
+    pub fn load_optimized(input: &mut impl std::io::Read) -> Result<Self, Box<dyn std::error::Error>> {
+        let type_id_len = byteorder::ReadBytesExt::read_u64::<byteorder::LittleEndian>(input)?;
+        let mut type_id = vec![0_u8; type_id_len as usize];
+        input.read_exact(&mut type_id)?;
+        if type_id == b"SubsetMatrix" {
+            Ok(SbwtIndexVariant::SubsetInterleavedMatrix(SbwtIndex::<SubsetInterleavedMatrix>::load_with(input, SubsetInterleavedMatrix::load_from_subset_matrix)?))
+        } else {
+            Self::load_type(&type_id, input)
+        }
+    }
+
+    // The index of type `type_id` (the start of the file, read by the caller) from `input`.
+    fn load_type(type_id: &[u8], input: &mut impl std::io::Read) -> Result<Self, Box<dyn std::error::Error>> {
         if type_id == b"SubsetMatrix" {
             Ok(SbwtIndexVariant::SubsetMatrix(SbwtIndex::<SubsetMatrix>::load(input)?))
         } else if type_id == b"SubsetCorrectionSets" {
@@ -190,5 +211,46 @@ impl SbwtIndexVariant {
 impl crate::streaming_index::ExtendRight for SbwtIndexVariant {
     fn extend_right(&self, I: std::ops::Range<usize>, c: u8) -> std::ops::Range<usize> {
         forward!(&self, extend_right(I, c)) // The match statement happens here
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // load_optimized loads a bit matrix index as the interleaved matrix that converting it after
+    // loading gives (with and without select support in the file, and builds none), and the other
+    // index types as load does.
+    #[test]
+    fn load_optimized_converts_the_bit_matrix() {
+        let seqs: Vec<Vec<u8>> = (0..6_u64).map(|i| crate::util::gen_random_dna_string(300 + 31 * i as usize, 21 + i)).collect();
+        let serialized = |variant: &SbwtIndexVariant| {
+            let mut buf = vec![];
+            variant.serialize(&mut buf).unwrap();
+            buf
+        };
+        for k in [5, 31] {
+            for select in [false, true] {
+                let (matrix, _) = crate::BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true).build_select_support(select).run();
+                let file = serialized(&SbwtIndexVariant::SubsetMatrix(matrix.clone()));
+                let expected = {
+                    let (ss, n_kmers, k, c, lut) = matrix.into_parts();
+                    SbwtIndex::from_parts(SubsetInterleavedMatrix::new_from_bit_vectors(ss.into_bitvectors()), n_kmers, k, c, lut)
+                };
+                match SbwtIndexVariant::load_optimized(&mut file.as_slice()).unwrap() {
+                    SbwtIndexVariant::SubsetInterleavedMatrix(loaded) => {
+                        assert!(!loaded.sbwt().has_select_support());
+                        assert_eq!(loaded, expected, "k = {}, select = {}", k, select);
+                    }
+                    _ => panic!("expected the interleaved matrix"),
+                }
+            }
+            // The other types as with load
+            let (interleaved, _) = crate::BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true).subset_seq::<SubsetInterleavedMatrix>().run();
+            let file = serialized(&SbwtIndexVariant::SubsetInterleavedMatrix(interleaved.clone()));
+            assert!(matches!(SbwtIndexVariant::load_optimized(&mut file.as_slice()).unwrap(), SbwtIndexVariant::SubsetInterleavedMatrix(loaded) if loaded == interleaved));
+            let (correction_sets, _) = crate::BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true).subset_seq::<SubsetCorrectionSets>().run();
+            let file = serialized(&SbwtIndexVariant::SubsetCorrectionSets(correction_sets.clone()));
+            assert!(matches!(SbwtIndexVariant::load_optimized(&mut file.as_slice()).unwrap(), SbwtIndexVariant::SubsetCorrectionSets(loaded) if loaded == correction_sets));
+        }
     }
 }

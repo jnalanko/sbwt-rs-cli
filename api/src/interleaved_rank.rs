@@ -132,6 +132,26 @@ fn select_samples(lines: &[Line], ones: usize) -> Vec<u32> {
     samples
 }
 
+// Fills block `line` with the bits start..start + BITS_PER_LINE of the `len` bits in `words` (bits
+// past `len` are zeros), given the number of ones before it; returns the number of ones up to the
+// end of the block.
+fn fill_line(line: &mut Line, words: &[u64], len: usize, start: usize, ones: usize) -> usize {
+    // Data: 32 bits in the high half of words[1], then 64 bits in each of words[2..8].
+    line.words[1] = get_bits(words, len, start, 32) << 32;
+    for w in 2..8 {
+        line.words[w] = get_bits(words, len, start + Line::data_start(w), 64);
+    }
+    // Header: absolute count, then cumulative counts before data words 2..8.
+    line.words[0] |= ones as u64;
+    let mut before_word = 0_u64;
+    for w in 1..8 {
+        debug_assert!(before_word <= COUNT_MASK[w]); // 0 for w == 1
+        line.words[COUNT_WORD[w]] |= before_word << COUNT_SHIFT[w];
+        before_word += (line.words[w] & DATA_MASK[w]).count_ones() as u64;
+    }
+    ones + before_word as usize
+}
+
 impl InterleavedRank {
     /// Builds the vector from `len` bits packed into `words`, least significant bit first:
     /// bit `i` is bit `i % 64` of `words[i / 64]`. Bits of `words` past `len` are ignored.
@@ -142,23 +162,50 @@ impl InterleavedRank {
         let mut lines = vec![Line::default(); len / BITS_PER_LINE + 1];
         let mut ones = 0_usize;
         for (l, line) in lines.iter_mut().enumerate() {
-            let start = l * BITS_PER_LINE;
-            // Data: 32 bits in the high half of words[1], then 64 bits in each of words[2..8].
-            line.words[1] = get_bits(words, len, start, 32) << 32;
-            for w in 2..8 {
-                line.words[w] = get_bits(words, len, start + Line::data_start(w), 64);
-            }
-            // Header: absolute count, then cumulative counts before data words 2..8.
-            line.words[0] |= ones as u64;
-            let mut before_word = 0_u64;
-            for w in 1..8 {
-                debug_assert!(before_word <= COUNT_MASK[w]); // 0 for w == 1
-                line.words[COUNT_WORD[w]] |= before_word << COUNT_SHIFT[w];
-                before_word += (line.words[w] & DATA_MASK[w]).count_ones() as u64;
-            }
-            ones += before_word as usize;
+            ones = fill_line(line, words, len, l * BITS_PER_LINE, ones);
         }
         InterleavedRank { lines, len, ones, select_samples: None }
+    }
+
+    /// Like [InterleavedRank::new], with the `n_words` words of the `len` bits read from `input`
+    /// (little-endian) a chunk at a time, so that the plain bits are never in memory all at once:
+    /// the peak is the blocks plus one chunk of 13 * 1024 words (106 kB). Requires
+    /// `n_words == len.div_ceil(64)`.
+    pub(crate) fn from_words_in_chunks<R: std::io::Read>(input: &mut R, len: usize, n_words: usize) -> std::io::Result<Self> {
+        // 13 words are 832 bits, two blocks: a chunk of a multiple of 13 words holds whole blocks.
+        const CHUNK_WORDS: usize = 13 * 1024;
+        if n_words != len.div_ceil(64) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "interleaved rank: wrong number of words for the bits"));
+        }
+        if (len as u64) >= 1 << ABSOLUTE_BITS {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "too many bits for InterleavedRank"));
+        }
+        let n_lines = len / BITS_PER_LINE + 1;
+        let mut lines = Vec::<Line>::with_capacity(n_lines);
+        let mut ones = 0_usize;
+        let mut chunk = vec![0_u64; CHUNK_WORDS];
+        let mut words_read = 0;
+        while words_read < n_words {
+            let chunk_words = std::cmp::min(CHUNK_WORDS, n_words - words_read);
+            input.read_u64_into::<LittleEndian>(&mut chunk[..chunk_words])?;
+            let chunk_start = words_read * 64; // The bit position of the chunk in the vector
+            let chunk_len = std::cmp::min(len - chunk_start, chunk_words * 64);
+            // The blocks starting in this chunk (all of them end in it, except the last one of
+            // the vector)
+            while lines.len() < n_lines && lines.len() * BITS_PER_LINE < chunk_start + chunk_len {
+                let mut line = Line::default();
+                ones = fill_line(&mut line, &chunk[..chunk_words], chunk_len, lines.len() * BITS_PER_LINE - chunk_start, ones);
+                lines.push(line);
+            }
+            words_read += chunk_words;
+        }
+        // The block after the bits, if they end at a block boundary (or there are none)
+        while lines.len() < n_lines {
+            let mut line = Line::default();
+            ones = fill_line(&mut line, &[], 0, 0, ones);
+            lines.push(line);
+        }
+        Ok(InterleavedRank { lines, len, ones, select_samples: None })
     }
 
     /// Builds the select support (the select samples), if it is not built yet. Construction does
@@ -398,6 +445,41 @@ impl SubsetInterleavedMatrix {
         self.rows.len()
     }
 
+    /// Loads a [SubsetMatrix] that was previously written with [SubsetSeq::serialize] as the
+    /// interleaved matrix: each row's bits are read a chunk at a time into the blocks, and the rank
+    /// and select supports in the file are read past without being kept. The peak memory is the
+    /// interleaved matrix plus one chunk. Builds no select support (see [SubsetSeq::build_select]).
+    pub(crate) fn load_from_subset_matrix<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
+        let invalid = |message: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("loading a bit matrix as an interleaved matrix: {}", message));
+        let n_rows = input.read_u64::<LittleEndian>()? as usize;
+        let mut rows = Vec::<InterleavedRank>::with_capacity(n_rows);
+        for _ in 0..n_rows {
+            // A simple-sds BitVector: the number of ones, its RawVector (the number of bits, the
+            // number of words and the words), then the optional rank, select and select-zero
+            // supports, each the number of its elements (0 if absent) followed by those elements.
+            let ones = input.read_u64::<LittleEndian>()? as usize;
+            let len = input.read_u64::<LittleEndian>()? as usize;
+            let n_words = input.read_u64::<LittleEndian>()? as usize;
+            let row = InterleavedRank::from_words_in_chunks(input, len, n_words)?;
+            if row.ones != ones {
+                return Err(invalid("the number of ones does not match the bits"));
+            }
+            for _ in 0..3 {
+                let n_elements = input.read_u64::<LittleEndian>()?;
+                let skipped = std::io::copy(&mut std::io::Read::take(&mut *input, 8 * n_elements), &mut std::io::sink())?;
+                if skipped != 8 * n_elements {
+                    return Err(invalid("the file ends in a rank or select support"));
+                }
+            }
+            rows.push(row);
+        }
+        let len = rows.first().map_or(0, |row| row.len());
+        if rows.iter().any(|row| row.len() != len) {
+            return Err(invalid("rows of different lengths"));
+        }
+        Ok(SubsetInterleavedMatrix { rows, len })
+    }
+
     /// Size of the subset sequence in memory, in bytes.
     pub fn size_in_bytes(&self) -> usize {
         self.rows.iter().map(|row| row.size_in_bytes()).sum()
@@ -534,6 +616,25 @@ impl SubsetSeq for SubsetInterleavedMatrix {
 mod tests {
     use super::*;
     use rand::{Rng, SeedableRng};
+
+    // InterleavedRank::from_words_in_chunks gives the vector InterleavedRank::new gives, for
+    // lengths around the boundaries of words, blocks and chunks (a chunk is 13 * 1024 words), and
+    // rejects a wrong number of words.
+    #[test]
+    fn from_words_in_chunks_matches_new() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+        let chunk_bits: usize = 13 * 1024 * 64;
+        for len in [0, 1, 63, 64, 65, 415, 416, 417, 831, 832, 833, chunk_bits - 1, chunk_bits, chunk_bits + 1, 2 * chunk_bits + 500] {
+            let words: Vec<u64> = (0..len.div_ceil(64)).map(|_| rng.gen::<u64>()).collect();
+            let mut bytes = vec![];
+            for w in &words {
+                bytes.extend(w.to_le_bytes());
+            }
+            let streamed = InterleavedRank::from_words_in_chunks(&mut bytes.as_slice(), len, words.len()).unwrap();
+            assert_eq!(streamed, InterleavedRank::new(&words, len), "len {}", len);
+        }
+        assert!(InterleavedRank::from_words_in_chunks(&mut [0_u8; 16].as_slice(), 64, 2).is_err());
+    }
 
     // Rank by counting bit by bit.
     fn naive_ranks(words: &[u64], len: usize) -> Vec<usize> {

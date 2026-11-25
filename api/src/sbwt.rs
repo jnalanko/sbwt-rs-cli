@@ -306,8 +306,14 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
     }
 
     /// Loads an index that was previously serialized with [SbwtIndex::serialize].
-    #[allow(non_snake_case)] // For C-array
     pub fn load<R: std::io::Read>(input: &mut R) -> std::io::Result<Self> {
+        Self::load_with(input, |input| SS::load(input))
+    }
+
+    // SbwtIndex::load, with the subset sequence loaded by `load_subset_seq` (e.g. one of another
+    // type in the file, converted while loading).
+    #[allow(non_snake_case)] // For C-array
+    pub(crate) fn load_with<R: std::io::Read>(input: &mut R, load_subset_seq: impl FnOnce(&mut R) -> std::io::Result<SS>) -> std::io::Result<Self> {
 
         let magic_string_length = input.read_u8().unwrap();
         let mut magic_string_buf = vec![0u8; magic_string_length as usize];
@@ -316,7 +322,7 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             panic!("Error loading SBWT: incorrect version string: expected \"{}\", found \"{}\"", String::from_utf8(SERIALIZATION_MAGIC_STRING.to_vec()).unwrap(), String::from_utf8_lossy(&magic_string_buf));
         }
 
-        let subset_rank = SS::load(input)?;
+        let subset_rank = load_subset_seq(input)?;
 
         let n_kmers = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
         let k = byteorder::ReadBytesExt::read_u64::<LittleEndian>(input).unwrap() as usize;
