@@ -506,43 +506,12 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
         Some(left..right)
     }
 
-    /// Like [SbwtIndex::search], but searches a mini batch of `BATCH_SIZE` patterns in lockstep,
-    /// which lets the CPU overlap the memory accesses of the independent searches: one pattern
-    /// column at a time, one LF step for every pattern still found, with the memory of each
-    /// pattern's next step prefetched as soon as its current step is taken. All patterns must have
-    /// the same length. Requires `BATCH_SIZE <= 64`.
-    pub fn search_mini_batch<const BATCH_SIZE: usize>(
-        &self,
-        patterns: &[&[u8]; BATCH_SIZE],
-    ) -> [Option<std::ops::Range<usize>>; BATCH_SIZE] {
-        let l = self.prefix_lookup_table.prefix_length;
-        match patterns[0].len() >= l {
-            true => {
-                // Initialize the searches from the lookup table
-                let intervals = std::array::from_fn(|q| self.prefix_lookup_table.lookup(&patterns[q][..l]));
-                let suffixes = std::array::from_fn(|q| &patterns[q][l..]);
-                self.search_mini_batch_from(intervals, &suffixes)
-            }
-            false => {
-                // Search from scratch
-                let intervals = std::array::from_fn(|_| 0..self.sbwt.len());
-                self.search_mini_batch_from(intervals, patterns)
-            }
-        }
-    }
-
-    /// Like [SbwtIndex::search_from], but for a mini batch of patterns as in
-    /// [SbwtIndex::search_mini_batch]: pattern `q` is searched starting from `intervals[q]`. All
-    /// patterns must have the same length. Requires `BATCH_SIZE <= 64`.
-    pub fn search_mini_batch_from<const BATCH_SIZE: usize>(
-        &self,
-        intervals: [std::ops::Range<usize>; BATCH_SIZE],
-        patterns: &[&[u8]; BATCH_SIZE],
-    ) -> [Option<std::ops::Range<usize>>; BATCH_SIZE] {
-        self.search_mini_batch_from_len(intervals, patterns).map(Result::ok)
-    }
-
-    // search_mini_batch_from, also returning for a pattern that is not found how many of its
+    // Like search_from, but searches a mini batch of BATCH_SIZE patterns in lockstep, pattern q
+    // starting from intervals[q], which lets the CPU overlap the memory accesses of the
+    // independent searches: one pattern column at a time, one LF step for every pattern still
+    // found, with the memory of each pattern's next step prefetched as soon as its current step is
+    // taken. All patterns must have the same length. Requires BATCH_SIZE <= 64. Returns the
+    // interval of a pattern that is found, and for a pattern that is not found how many of its
     // characters were consumed, including the one whose step failed (0 if the starting interval
     // is empty): `Err(n)` means that `pattern[..n]` extends the starting interval to nothing.
     // Both ends of an interval are ranked with one rank_pair query and prefetched with one
@@ -599,6 +568,132 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
             }
         }
         std::array::from_fn(|q| if (alive >> q) & 1 == 1 { Ok(intervals[q].clone()) } else { Err(consumed[q]) })
+    }
+
+    /// Like [SbwtIndex::search], for many patterns of the same length, with `B` searches in flight
+    /// at all times: the slot of a search that ends (found, or its interval empty) is refilled at
+    /// once with the next pattern, so the searches of patterns that end early do not leave the
+    /// slots idle. Each search starts from the lookup table, and the memory of its next step is
+    /// prefetched as soon as its current step is taken. Returns the interval of each pattern, or
+    /// None if it is not found. A pattern with a character outside A, C, G, T is not found.
+    /// Requires `B <= 64`. Patterns longer than 64, or not longer than zero characters past an
+    /// empty lookup table, are searched one at a time with [SbwtIndex::search].
+    pub fn search_refill<const B: usize>(&self, patterns: &[&[u8]]) -> Vec<Option<std::ops::Range<usize>>> {
+        assert!(B <= 64, "the slots are tracked with a 64-bit mask");
+        let Some(len) = patterns.first().map(|p| p.len()) else { return vec![] };
+        assert!(patterns.iter().all(|p| p.len() == len), "search_refill: all patterns must have the same length");
+        let l = self.prefix_lookup_table.prefix_length;
+        if len > 64 || l == 0 || len < l {
+            return patterns.iter().map(|p| self.search(p)).collect();
+        }
+        match len {
+            0..=32 => self.search_refill_words::<B, u64>(patterns, len),
+            _ => self.search_refill_words::<B, u128>(patterns, len),
+        }
+    }
+
+    // search_refill with each slot's pattern packed into one word W (u64 for length <= 32, u128 for
+    // length <= 64), 0 < prefix length <= k. Each round:
+    //   A. for each slot whose search ended (in the last sweep, or decided by the lookup table):
+    //      record it and give the slot the next pattern, packed (a pattern with a character outside
+    //      A, C, G, T is not found and skipped); prefetch the pattern's table entry;
+    //   sweep. every active slot takes one step (pair rank) and prefetches the next; a search that
+    //      ends (empty interval, or all k characters) is only marked, without a branch on the rank
+    //      result;
+    //   B. for the slots of A: read the table entry, which had the sweep to arrive, and prefetch the
+    //      first step; they are active from the next sweep on.
+    fn search_refill_words<const B: usize, W: PackedPattern>(&self, patterns: &[&[u8]], k: usize) -> Vec<Option<std::ops::Range<usize>>> {
+        debug_assert!(2 * k as u32 <= W::BITS);
+        let table = &self.prefix_lookup_table;
+        let l = table.prefix_length;
+        let n = patterns.len();
+        let mut result: Vec<Option<std::ops::Range<usize>>> = vec![None; n];
+        let mut word = [W::ZERO; B];
+        // The pattern shifted so that its next character is in the top 2 bits: a step reads the top
+        // and shifts by 2, instead of a shift by a varying amount.
+        let mut cur = [W::ZERO; B];
+        let mut query = [0_usize; B]; // the index of the slot's pattern
+        let mut pos = [0_usize; B];
+        let mut interval: [std::ops::Range<usize>; B] = std::array::from_fn(|_| 0..0);
+        // Active slots, slots whose search ended, and slots refilled in A that B starts.
+        let (mut active, mut finished, mut refilled) = (0_u64, 0_u64, 0_u64);
+        let mut next = 0_usize; // the next new pattern
+        // The next pattern that has only A, C, G, T, with its index, packed; None when no pattern
+        // is left.
+        let next_pattern = |next: &mut usize| -> Option<(usize, W)> {
+            while *next < n {
+                let q = *next;
+                *next += 1;
+                if let Some(w) = W::pack(patterns[q]) {
+                    return Some((q, w));
+                }
+            }
+            None
+        };
+        let prefetch_entry = |w: W| {
+            crate::util::prefetch_read(table.ranges.as_ptr().wrapping_add(w.prefix(k, l)));
+        };
+        // The first patterns are refilled slots too: their entries are prefetched, and B starts them.
+        for s in 0..B {
+            let Some((q, w)) = next_pattern(&mut next) else { break };
+            (query[s], word[s]) = (q, w);
+            prefetch_entry(w);
+            refilled |= 1 << s;
+        }
+        loop {
+            // A. Record the ended searches, give their slots the next pattern, prefetch its table
+            // entry.
+            let mut fi = finished;
+            finished = 0;
+            while fi != 0 {
+                let s = fi.trailing_zeros() as usize;
+                fi &= fi - 1;
+                if pos[s] == k && !interval[s].is_empty() {
+                    result[query[s]] = Some(interval[s].clone());
+                }
+                if let Some((q, w)) = next_pattern(&mut next) {
+                    (query[s], word[s]) = (q, w);
+                    prefetch_entry(w);
+                    refilled |= 1 << s;
+                }
+            }
+            if active | refilled == 0 {
+                break;
+            }
+            // The sweep over the active slots: one step each (pair rank), and the prefetch of the
+            // next.
+            let mut tv = active;
+            while tv != 0 {
+                let s = tv.trailing_zeros() as usize;
+                tv &= tv - 1;
+                interval[s] = self.lf_step_interval(&interval[s], cur[s].top());
+                cur[s] = cur[s].shl(2);
+                pos[s] += 1;
+                let done = ((interval[s].start >= interval[s].end) | (pos[s] == k)) as u64;
+                active &= !(done << s);
+                finished |= done << s;
+                // Prefetch the next step (harmless for a search that just ended).
+                self.prefetch_lf_step_interval(&interval[s], cur[s].top());
+            }
+            // B. Start the refilled slots from their table entries, which had the sweep to arrive;
+            // they step from the next sweep on.
+            let mut st = refilled;
+            refilled = 0;
+            while st != 0 {
+                let s = st.trailing_zeros() as usize;
+                st &= st - 1;
+                interval[s] = table.ranges[word[s].prefix(k, l)].clone();
+                pos[s] = l;
+                if interval[s].is_empty() || l == k {
+                    finished |= 1 << s; // decided by the table: recorded in the next A
+                } else {
+                    cur[s] = word[s].shl(W::BITS - 2 * (k - l) as u32);
+                    self.prefetch_lf_step_interval(&interval[s], cur[s].top());
+                    active |= 1 << s;
+                }
+            }
+        }
+        result
     }
 
     /// Reconstruct all k-mers in the [padded k-spectrum](#sbwt-graph) in the data structure.
@@ -976,6 +1071,57 @@ impl<SS: SubsetSeq> SbwtIndex<SS> {
 }
 
 
+// A pattern of A, C, G, T packed into one word for SbwtIndex::search_refill: 2 bits per character,
+// the first character the most significant.
+trait PackedPattern: Copy {
+    const BITS: u32;
+    const ZERO: Self;
+    // The packed pattern, or None if it has a character outside A, C, G, T.
+    fn pack(pattern: &[u8]) -> Option<Self>;
+    // The lookup table index of the first l characters of a pattern of length k (the first
+    // character the most significant, as [PrefixLookupTable]).
+    fn prefix(self, k: usize, l: usize) -> usize;
+    // The word shifted left by `bits` (less than BITS).
+    fn shl(self, bits: u32) -> Self;
+    // The code in the top 2 bits.
+    fn top(self) -> usize;
+}
+
+macro_rules! impl_packed_pattern {
+    ($t:ty) => {
+        impl PackedPattern for $t {
+            const BITS: u32 = <$t>::BITS;
+            const ZERO: Self = 0;
+            #[inline(always)]
+            fn pack(pattern: &[u8]) -> Option<Self> {
+                let mut w: $t = 0;
+                for &ch in pattern {
+                    let c = ACGT_TO_0123[ch as usize];
+                    if c > 3 {
+                        return None;
+                    }
+                    w = (w << 2) | c as $t;
+                }
+                Some(w)
+            }
+            #[inline(always)]
+            fn prefix(self, k: usize, l: usize) -> usize {
+                (self >> (2 * (k - l))) as usize
+            }
+            #[inline(always)]
+            fn shl(self, bits: u32) -> Self {
+                self << bits
+            }
+            #[inline(always)]
+            fn top(self) -> usize {
+                (self >> (<$t>::BITS - 2)) as usize
+            }
+        }
+    };
+}
+impl_packed_pattern!(u64);
+impl_packed_pattern!(u128);
+
 /// A table storing the SBWT intervals of all 4^p possible p-mers.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct PrefixLookupTable {
@@ -1098,23 +1244,19 @@ mod tests {
     use crate::builder::BitPackedKmerSortingMem;
     use super::*;
 
-    // search_mini_batch and search_mini_batch_from agree with search and search_from, and the
-    // characters consumed by search_mini_batch_from_len are where the search fails.
+    // search_mini_batch_from_len agrees with search_from, and the characters it consumes are where
+    // the search fails.
     fn check_search_mini_batch<SS: SubsetSeq + Send, const B: usize>(sbwt: &SbwtIndex<SS>, patterns: &[Vec<u8>]) {
         for chunk in patterns.chunks_exact(B) {
             let batch: [&[u8]; B] = std::array::from_fn(|q| chunk[q].as_slice());
-            let found = sbwt.search_mini_batch(&batch);
             let full = std::array::from_fn(|_| 0..sbwt.n_sets());
-            let from = sbwt.search_mini_batch_from(full.clone(), &batch);
             let with_len = sbwt.search_mini_batch_from_len(full, &batch);
             for q in 0..B {
-                let expected = sbwt.search(batch[q]);
-                assert_eq!(found[q], expected, "{}", String::from_utf8_lossy(batch[q]));
-                assert_eq!(from[q], sbwt.search_from(0..sbwt.n_sets(), batch[q]));
+                let expected = sbwt.search_from(0..sbwt.n_sets(), batch[q]);
                 match &with_len[q] {
-                    Ok(interval) => assert_eq!(Some(interval.clone()), from[q]),
+                    Ok(interval) => assert_eq!(Some(interval.clone()), expected, "{}", String::from_utf8_lossy(batch[q])),
                     Err(n) => {
-                        assert!(from[q].is_none());
+                        assert!(expected.is_none(), "{}", String::from_utf8_lossy(batch[q]));
                         assert!(*n >= 1);
                         // The first n characters are not found, the first n - 1 are
                         assert!(sbwt.search_from(0..sbwt.n_sets(), &batch[q][..*n]).is_none());
@@ -1130,7 +1272,45 @@ mod tests {
     }
 
     #[test]
-    fn search_mini_batch_matches_search() {
+    fn search_refill_matches_search() {
+        use crate::{SubsetInterleavedMatrix, SubsetCorrectionSets};
+        let seqs: Vec<Vec<u8>> = (0..6_u64).map(|i| crate::util::gen_random_dna_string(200 + 31 * i as usize, 77 + i)).collect();
+        // Shorter than, equal to and longer than the lookup table (8), up to the u64 and u128
+        // limits, and longer than 64 (searched one at a time)
+        for len in [5, 8, 9, 31, 32, 33, 64, 65] {
+            let k = 70;
+            let (matrix, _) = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true).run();
+            let interleaved = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true)
+                .subset_seq::<SubsetInterleavedMatrix>().run().0;
+            let correction_sets = BitPackedKmerSortingMem::new_from_vecs(&seqs, k).add_rev_comp(true)
+                .subset_seq::<SubsetCorrectionSets>().run().0;
+            // Patterns found (substrings of the input), random, and with an N
+            let mut patterns: Vec<Vec<u8>> = vec![];
+            for (i, seq) in seqs.iter().enumerate() {
+                for start in (0..seq.len() - len).step_by(7) {
+                    patterns.push(seq[start..start + len].to_vec());
+                }
+                patterns.push(crate::util::gen_random_dna_string(len, 1000 + i as u64));
+                let mut with_n = seq[..len].to_vec();
+                with_n[len / 2] = b'N';
+                patterns.push(with_n);
+            }
+            let refs: Vec<&[u8]> = patterns.iter().map(|p| p.as_slice()).collect();
+            let expected: Vec<_> = refs.iter().map(|p| matrix.search(p)).collect();
+            assert!(expected.iter().any(|r| r.is_some()) && expected.iter().any(|r| r.is_none()));
+            // All the patterns, fewer patterns than slots, a single one, none
+            for n in [refs.len(), 20, 1, 0] {
+                assert_eq!(matrix.search_refill::<32>(&refs[..n]), expected[..n], "matrix, len = {}, n = {}", len, n);
+                assert_eq!(matrix.search_refill::<1>(&refs[..n]), expected[..n], "matrix, B = 1, len = {}, n = {}", len, n);
+                assert_eq!(matrix.search_refill::<64>(&refs[..n]), expected[..n], "matrix, B = 64, len = {}, n = {}", len, n);
+                assert_eq!(interleaved.search_refill::<32>(&refs[..n]), expected[..n], "interleaved, len = {}, n = {}", len, n);
+                assert_eq!(correction_sets.search_refill::<32>(&refs[..n]), expected[..n], "correction sets, len = {}, n = {}", len, n);
+            }
+        }
+    }
+
+    #[test]
+    fn search_mini_batch_from_len_matches_search_from() {
         use crate::{SubsetInterleavedMatrix, SubsetCorrectionSets};
         let seqs: Vec<Vec<u8>> = (0..6_u64).map(|i| crate::util::gen_random_dna_string(200 + 31 * i as usize, 77 + i)).collect();
         for len in [5, 9, 31] { // Shorter and longer than the lookup table (8)
