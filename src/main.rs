@@ -525,6 +525,51 @@ fn build_sufgroups_command(matches: &clap::ArgMatches) {
     log::info!("{} bytes written", n_bytes);
 }
 
+// lookup_query with the batched search of KmerLookupIndex: the reads are read and searched in
+// batches of LOOKUP_BATCH_READS, with the same output.
+fn lookup_query_batched<SS: SubsetSeq>(sbwt: &SbwtIndex<SS>, sufgroups: &Sufgroups, queryfile: &std::path::Path, outfile: Option<&std::path::Path>, membership_only: bool) {
+    const LOOKUP_BATCH_READS: usize = 10_000;
+    log::info!("k = {}, precalc length = {}, # kmers = {}, # sbwt sets = {}", sbwt.k(), sbwt.get_lookup_table().prefix_length, sbwt.n_kmers(), sbwt.n_sets());
+    log::info!("Searching with the suffix group marks, in batches of {} reads", LOOKUP_BATCH_READS);
+
+    let index = KmerLookupIndex::new(sbwt, sufgroups, false);
+    let mut query_reader = DynamicFastXReader::from_file(&queryfile).unwrap();
+    let mut out = outfile.map(|f| std::io::BufWriter::new(std::fs::File::create(f).unwrap()));
+    let mut stdout = stdout();
+
+    let start_time = std::time::Instant::now();
+    let mut n_query_kmers = 0_usize;
+    let mut n_found = 0_usize;
+    let mut batch = Vec::<Vec<u8>>::with_capacity(LOOKUP_BATCH_READS);
+    let mut done = false;
+    while !done {
+        batch.clear();
+        while batch.len() < LOOKUP_BATCH_READS {
+            match query_reader.read_next().unwrap() {
+                Some(rec) => batch.push(rec.seq.to_vec()),
+                None => {
+                    done = true;
+                    break;
+                }
+            }
+        }
+        let queries: Vec<&[u8]> = batch.iter().map(|seq| seq.as_slice()).collect();
+        for colex_ranks in index.streaming_search(&queries) {
+            n_query_kmers += colex_ranks.len();
+            n_found += colex_ranks.iter().fold(0_usize, |count, r| count + r.is_some() as usize);
+            match out {
+                Some(ref mut out) => report_lookup_results(out, &colex_ranks, membership_only),
+                None => report_lookup_results(&mut stdout, &colex_ranks, membership_only)
+            }
+        }
+    }
+    let end_time = std::time::Instant::now();
+    let elapsed = end_time - start_time;
+    log::info!("Queried {} k-mers", n_query_kmers);
+    log::info!("{:.2}% of queried k-mers found", n_found as f64 / n_query_kmers as f64 * 100.0);
+    log::info!("Elapsed time: {:.2} seconds ({:.2} ns / k-mer)", elapsed.as_secs_f64(), elapsed.as_nanos() as f64 / n_query_kmers as f64);
+}
+
 fn report_lookup_results<W: Write>(out: &mut W, colex_ranks: &[Option<usize>], membership_only: bool){
     // Reporting
     if membership_only {
@@ -638,9 +683,43 @@ fn lookup_query_command(matches: &clap::ArgMatches){
     let membership_only = matches.get_flag("membership-only");
     let cpp_format = matches.get_flag("load-cpp-format");
     let no_convert = matches.get_flag("no-convert");
+    let no_sufgroups = matches.get_flag("no-sufgroups");
 
     // Read sbwt
     let index = load_index_for_queries(indexfile, cpp_format, no_convert);
+
+    // With the suffix group marks (from the given path, or index.sufgroups if it exists), the batched
+    // search, without the LCS array.
+    if !no_sufgroups {
+        let sufgroups_path = matches.get_one::<std::path::PathBuf>("sufgroups-file").cloned().unwrap_or_else(|| {
+            let mut p = indexfile.clone();
+            p.set_extension("sufgroups");
+            p
+        });
+        match File::open(&sufgroups_path) {
+            Ok(f) => {
+                log::info!("Loading the suffix group marks from {} (--no-sufgroups to search without them)", sufgroups_path.display());
+                let sufgroups = Sufgroups::load(&mut std::io::BufReader::new(f)).unwrap();
+                if sufgroups.len() != index.n_sets() {
+                    eprintln!("Error: the suffix group marks in {} are for {} SBWT sets, but the index has {}", sufgroups_path.display(), sufgroups.len(), index.n_sets());
+                    std::process::exit(1);
+                }
+                match index {
+                    SbwtIndexVariant::SubsetMatrix(sbwt) => lookup_query_batched(&sbwt, &sufgroups, queryfile, outfile.map(|v| &**v), membership_only),
+                    SbwtIndexVariant::SubsetCorrectionSets(sbwt) => lookup_query_batched(&sbwt, &sufgroups, queryfile, outfile.map(|v| &**v), membership_only),
+                    SbwtIndexVariant::SubsetInterleavedMatrix(sbwt) => lookup_query_batched(&sbwt, &sufgroups, queryfile, outfile.map(|v| &**v), membership_only),
+                }
+                return;
+            }
+            Err(_) => {
+                if matches.get_one::<std::path::PathBuf>("sufgroups-file").is_some() {
+                    eprintln!("Error: could not open the suffix group marks file {}", sufgroups_path.display());
+                    std::process::exit(1);
+                }
+                log::info!("No suffix group marks at {} -> searching without them", sufgroups_path.display());
+            }
+        }
+    }
 
     // Load the lcs array either from the given path, or by modifying the
     // file extension of the sbwt file, if available.
@@ -1618,6 +1697,16 @@ fn main() {
             .arg(clap::Arg::new("load-cpp-format")
                 .help("Load the index from the format used by the C++ API (only supports plain-matrix).")
                 .long("load-cpp-format")
+                .action(clap::ArgAction::SetTrue)
+            )
+            .arg(clap::Arg::new("sufgroups-file")
+                .help("Suffix group marks file (default: if index is at index.sbwt, looks at index.sufgroups). With the marks, the k-mers are searched in batches of reads, without the LCS array.")
+                .long("sufgroups-file")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+            )
+            .arg(clap::Arg::new("no-sufgroups")
+                .help("Do not use the suffix group marks, even if index.sufgroups exists.")
+                .long("no-sufgroups")
                 .action(clap::ArgAction::SetTrue)
             )
             .arg(clap::Arg::new("no-convert")
